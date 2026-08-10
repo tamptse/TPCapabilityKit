@@ -18,7 +18,7 @@ let package = Package(
             name: "TPCapabilityKit",
             path: "Sources/TPCapabilityKit",
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
+                .enableExperimentalFeature("StrictConcurrency=complete")
             ]
         ),
         .target(
@@ -26,7 +26,7 @@ let package = Package(
             dependencies: ["TPCapabilityKit"],
             path: "Sources/TPCapabilityKitBridge",
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
+                .enableExperimentalFeature("StrictConcurrency=complete")
             ]
         ),
         .target(
@@ -34,7 +34,7 @@ let package = Package(
             dependencies: ["TPCapabilityKit", "TPCapabilityKitBridge"],
             path: "Sources/TPCapabilityKitSample",
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
+                .enableExperimentalFeature("StrictConcurrency=complete")
             ]
         ),
         .testTarget(
@@ -42,7 +42,7 @@ let package = Package(
             dependencies: ["TPCapabilityKit", "TPCapabilityKitBridge", "TPCapabilityKitSample"],
             path: "Tests/TPCapabilityKitTests",
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
+                .enableExperimentalFeature("StrictConcurrency=complete")
             ]
         )
     ]
