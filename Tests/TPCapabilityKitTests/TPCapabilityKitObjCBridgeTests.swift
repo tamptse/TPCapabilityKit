@@ -24,7 +24,8 @@ struct TPCapabilityKitObjCBridgeTests {
     // MARK: - ObjC Bridge Tests
 
     @Test func objcBridge() {
-        let bridge = ObjcStoreBridge.shared
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
         let pluginId = "ObjcBridge_\(UUID().uuidString)"
         let objcPlugin = MockObjcPlugin(id: pluginId)
         
@@ -40,7 +41,7 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcSubscribeAndCancel() {
-        let bridge = ObjcStoreBridge.shared
+        let bridge = ObjcStoreBridge(store: DynamicStore())
         let pluginId = "SubPlugin_\(UUID().uuidString)"
         var receivedState: NSObject?
         
@@ -60,7 +61,7 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcSubscribeOnCustomQueue() {
-        let bridge = ObjcStoreBridge.shared
+        let bridge = ObjcStoreBridge(store: DynamicStore())
         let pluginId = "CustomQueuePlugin_\(UUID().uuidString)"
         var receivedState: NSObject?
         let lock = NSLock()
@@ -87,7 +88,7 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcSubscribeCancelStopsDelivery() {
-        let bridge = ObjcStoreBridge.shared
+        let bridge = ObjcStoreBridge(store: DynamicStore())
         let pluginId = "CancelStopPlugin_\(UUID().uuidString)"
         var receivedValues: [String] = []
 
@@ -120,8 +121,8 @@ struct TPCapabilityKitObjCBridgeTests {
     // MARK: - ObjC Bridge Task Execution Tests
 
     @Test func objcRunTaskWhenAvailable() {
-        let bridge = ObjcStoreBridge.shared
-        let store = DynamicStore.shared
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
         let pluginId = "ObjcRunTaskCap_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
@@ -133,7 +134,7 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcRunTaskWhenNotAvailable() {
-        let bridge = ObjcStoreBridge.shared
+        let bridge = ObjcStoreBridge(store: DynamicStore())
         let uniqueCap = "missingCap_\(UUID().uuidString)"
 
         let result = bridge.runTask(capability: uniqueCap) {
@@ -143,8 +144,8 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcRunTaskWhenAvailableAlreadyAvailable() async {
-        let bridge = ObjcStoreBridge.shared
-        let store = DynamicStore.shared
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
         let pluginId = "ObjcWaitCap_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.networkAccess])
         defer { store.unregisterCapability(for: pluginId) }
@@ -160,7 +161,7 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcRunTaskWhenAvailableTimesOut() async {
-        let bridge = ObjcStoreBridge.shared
+        let bridge = ObjcStoreBridge(store: DynamicStore())
         let uniqueCap = "timeoutCapObjc_\(UUID().uuidString)"
 
         await withCheckedContinuation { continuation in
@@ -174,8 +175,8 @@ struct TPCapabilityKitObjCBridgeTests {
     }
 
     @Test func objcQueryCapability() {
-        let bridge = ObjcStoreBridge.shared
-        let store = DynamicStore.shared
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
         let pluginId = "ObjcQueryCap_\(UUID().uuidString)"
         let uniqueCap = "queryCap_\(UUID().uuidString)"
 
