@@ -13,5 +13,5 @@ public protocol AppPlugin {
 extension AppPlugin {
     /// Capabilities provided by this plugin.
     /// Default is empty. Override in conforming types or use `CapabilityProvider` for explicit declaration.
-    var capabilities: Set<Capability> { [] }
+    public var capabilities: Set<Capability> { [] }
 }
