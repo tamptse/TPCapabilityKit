@@ -326,7 +326,10 @@ public final class DynamicStore: @unchecked Sendable {
             }
 
             // Return first non-nil result, cancel the other
-            let result = try await group.next()!
+            guard let result = try await group.next() else {
+                group.cancelAll()
+                return nil
+            }
             group.cancelAll()
             return result
         }
