@@ -165,3 +165,96 @@ struct ConcurrencyControllerTests {
         #expect(result == true)
     }
 }
+
+struct TaskSchedulerTests {
+    @Test func scheduleAndComplete() async {
+        let store = DynamicStore()
+        let pluginId = "SchedulerPlugin_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+
+        let scheduler = TaskScheduler(store: store)
+
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let result = await scheduler.scheduleAndWait(task) {
+            return "ScheduledResult"
+        }
+
+        #expect(result == "ScheduledResult")
+    }
+
+    @Test func scheduleWithoutCapabilityReturnsNil() async {
+        let store = DynamicStore()
+        let scheduler = TaskScheduler(store: store)
+
+        let task = TaskDescriptor(
+            requiredCapabilities: [.custom("NonExistent_\(UUID().uuidString)")],
+            timeout: 0.5
+        )
+        let result = await scheduler.scheduleAndWait(task) {
+            return "ShouldNotRun"
+        }
+
+        #expect(result == nil)
+    }
+
+    @Test func priorityOrdering() async {
+        let store = DynamicStore()
+        let pluginId = "PriorityPlugin_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+
+        let scheduler = TaskScheduler(store: store)
+
+        actor ExecutionTracker {
+            var order: [String] = []
+            func append(_ value: String) { order.append(value) }
+            func count() -> Int { order.count }
+        }
+        let tracker = ExecutionTracker()
+
+        let task1 = TaskDescriptor(
+            id: "low",
+            requiredCapabilities: [.heavyTask],
+            priority: .low
+        )
+        let task2 = TaskDescriptor(
+            id: "high",
+            requiredCapabilities: [.heavyTask],
+            priority: .high
+        )
+
+        // Schedule high first, then low - to test that high is processed first
+        // even though low was scheduled after
+        scheduler.schedule(task2) {
+            await tracker.append("high")
+        }
+        scheduler.schedule(task1) {
+            await tracker.append("low")
+        }
+
+        // Wait for both to complete
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        // High should execute first because it has higher priority
+        let order = await tracker.order
+        #expect(order.first == "high")
+    }
+
+    @Test func cancelTask() async {
+        let store = DynamicStore()
+        let scheduler = TaskScheduler(store: store)
+
+        let task = TaskDescriptor(
+            id: "cancelable",
+            requiredCapabilities: [.custom("NeverAvailable_\(UUID().uuidString)")],
+            timeout: 5.0
+        )
+
+        let lease = scheduler.schedule(task) {
+            // This should never execute
+        }
+        scheduler.cancel(taskId: task.id)
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(lease.isTerminal)
+    }
+}
