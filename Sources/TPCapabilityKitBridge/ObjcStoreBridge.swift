@@ -160,7 +160,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     @objc public func scheduleTask(
         _ descriptor: ObjcTaskDescriptor,
         task: @escaping @Sendable () -> Void,
-        completion: ((ObjcLease) -> Void)? = nil
+        completion: (@Sendable (ObjcLease) -> Void)? = nil
     ) -> ObjcLease {
         let lease = store.scheduleTask(
             descriptor.underlying,
