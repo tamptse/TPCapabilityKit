@@ -48,4 +48,14 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
         self.retryCount = underlying.retryCount
         super.init()
     }
+
+    /// Refreshes cached state from the underlying lease.
+    /// Call this after the underlying lease may have changed state.
+    @objc public func refresh() {
+        state = State(rawValue: underlying.state.rawValue) ?? .pending
+        activatedAt = underlying.activatedAt
+        completedAt = underlying.completedAt
+        result = underlying.result
+        retryCount = underlying.retryCount
+    }
 }
