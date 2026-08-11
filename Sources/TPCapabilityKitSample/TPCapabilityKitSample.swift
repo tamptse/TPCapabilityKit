@@ -268,6 +268,97 @@ enum TPCapabilityKitSample {
         })
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
 
+        // 19. Centralized Task Scheduling - Swift API
+        print("\n--- Task Scheduling Examples ---")
+        
+        // Schedule a task with capability matching and priority
+        let scheduleDescriptor = TaskDescriptor(
+            requiredCapabilities: [.heavyTask],
+            priority: .high,
+            timeout: 10.0,
+            maxRetries: 2,
+            metadata: ["source": "sample"]
+        )
+        
+        // Schedule and wait for result
+        Task {
+            let result: String? = await store.scheduleTaskAndWait(scheduleDescriptor) {
+                print("[scheduleTaskAndWait] Executing heavy task...")
+                return "HeavyTaskResult"
+            }
+            print("[scheduleTaskAndWait] Result: \(String(describing: result))")
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        
+        // Schedule with completion handler
+        let lease = store.scheduleTask(scheduleDescriptor) {
+            print("[scheduleTask] Executing in background...")
+        } completion: { lease in
+            switch lease.state {
+            case .completed:
+                print("[scheduleTask] Completed with result: \(String(describing: lease.result))")
+            case .failed:
+                print("[scheduleTask] Failed")
+            case .expired:
+                print("[scheduleTask] Expired (timeout)")
+            default:
+                print("[scheduleTask] State: \(lease.state)")
+            }
+        }
+        print("[scheduleTask] Lease ID: \(lease.task.id)")
+        
+        // Check pending/active counts
+        print("[Scheduler] Pending: \(store.scheduler.pendingCount), Active: \(store.scheduler.activeCount)")
+        
+        // Cancel a task
+        store.scheduler.cancel(taskId: lease.task.id)
+        print("[Scheduler] Cancelled task: \(lease.task.id)")
+        
+        // 20. A/B Testing with Protocol
+        print("\n--- A/B Testing Example ---")
+        
+        // Create a custom scheduler (mock for demonstration)
+        // In real app, this could be a different scheduling algorithm
+        let currentScheduler = store.scheduler
+        print("[A/B] Current scheduler type: \(type(of: currentScheduler))")
+        
+        // The scheduler can be replaced at runtime
+        // store.scheduler = MyCustomScheduler(store: store)
+        
+        // 21. ObjC Bridge - Task Scheduling
+        print("\n--- ObjC Task Scheduling ---")
+        
+        let objcDescriptor = ObjcTaskDescriptor(
+            capabilities: ["heavyTask"],
+            priority: 3,  // .high
+            timeout: 10.0,
+            maxRetries: 1,
+            metadata: ["source": "objc-sample"]
+        )
+        
+        // Schedule via ObjC bridge
+        let objcLease = bridge.scheduleTask(objcDescriptor) {
+            print("[ObjC scheduleTask] Executing...")
+        } completion: { lease in
+            print("[ObjC scheduleTask] Completed: \(lease.state)")
+        }
+        print("[ObjC scheduleTask] Lease ID: \(objcLease.taskId)")
+        
+        // Schedule and wait via ObjC bridge
+        bridge.scheduleTaskAndWait(objcDescriptor, task: {
+            return NSString(string: "ObjCResult")
+        }, completion: { result in
+            print("[ObjC scheduleTaskAndWait] Result: \(String(describing: result))")
+        })
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        
+        // Cancel via ObjC bridge
+        bridge.cancelTask(taskId: objcLease.taskId)
+        print("[ObjC] Cancelled task: \(objcLease.taskId)")
+        
+        // Check counts via ObjC bridge
+        print("[ObjC] Pending: \(bridge.pendingTaskCount), Active: \(bridge.activeTaskCount)")
+
         // Cleanup
         store.unregister(plugin: profilePlugin)
         store.unregister(plugin: chatPlugin)
