@@ -103,3 +103,65 @@ struct LeaseTests {
         #expect(lease.hasExpired == true)
     }
 }
+
+struct ConcurrencyControllerTests {
+    @Test func acquireAndRelease() async {
+        let controller = ConcurrencyController(configuration: .init(maxPerCapability: 2, maxGlobal: 5))
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
+
+        await controller.acquire(for: task)
+        let stats = await controller.stats()
+        #expect(stats.globalActive == 1)
+
+        await controller.release(for: task)
+        let statsAfter = await controller.stats()
+        #expect(statsAfter.globalActive == 0)
+    }
+
+    @Test func respectsGlobalLimit() async {
+        let controller = ConcurrencyController(configuration: .init(maxGlobal: 2))
+
+        let task1 = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let task2 = TaskDescriptor(requiredCapabilities: [.lightTask])
+        let task3 = TaskDescriptor(requiredCapabilities: [.networkAccess])
+
+        await controller.acquire(for: task1)
+        await controller.acquire(for: task2)
+
+        // Third acquire should suspend
+        let task3Task = Task {
+            await controller.acquire(for: task3)
+            let stats = await controller.stats()
+            return stats.globalActive
+        }
+
+        // Give task3 a moment to suspend
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // Release one slot
+        await controller.release(for: task1)
+
+        let result = await task3Task.value
+        #expect(result == 2)
+    }
+
+    @Test func respectsPerCapabilityLimit() async {
+        let controller = ConcurrencyController(configuration: .init(maxPerCapability: 1))
+
+        let task1 = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let task2 = TaskDescriptor(requiredCapabilities: [.heavyTask])
+
+        await controller.acquire(for: task1)
+
+        let task2Task = Task {
+            await controller.acquire(for: task2)
+            return true
+        }
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        await controller.release(for: task1)
+        let result = await task2Task.value
+        #expect(result == true)
+    }
+}
