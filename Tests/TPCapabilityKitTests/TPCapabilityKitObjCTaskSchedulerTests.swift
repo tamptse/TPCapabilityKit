@@ -170,4 +170,23 @@ struct ObjcStoreBridgeSchedulingTests {
         #expect(bridge.pendingTaskCount == 0)
         #expect(bridge.activeTaskCount == 0)
     }
+
+    @Test func taskSchedulerReflectsReplacement() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        
+        // Get initial scheduler
+        let scheduler1 = bridge.taskScheduler
+        
+        // Replace scheduler with a different instance
+        let newScheduler = TaskScheduler(store: store)
+        store.scheduler = newScheduler
+        
+        // Get new scheduler wrapper
+        let scheduler2 = bridge.taskScheduler
+        
+        // Both should have same pending count (0)
+        #expect(scheduler1.pendingCount == 0)
+        #expect(scheduler2.pendingCount == 0)
+    }
 }

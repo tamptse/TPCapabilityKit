@@ -10,7 +10,6 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     private let store: DynamicStore
     private let lock = NSLock()
-    private var _taskScheduler: ObjcTaskScheduler?
 
     internal init(store: DynamicStore = .shared) {
         self.store = store
@@ -146,14 +145,9 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     // MARK: - Task Scheduling APIs
 
-    /// Shared task scheduler instance. Cached for consistent reference.
+    /// Shared task scheduler instance. Created on each access for consistency.
     @objc public var taskScheduler: ObjcTaskScheduler {
-        lock.lock()
-        defer { lock.unlock() }
-        if let existing = _taskScheduler { return existing }
-        let new = ObjcTaskScheduler(scheduler: store.scheduler, store: store)
-        _taskScheduler = new
-        return new
+        ObjcTaskScheduler(scheduler: store.scheduler, store: store)
     }
 
     /// Schedules a task for execution.
