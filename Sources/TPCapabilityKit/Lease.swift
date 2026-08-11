@@ -125,3 +125,15 @@ public final class Lease: @unchecked Sendable {
         return Date().timeIntervalSince(deadline) > task.timeout
     }
 }
+
+extension Lease.State {
+    public var rawValue: Int {
+        switch self {
+        case .pending: return 0
+        case .active: return 1
+        case .completed: return 2
+        case .failed: return 3
+        case .expired: return 4
+        }
+    }
+}
