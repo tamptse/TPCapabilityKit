@@ -2,6 +2,10 @@ import Foundation
 import TPCapabilityKit
 
 /// Objective-C wrapper for Lease.
+///
+/// - Important: This wrapper captures a snapshot of the lease state at creation time.
+///   If the underlying lease changes state after creation, call `refresh()` to sync.
+///   Alternatively, access the `underlying` property for the live lease object.
 @objc(TPLease)
 public final class ObjcLease: NSObject, @unchecked Sendable {
     /// Lease state for ObjC consumers.
