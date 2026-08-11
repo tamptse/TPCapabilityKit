@@ -337,8 +337,8 @@ public final class DynamicStore: @unchecked Sendable {
 
     // MARK: - Task Scheduling
 
-    /// Shared task scheduler instance. Lazily created on first access.
-    public var scheduler: TaskScheduler {
+    /// Task scheduler instance. Can be replaced for A/B testing.
+    public var scheduler: any TaskSchedulerProtocol {
         get {
             if let existing = _scheduler { return existing }
             let new = TaskScheduler(store: self)
@@ -347,7 +347,7 @@ public final class DynamicStore: @unchecked Sendable {
         }
         set { _scheduler = newValue }
     }
-    private var _scheduler: TaskScheduler?
+    private var _scheduler: (any TaskSchedulerProtocol)?
 
     /// Schedules a task for centralized execution with capability matching and priority.
     /// - Parameters:
@@ -361,7 +361,7 @@ public final class DynamicStore: @unchecked Sendable {
         task: @escaping @Sendable () async -> Void,
         completion: ((Lease) -> Void)? = nil
     ) -> Lease {
-        scheduler.schedule(descriptor, taskExecution: task, completion: completion)
+        scheduler.schedule(descriptor, taskExecution: task, completion: completion, autoProcess: true)
     }
 
     /// Schedules a task and waits for its result.
