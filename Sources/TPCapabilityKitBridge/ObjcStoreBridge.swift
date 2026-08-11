@@ -1,5 +1,5 @@
 import Combine
-import Foundation
+@preconcurrency import Foundation
 import TPCapabilityKit
 
 /// Objective-C singleton bridge exposing `DynamicStore` functionality to Objective-C modules.
@@ -9,6 +9,8 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     @objc public static let shared = ObjcStoreBridge()
 
     private let store: DynamicStore
+    private let lock = NSLock()
+    private var _taskScheduler: ObjcTaskScheduler?
 
     internal init(store: DynamicStore = .shared) {
         self.store = store
@@ -140,6 +142,65 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
             completion(nil)
         }
         targetQueue.asyncAfter(deadline: .now() + timeout, execute: box.timeoutItem!)
+    }
+
+    // MARK: - Task Scheduling APIs
+
+    /// Shared task scheduler instance. Cached for consistent reference.
+    @objc public var taskScheduler: ObjcTaskScheduler {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = _taskScheduler { return existing }
+        let new = ObjcTaskScheduler(scheduler: store.scheduler, store: store)
+        _taskScheduler = new
+        return new
+    }
+
+    /// Schedules a task for execution.
+    @objc public func scheduleTask(
+        _ descriptor: ObjcTaskDescriptor,
+        task: @escaping @Sendable () -> Void,
+        completion: ((ObjcLease) -> Void)? = nil
+    ) -> ObjcLease {
+        let lease = store.scheduleTask(
+            descriptor.underlying,
+            task: { task() },
+            completion: completion.map { handler in
+                { lease in handler(ObjcLease(underlying: lease)) }
+            }
+        )
+        return ObjcLease(underlying: lease)
+    }
+
+    /// Schedules a task and waits for result via completion handler.
+    @objc public func scheduleTaskAndWait(
+        _ descriptor: ObjcTaskDescriptor,
+        task: @escaping @Sendable () -> NSObject,
+        completion: @escaping @Sendable (NSObject?) -> Void
+    ) {
+        Task {
+            let result = await store.scheduleTaskAndWait(
+                descriptor.underlying
+            ) {
+                task() as NSObject
+            }
+            completion(result)
+        }
+    }
+
+    /// Cancels a pending task.
+    @objc public func cancelTask(taskId: String) {
+        store.scheduler.cancel(taskId: taskId)
+    }
+
+    /// Returns number of pending tasks.
+    @objc public var pendingTaskCount: Int {
+        store.scheduler.pendingCount
+    }
+
+    /// Returns number of active tasks.
+    @objc public var activeTaskCount: Int {
+        store.scheduler.activeCount
     }
 
 }
