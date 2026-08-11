@@ -85,12 +85,14 @@ public final class TaskScheduler: @unchecked Sendable {
     ///   - task: The task descriptor to schedule.
     ///   - taskExecution: The async closure to execute when capability is available.
     ///   - completion: Optional completion handler called when task reaches a terminal state.
+    ///   - autoProcess: Whether to automatically process pending tasks. Default is true.
     /// - Returns: The lease for tracking the task.
     @discardableResult
     public func schedule(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async -> Void,
-        completion: ((Lease) -> Void)? = nil
+        completion: ((Lease) -> Void)? = nil,
+        autoProcess: Bool = true
     ) -> Lease {
         let lease = Lease(task: task)
 
@@ -107,8 +109,10 @@ public final class TaskScheduler: @unchecked Sendable {
 
         eventSubject.send(.taskScheduled(lease: lease))
 
-        // Process pending tasks
-        Task { await processPendingTasks() }
+        // Process pending tasks if requested
+        if autoProcess {
+            Task { await processPendingTasks() }
+        }
 
         return lease
     }
@@ -128,9 +132,10 @@ public final class TaskScheduler: @unchecked Sendable {
         return await withCheckedContinuation { continuation in
             var resumed = false
 
-            let lease = schedule(task) {
+            // Schedule without auto-processing
+            let lease = schedule(task, taskExecution: {
                 // Empty closure - actual execution happens via taskExecutions
-            } completion: { lease in
+            }, completion: { lease in
                 completionLock.withLock {
                     guard !resumed else { return }
                     resumed = true
@@ -146,7 +151,7 @@ public final class TaskScheduler: @unchecked Sendable {
                 default:
                     continuation.resume(returning: nil)
                 }
-            }
+            }, autoProcess: false)
 
             // Store the actual execution closure that returns a result
             lock.withLock {

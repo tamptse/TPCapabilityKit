@@ -334,4 +334,45 @@ public final class DynamicStore: @unchecked Sendable {
             return result
         }
     }
+
+    // MARK: - Task Scheduling
+
+    /// Shared task scheduler instance. Lazily created on first access.
+    public var scheduler: TaskScheduler {
+        get {
+            if let existing = _scheduler { return existing }
+            let new = TaskScheduler(store: self)
+            _scheduler = new
+            return new
+        }
+        set { _scheduler = newValue }
+    }
+    private var _scheduler: TaskScheduler?
+
+    /// Schedules a task for centralized execution with capability matching and priority.
+    /// - Parameters:
+    ///   - descriptor: The task descriptor.
+    ///   - task: The async closure to execute.
+    ///   - completion: Optional completion handler.
+    /// - Returns: The lease for tracking.
+    @discardableResult
+    public func scheduleTask(
+        _ descriptor: TaskDescriptor,
+        task: @escaping @Sendable () async -> Void,
+        completion: ((Lease) -> Void)? = nil
+    ) -> Lease {
+        scheduler.schedule(descriptor, taskExecution: task, completion: completion)
+    }
+
+    /// Schedules a task and waits for its result.
+    /// - Parameters:
+    ///   - descriptor: The task descriptor.
+    ///   - task: The async closure to execute.
+    /// - Returns: The result, or nil if timeout/error.
+    public func scheduleTaskAndWait<T: Sendable>(
+        _ descriptor: TaskDescriptor,
+        task: @escaping @Sendable () async throws -> T
+    ) async -> T? {
+        await scheduler.scheduleAndWait(descriptor, taskExecution: task)
+    }
 }
