@@ -14,7 +14,7 @@ private final class SendableBox<T>: @unchecked Sendable {
 /// priority queuing, and lease lifecycle.
 ///
 /// Inspired by Meta's Jupiter (capability matching) and Async (priority dispatching).
-public final class TaskScheduler: @unchecked Sendable {
+public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     /// Configuration for the scheduler.
     public struct Configuration: Sendable {
         /// Default timeout for tasks if not specified in TaskDescriptor.
