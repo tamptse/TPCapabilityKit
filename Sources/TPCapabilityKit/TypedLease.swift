@@ -15,9 +15,6 @@ struct TypedLease<Result: Sendable>: Sendable {
     /// Whether the lease is in a terminal state.
     var isTerminal: Bool { lease.isTerminal }
     
-    /// When the lease was created.
-    var createdAt: Date { lease.createdAt }
-    
     /// The typed result of the task execution, if completed successfully.
     /// Returns nil if not completed or if result type doesn't match.
     var typedResult: Result? {

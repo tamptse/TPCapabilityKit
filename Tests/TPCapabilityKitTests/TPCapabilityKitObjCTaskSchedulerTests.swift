@@ -106,7 +106,6 @@ struct ObjcLeaseTests {
         
         // Now shows active
         #expect(objcLease.state == .active)
-        #expect(objcLease.activatedAt != nil)
     }
 }
 

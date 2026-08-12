@@ -39,19 +39,19 @@ public final class Lease: @unchecked Sendable {
     public private(set) var state: State
 
     /// When the lease was created.
-    public let createdAt: Date
+    let createdAt: Date
 
     /// When the lease was activated (task started executing).
-    public private(set) var activatedAt: Date?
+    private(set) var activatedAt: Date?
 
     /// When the lease completed (success or failure).
-    public private(set) var completedAt: Date?
+    private(set) var completedAt: Date?
 
     /// The result of the task execution, if completed successfully.
     public private(set) var result: Any?
 
     /// Number of times this task has been retried.
-    public private(set) var retryCount: Int
+    private(set) var retryCount: Int
 
     /// Creates a new lease for a task.
     init(task: TaskDescriptor) {
@@ -125,7 +125,7 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Whether the lease has exceeded its timeout.
-    public var hasExpired: Bool {
+    var hasExpired: Bool {
         let deadline = activatedAt ?? createdAt
         return Date().timeIntervalSince(deadline) > task.timeout
     }

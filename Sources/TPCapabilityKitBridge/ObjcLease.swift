@@ -23,20 +23,8 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
     /// Current state of the lease.
     @objc public private(set) var state: State
 
-    /// When the lease was created.
-    @objc public let createdAt: Date
-
-    /// When the lease was activated (task started executing).
-    @objc public private(set) var activatedAt: Date?
-
-    /// When the lease completed (success or failure).
-    @objc public private(set) var completedAt: Date?
-
     /// The result of the task execution, if completed successfully.
     @objc public private(set) var result: Any?
-
-    /// Number of times this task has been retried.
-    @objc public private(set) var retryCount: Int
 
     /// The underlying Swift Lease.
     public let underlying: Lease
@@ -45,11 +33,7 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
         self.underlying = underlying
         self.taskId = underlying.task.id
         self.state = State(rawValue: underlying.state.rawValue) ?? .pending
-        self.createdAt = underlying.createdAt
-        self.activatedAt = underlying.activatedAt
-        self.completedAt = underlying.completedAt
         self.result = underlying.result
-        self.retryCount = underlying.retryCount
         super.init()
     }
 
@@ -57,9 +41,6 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
     /// Call this after the underlying lease may have changed state.
     @objc public func refresh() {
         state = State(rawValue: underlying.state.rawValue) ?? .pending
-        activatedAt = underlying.activatedAt
-        completedAt = underlying.completedAt
         result = underlying.result
-        retryCount = underlying.retryCount
     }
 }
