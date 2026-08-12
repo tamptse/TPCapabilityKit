@@ -142,9 +142,10 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Parameter pluginId: Unique identifier of the target plugin.
     public func removeState(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
-        lock.lock()
-        let subject = stateSubjects.removeValue(forKey: pluginId)
-        lock.unlock()
+        var subject: CurrentValueSubject<Any?, Never>?
+        lock.withLock {
+            subject = stateSubjects.removeValue(forKey: pluginId)
+        }
         
         // Notify subscribers before removal so they can detect state removal
         subject?.send(nil)
