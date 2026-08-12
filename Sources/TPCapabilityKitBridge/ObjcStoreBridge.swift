@@ -135,12 +135,13 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
             }
         
         // Timeout
-        box.timeoutItem = DispatchWorkItem {
+        let timeoutWorkItem = DispatchWorkItem {
             guard box.isActive else { return }
             box.deactivate()
             completion(nil)
         }
-        targetQueue.asyncAfter(deadline: .now() + timeout, execute: box.timeoutItem!)
+        box.timeoutItem = timeoutWorkItem
+        targetQueue.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
     }
 
     // MARK: - Task Scheduling APIs
