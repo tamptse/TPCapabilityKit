@@ -108,8 +108,8 @@ public actor ConcurrencyController {
 
     /// Statistics about current concurrency utilization.
     struct Stats: Sendable {
-        public let globalActive: Int
-        public let globalMax: Int?
-        public let perCapability: [Capability: Int]
+        let globalActive: Int
+        let globalMax: Int?
+        let perCapability: [Capability: Int]
     }
 }
