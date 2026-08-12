@@ -29,13 +29,13 @@ public actor ConcurrencyController {
     private var waitingContinuations: [CheckedContinuation<Void, Never>] = []
 
     /// Creates a new ConcurrencyController.
-    public init(configuration: Configuration = .default) {
+    init(configuration: Configuration = .default) {
         self.configuration = configuration
     }
 
     /// Acquires a slot for the given task. Suspends if no slots available.
     /// - Parameter task: The task descriptor to acquire a slot for.
-    public func acquire(for task: TaskDescriptor) async {
+    func acquire(for task: TaskDescriptor) async {
         // Check if we can acquire immediately
         if canAcquire(for: task) {
             incrementSlots(for: task)
@@ -53,7 +53,7 @@ public actor ConcurrencyController {
 
     /// Releases the slot for the given task.
     /// - Parameter task: The task descriptor to release the slot for.
-    public func release(for task: TaskDescriptor) {
+    func release(for task: TaskDescriptor) {
         decrementSlots(for: task)
 
         // Wake up waiting continuations
@@ -66,7 +66,7 @@ public actor ConcurrencyController {
     }
 
     /// Returns current utilization stats.
-    public func stats() -> Stats {
+    func stats() -> Stats {
         Stats(
             globalActive: globalSlots,
             globalMax: configuration.maxGlobal,
@@ -107,7 +107,7 @@ public actor ConcurrencyController {
     }
 
     /// Statistics about current concurrency utilization.
-    public struct Stats: Sendable {
+    struct Stats: Sendable {
         public let globalActive: Int
         public let globalMax: Int?
         public let perCapability: [Capability: Int]
