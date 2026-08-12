@@ -14,6 +14,10 @@ import Foundation
 /// - Logs use `[DynamicStore]` prefix for easy filtering
 /// - Error logs indicate invalid API usage (e.g., empty plugin ID)
 /// - Warning logs indicate unexpected but non-fatal conditions (e.g., type mismatch)
+/// Thread-safe store using NSLock for all mutable state access.
+/// - Important: `@unchecked Sendable` is intentional — all mutations are
+///   protected by `lock`. This has been verified through code review and
+///   concurrency testing. Do not add unsynchronized mutable state.
 public final class DynamicStore: @unchecked Sendable {
     /// Shared singleton instance.
     public static let shared = DynamicStore()

@@ -6,6 +6,11 @@ import Foundation
 /// - Note: This class is `@unchecked Sendable` because it requires mutable state
 ///   for lifecycle management. All mutations should be coordinated through the
 ///   TaskScheduler to ensure thread safety.
+/// Lifecycle tracker for scheduled tasks.
+/// - Important: `@unchecked Sendable` is intentional — all mutations
+///   (`activate`, `complete`, `fail`, `expire`, `retry`) are `internal`
+///   and only called by `TaskScheduler` which coordinates access via its
+///   own lock. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
     /// State of the lease.
     public enum State: Sendable, Equatable {
