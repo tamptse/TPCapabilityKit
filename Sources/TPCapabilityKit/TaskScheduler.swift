@@ -81,7 +81,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     private let eventSubject = PassthroughSubject<SchedulerEvent, Never>()
 
     /// Events emitted by the scheduler.
-    public enum SchedulerEvent: Sendable {
+    enum SchedulerEvent: Sendable {
         case taskScheduled(lease: Lease)
         case taskStarted(lease: Lease)
         case taskCompleted(lease: Lease)
@@ -98,7 +98,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     }
 
     /// Publisher for scheduler events.
-    public var events: AnyPublisher<SchedulerEvent, Never> {
+    var events: AnyPublisher<SchedulerEvent, Never> {
         eventSubject.eraseToAnyPublisher()
     }
 

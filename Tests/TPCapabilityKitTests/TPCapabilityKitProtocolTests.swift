@@ -61,7 +61,6 @@ struct TaskSchedulerProtocolTests {
 // Mock scheduler for testing
 private final class MockTaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     private let store: DynamicStore
-    private let eventSubject = PassthroughSubject<TaskScheduler.SchedulerEvent, Never>()
     
     var wasScheduleCalled = false
     var wasScheduleAndWaitCalled = false
@@ -104,7 +103,4 @@ private final class MockTaskScheduler: TaskSchedulerProtocol, @unchecked Sendabl
     
     var pendingCount: Int { 0 }
     var activeCount: Int { 0 }
-    var events: AnyPublisher<TaskScheduler.SchedulerEvent, Never> {
-        eventSubject.eraseToAnyPublisher()
-    }
 }
