@@ -69,7 +69,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     }
 
     /// Creates a new TaskScheduler.
-    public init(store: DynamicStore = .shared, configuration: Configuration = .init()) {
+    init(store: DynamicStore = .shared, configuration: Configuration = .init()) {
         self.store = store
         self.configuration = configuration
         self.concurrencyController = ConcurrencyController(configuration: configuration.concurrency)
