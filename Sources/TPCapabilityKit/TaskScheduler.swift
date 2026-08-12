@@ -36,6 +36,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     private let configuration: Configuration
     private let concurrencyController: ConcurrencyController
     private let lock = NSLock()
+    private let taskStore = TaskStore()
 
     // Priority queues: one per priority level
     private var pendingTasks: [TaskPriority: [Lease]] = [
@@ -129,42 +130,49 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         let resultBox = SendableBox<T?>(nil)
         let completionLock = NSLock()
 
+        // Schedule without auto-processing
+        let lease = schedule(task, taskExecution: {
+            // Empty closure - actual execution happens via taskExecutions
+        }, completion: { lease in
+            // No-op here, we'll handle completion via the continuation
+        }, autoProcess: false)
+
+        // Store the actual execution closure that returns a result
+        lock.withLock {
+            taskExecutions[task.id] = { @Sendable in
+                let value = try? await taskExecution()
+                resultBox.value = value
+                return value
+            }
+        }
+
         return await withCheckedContinuation { continuation in
             var resumed = false
 
-            // Schedule without auto-processing
-            let lease = schedule(task, taskExecution: {
-                // Empty closure - actual execution happens via taskExecutions
-            }, completion: { lease in
-                completionLock.withLock {
-                    guard !resumed else { return }
-                    resumed = true
-                }
-
-                switch lease.state {
-                case .completed:
-                    continuation.resume(returning: resultBox.value)
-                case .failed:
-                    continuation.resume(returning: nil)
-                case .expired:
-                    continuation.resume(returning: nil)
-                default:
-                    continuation.resume(returning: nil)
-                }
-            }, autoProcess: false)
-
-            // Store the actual execution closure that returns a result
+            // Update completion handler to resume continuation
             lock.withLock {
-                taskExecutions[task.id] = { @Sendable in
-                    let value = try? await taskExecution()
-                    resultBox.value = value
-                    return value
+                completionHandlers[task.id] = { lease in
+                    completionLock.withLock {
+                        guard !resumed else { return }
+                        resumed = true
+                    }
+
+                    switch lease.state {
+                    case .completed:
+                        continuation.resume(returning: resultBox.value)
+                    case .failed:
+                        continuation.resume(returning: nil)
+                    case .expired:
+                        continuation.resume(returning: nil)
+                    default:
+                        continuation.resume(returning: nil)
+                    }
                 }
             }
 
             // Start execution in background
             Task {
-                await executeLease(lease)
+                await self.executeLease(lease)
             }
         }
     }
@@ -232,7 +240,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 }
 
                 // Wait for capabilities then retry
-                Task { await waitForCapabilitiesAndProcess(nextLease) }
+                await taskStore.store(Task { await waitForCapabilitiesAndProcess(nextLease) })
                 continue
             }
 
@@ -390,7 +398,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 lock.withLock {
                     pendingTasks[lease.task.priority]?.append(lease)
                 }
-                Task { await processPendingTasks() }
+                await taskStore.store(Task { await processPendingTasks() })
                 return
             } else {
                 let error = TaskExecutionError()
@@ -400,6 +408,12 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         }
 
         completion?(lease)
+    }
+    
+    deinit {
+        // Cancel all tracked tasks without capturing self
+        let store = taskStore
+        Task { await store.cancelAll() }
     }
 }
 
