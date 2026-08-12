@@ -196,6 +196,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     /// - Parameter taskId: The ID of the task to cancel.
     public func cancel(taskId: String) {
         var cancelledLease: Lease?
+        var activeExpired = false
 
         lock.withLock {
             // Remove from pending queues
@@ -206,14 +207,26 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 }
             }
 
-            // Or expire if active
-            if let lease = activeLeases[taskId] {
-                lease.expire()
-                eventSubject.send(.taskExpired(lease: lease))
+            // Check if active (but don't expire yet - do it outside lock)
+            if activeLeases[taskId] != nil {
+                activeExpired = true
             }
         }
 
-        // If we found and removed from pending, expire it
+        // Handle active task expiration (outside lock)
+        if activeExpired {
+            lock.withLock {
+                if let lease = activeLeases.removeValue(forKey: taskId) {
+                    lease.expire()
+                    let completion = completionHandlers.removeValue(forKey: taskId)
+                    eventSubject.send(.taskExpired(lease: lease))
+                    completion?(lease)
+                }
+            }
+            return
+        }
+
+        // Handle pending task expiration
         if let lease = cancelledLease {
             lease.expire()
             eventSubject.send(.taskExpired(lease: lease))
@@ -423,12 +436,6 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         }
 
         completion?(lease)
-    }
-    
-    deinit {
-        // Cancel all tracked tasks without capturing self
-        let store = taskStore
-        Task { await store.cancelAll() }
     }
 }
 
