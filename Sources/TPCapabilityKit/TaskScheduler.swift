@@ -4,10 +4,20 @@ import Combine
 /// Internal error type for task execution failures.
 private struct TaskExecutionError: Error, Sendable {}
 
-/// Wrapper for non-Sendable values to pass through task groups.
-private final class SendableBox<T>: @unchecked Sendable {
-    var value: T
-    init(_ value: T) { self.value = value }
+/// Thread-safe wrapper for passing non-Sendable values through task groups.
+final class SendableBox<T>: @unchecked Sendable {
+    private var _value: T
+    private let lock = NSLock()
+    
+    var value: T {
+        lock.withLock { _value }
+    }
+    
+    init(_ value: T) { _value = value }
+    
+    func setValue(_ value: T) {
+        lock.withLock { _value = value }
+    }
 }
 
 /// Centralized task scheduler that manages capability-based routing,
@@ -146,7 +156,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         lock.withLock {
             taskExecutions[task.id] = { @Sendable in
                 let value = try? await taskExecution()
-                resultBox.value = value
+                resultBox.setValue(value)
                 return value
             }
         }
