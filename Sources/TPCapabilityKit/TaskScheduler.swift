@@ -29,19 +29,19 @@ final class SendableBox<T>: @unchecked Sendable {
 ///   (`pendingTasks`, `activeLeases`, `taskExecutions`, `completionHandlers`)
 ///   is protected by `lock`. TaskStore tracks unstructured tasks for lifecycle
 ///   safety. Do not add unsynchronized mutable state.
-public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
+final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     /// Configuration for the scheduler.
-    public struct Configuration: Sendable {
+    struct Configuration: Sendable {
         /// Default timeout for tasks if not specified in TaskDescriptor.
-        public let defaultTimeout: TimeInterval
+        let defaultTimeout: TimeInterval
 
         /// Maximum concurrent tasks per capability. Nil means no per-capability limit.
-        public let maxPerCapability: Int?
+        let maxPerCapability: Int?
 
         /// Maximum concurrent tasks globally. Nil means no global limit.
-        public let maxGlobal: Int?
+        let maxGlobal: Int?
 
-        public init(
+        init(
             defaultTimeout: TimeInterval = 30.0,
             maxPerCapability: Int? = 5,
             maxGlobal: Int? = 20
@@ -52,7 +52,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         }
 
         /// Default configuration: 5 per capability, 20 global.
-        public static let `default` = Configuration()
+        static let `default` = Configuration()
     }
 
     private let store: DynamicStore
@@ -118,7 +118,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     ///   - autoProcess: Whether to automatically process pending tasks. Default is true.
     /// - Returns: The lease for tracking the task.
     @discardableResult
-    public func schedule(
+    func schedule(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async -> Void,
         completion: ((Lease) -> Void)? = nil,
@@ -154,7 +154,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     ///   - task: The task descriptor to schedule.
     ///   - taskExecution: The async closure to execute when capability is available.
     /// - Returns: The result of the task, or nil if timeout/error.
-    public func scheduleAndWait<T: Sendable>(
+    func scheduleAndWait<T: Sendable>(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async throws -> T
     ) async -> T? {
@@ -210,7 +210,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
 
     /// Cancels a pending task.
     /// - Parameter taskId: The ID of the task to cancel.
-    public func cancel(taskId: String) {
+    func cancel(taskId: String) {
         var cancelledLease: Lease?
         var activeExpired = false
 
@@ -256,12 +256,12 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     }
 
     /// Returns the number of pending tasks.
-    public var pendingCount: Int {
+    var pendingCount: Int {
         lock.withLock { _pendingCount }
     }
 
     /// Returns the number of active tasks.
-    public var activeCount: Int {
+    var activeCount: Int {
         lock.withLock {
             activeLeases.count
         }

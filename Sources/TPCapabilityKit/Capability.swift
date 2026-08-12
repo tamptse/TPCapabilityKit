@@ -3,7 +3,7 @@ import Foundation
 /// Represents a capability that a plugin can provide to the system.
 /// Plugins declare capabilities at registration time; the central store
 /// maintains a registry and exposes query/observation APIs.
-public enum Capability: Hashable, Sendable, CustomStringConvertible {
+public enum Capability: Hashable, Sendable {
     case heavyTask
     case lightTask
     case networkAccess
@@ -19,11 +19,6 @@ public enum Capability: Hashable, Sendable, CustomStringConvertible {
         case .backgroundExecution: return "backgroundExecution"
         case .custom(let value): return value
         }
-    }
-
-    /// Human-readable description for debugging (derives from rawValue).
-    public var description: String {
-        return rawValue
     }
 
     /// Initialize from a string identifier.
