@@ -71,6 +71,12 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     // Completion handlers by task ID
     private var completionHandlers: [String: (Lease) -> Void] = [:]
 
+    // Cached pending count for O(1) access
+    private var _pendingCount: Int = 0
+
+    // Lookup index for O(1) cancel: taskId -> priority
+    private var taskPriorityIndex: [String: TaskPriority] = [:]
+
     // Subject for scheduler events
     private let eventSubject = PassthroughSubject<SchedulerEvent, Never>()
 
@@ -114,6 +120,8 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
 
         lock.withLock {
             pendingTasks[task.priority]?.append(lease)
+            _pendingCount += 1
+            taskPriorityIndex[task.id] = task.priority
             taskExecutions[task.id] = { @Sendable in
                 await taskExecution()
                 return nil
@@ -199,12 +207,12 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         var activeExpired = false
 
         lock.withLock {
-            // Remove from pending queues
-            for priority in TaskPriority.allCases {
-                if let index = pendingTasks[priority]?.firstIndex(where: { $0.task.id == taskId }) {
-                    cancelledLease = pendingTasks[priority]?.remove(at: index)
-                    break
-                }
+            // Remove from pending queues using index
+            if let priority = taskPriorityIndex[taskId],
+               let index = pendingTasks[priority]?.firstIndex(where: { $0.task.id == taskId }) {
+                cancelledLease = pendingTasks[priority]?.remove(at: index)
+                _pendingCount -= 1
+                taskPriorityIndex.removeValue(forKey: taskId)
             }
 
             // Check if active (but don't expire yet - do it outside lock)
@@ -241,9 +249,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
 
     /// Returns the number of pending tasks.
     public var pendingCount: Int {
-        lock.withLock {
-            pendingTasks.values.reduce(0) { $0 + $1.count }
-        }
+        lock.withLock { _pendingCount }
     }
 
     /// Returns the number of active tasks.
@@ -284,6 +290,8 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 if var queue = pendingTasks[priority], !queue.isEmpty {
                     let lease = queue.removeFirst()
                     pendingTasks[priority] = queue
+                    _pendingCount -= 1
+                    taskPriorityIndex.removeValue(forKey: lease.task.id)
                     return lease
                 }
             }
@@ -425,6 +433,8 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 eventSubject.send(.taskRetried(lease: lease, attempt: lease.retryCount))
                 lock.withLock {
                     pendingTasks[lease.task.priority]?.append(lease)
+                    _pendingCount += 1
+                    taskPriorityIndex[lease.task.id] = lease.task.priority
                 }
                 await taskStore.store(Task { await processPendingTasks() })
                 return
