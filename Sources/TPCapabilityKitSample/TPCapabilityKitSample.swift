@@ -308,22 +308,18 @@ enum TPCapabilityKitSample {
         print("[scheduleTask] Lease ID: \(lease.task.id)")
         
         // Check pending/active counts
-        print("[Scheduler] Pending: \(store.scheduler.pendingCount), Active: \(store.scheduler.activeCount)")
+        print("[Scheduler] Pending: \(store.pendingTaskCount), Active: \(store.activeTaskCount)")
         
         // Cancel a task
-        store.scheduler.cancel(taskId: lease.task.id)
+        store.cancelTask(taskId: lease.task.id)
         print("[Scheduler] Cancelled task: \(lease.task.id)")
         
         // 20. A/B Testing with Protocol
         print("\n--- A/B Testing Example ---")
         
-        // Create a custom scheduler (mock for demonstration)
-        // In real app, this could be a different scheduling algorithm
-        let currentScheduler = store.scheduler
-        print("[A/B] Current scheduler type: \(type(of: currentScheduler))")
-        
-        // The scheduler can be replaced at runtime
+        // The scheduler is internal; replace via property for A/B testing
         // store.scheduler = MyCustomScheduler(store: store)
+        print("[A/B] Scheduler is internal — replace via store.scheduler for A/B testing")
         
         // 21. ObjC Bridge - Task Scheduling
         print("\n--- ObjC Task Scheduling ---")

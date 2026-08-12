@@ -343,7 +343,7 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Task Scheduling
 
     /// Task scheduler instance. Can be replaced for A/B testing.
-    public var scheduler: any TaskSchedulerProtocol {
+    var scheduler: any TaskSchedulerProtocol {
         get {
             if let existing = _scheduler { return existing }
             let new = TaskScheduler(store: self)
@@ -380,4 +380,15 @@ public final class DynamicStore: @unchecked Sendable {
     ) async -> T? {
         await scheduler.scheduleAndWait(descriptor, taskExecution: task)
     }
+
+    /// Cancels a pending task by its identifier.
+    public func cancelTask(taskId: String) {
+        scheduler.cancel(taskId: taskId)
+    }
+
+    /// Number of pending tasks.
+    public var pendingTaskCount: Int { scheduler.pendingCount }
+
+    /// Number of active tasks.
+    public var activeTaskCount: Int { scheduler.activeCount }
 }

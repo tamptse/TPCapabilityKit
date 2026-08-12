@@ -148,7 +148,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     /// Shared task scheduler instance. Created on each access for consistency.
     @objc public var taskScheduler: ObjcTaskScheduler {
-        ObjcTaskScheduler(scheduler: store.scheduler, store: store)
+        ObjcTaskScheduler(store: store)
     }
 
     /// Schedules a task for execution.
@@ -185,17 +185,17 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     /// Cancels a pending task.
     @objc public func cancelTask(taskId: String) {
-        store.scheduler.cancel(taskId: taskId)
+        store.cancelTask(taskId: taskId)
     }
 
     /// Returns number of pending tasks.
     @objc public var pendingTaskCount: Int {
-        store.scheduler.pendingCount
+        store.pendingTaskCount
     }
 
     /// Returns number of active tasks.
     @objc public var activeTaskCount: Int {
-        store.scheduler.activeCount
+        store.activeTaskCount
     }
 
 }

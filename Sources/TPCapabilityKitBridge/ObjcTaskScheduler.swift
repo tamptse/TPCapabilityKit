@@ -1,14 +1,12 @@
 @preconcurrency import Foundation
 import TPCapabilityKit
 
-/// Objective-C wrapper for TaskSchedulerProtocol.
+/// Objective-C wrapper for task scheduling.
 @objc(TPTaskScheduler)
 public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
-    private let scheduler: any TaskSchedulerProtocol
     private let store: DynamicStore
 
-    internal init(scheduler: any TaskSchedulerProtocol, store: DynamicStore) {
-        self.scheduler = scheduler
+    internal init(store: DynamicStore) {
         self.store = store
         super.init()
     }
@@ -19,13 +17,12 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         task: @escaping @Sendable () -> Void,
         completion: ((ObjcLease) -> Void)? = nil
     ) -> ObjcLease {
-        let lease = scheduler.schedule(
+        let lease = store.scheduleTask(
             descriptor.underlying,
-            taskExecution: { task() },
+            task: { task() },
             completion: completion.map { handler in
                 { lease in handler(ObjcLease(underlying: lease)) }
-            },
-            autoProcess: true
+            }
         )
         return ObjcLease(underlying: lease)
     }
@@ -37,7 +34,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         completion: @escaping @Sendable (NSObject?) -> Void
     ) {
         Task {
-            let result: NSObject? = await scheduler.scheduleAndWait(
+            let result: NSObject? = await store.scheduleTaskAndWait(
                 descriptor.underlying
             ) {
                 task() as NSObject
@@ -48,12 +45,12 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
 
     /// Cancels a pending task.
     @objc public func cancel(taskId: String) {
-        scheduler.cancel(taskId: taskId)
+        store.cancelTask(taskId: taskId)
     }
 
     /// Number of pending tasks.
-    @objc public var pendingCount: Int { scheduler.pendingCount }
+    @objc public var pendingCount: Int { store.pendingTaskCount }
 
     /// Number of active tasks.
-    @objc public var activeCount: Int { scheduler.activeCount }
+    @objc public var activeCount: Int { store.activeTaskCount }
 }
