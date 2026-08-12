@@ -35,16 +35,24 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         /// Default timeout for tasks if not specified in TaskDescriptor.
         public let defaultTimeout: TimeInterval
 
-        /// Maximum number of tasks to process concurrently.
-        public let concurrency: ConcurrencyController.Configuration
+        /// Maximum concurrent tasks per capability. Nil means no per-capability limit.
+        public let maxPerCapability: Int?
+
+        /// Maximum concurrent tasks globally. Nil means no global limit.
+        public let maxGlobal: Int?
 
         public init(
             defaultTimeout: TimeInterval = 30.0,
-            concurrency: ConcurrencyController.Configuration = .default
+            maxPerCapability: Int? = 5,
+            maxGlobal: Int? = 20
         ) {
             self.defaultTimeout = defaultTimeout
-            self.concurrency = concurrency
+            self.maxPerCapability = maxPerCapability
+            self.maxGlobal = maxGlobal
         }
+
+        /// Default configuration: 5 per capability, 20 global.
+        public static let `default` = Configuration()
     }
 
     private let store: DynamicStore
@@ -94,7 +102,7 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     init(store: DynamicStore = .shared, configuration: Configuration = .init()) {
         self.store = store
         self.configuration = configuration
-        self.concurrencyController = ConcurrencyController(configuration: configuration.concurrency)
+        self.concurrencyController = ConcurrencyController(configuration: .init(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal))
     }
 
     /// Publisher for scheduler events.

@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Inspired by Meta's AsyncLimiter and Swift's AsyncSemaphore.
 /// Uses structured concurrency for safe slot management.
-public actor ConcurrencyController {
+actor ConcurrencyController {
     /// Configuration for concurrency limits.
     public struct Configuration: Sendable {
         /// Maximum concurrent tasks per capability. Nil means no per-capability limit.
