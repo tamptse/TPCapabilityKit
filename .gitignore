@@ -23,6 +23,3 @@ Package.resolved
 # Temporary
 *.tmp
 *.temp
-
-# Docs
-docs/
