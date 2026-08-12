@@ -378,6 +378,21 @@ public final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         // Acquire concurrency slot
         await concurrencyController.acquire(for: lease.task)
 
+        // Re-check capabilities after acquiring slot (capability may have been revoked)
+        guard checkCapabilities(for: lease.task) else {
+            // Capability revoked while waiting, release slot and fail
+            await concurrencyController.release(for: lease.task)
+            lock.withLock {
+                activeLeases.removeValue(forKey: lease.task.id)
+                let completion = completionHandlers.removeValue(forKey: lease.task.id)
+                let error = TaskExecutionError()
+                lease.fail(with: error)
+                eventSubject.send(.taskFailed(lease: lease, error: error))
+                completion?(lease)
+            }
+            return
+        }
+
         // Activate lease
         lease.activate()
         lock.withLock {
