@@ -49,7 +49,7 @@ public final class Lease: @unchecked Sendable {
     public private(set) var retryCount: Int
 
     /// Creates a new lease for a task.
-    public init(task: TaskDescriptor) {
+    init(task: TaskDescriptor) {
         self.task = task
         self.state = .pending
         self.createdAt = Date()
@@ -57,14 +57,14 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Marks the lease as active (task started executing).
-    public func activate() {
+    func activate() {
         guard isPending else { return }
         state = .active
         activatedAt = Date()
     }
 
     /// Marks the lease as completed with a result.
-    public func complete(with result: Any?) {
+    func complete(with result: Any?) {
         guard isActive else { return }
         self.result = result
         state = .completed
@@ -72,14 +72,14 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Marks the lease as failed with an error.
-    public func fail(with error: Error) {
+    func fail(with error: Error) {
         guard isActive else { return }
         state = .failed(error)
         completedAt = Date()
     }
 
     /// Marks the lease as expired (timeout reached).
-    public func expire() {
+    func expire() {
         state = .expired
         completedAt = Date()
     }
@@ -87,7 +87,7 @@ public final class Lease: @unchecked Sendable {
     /// Increments retry count and resets to pending state.
     /// Returns true if retries remain, false if max retries exceeded.
     @discardableResult
-    public func retry() -> Bool {
+    func retry() -> Bool {
         guard retryCount < task.maxRetries else { return false }
         retryCount += 1
         state = .pending
