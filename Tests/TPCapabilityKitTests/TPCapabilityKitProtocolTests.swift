@@ -61,12 +61,19 @@ struct TaskSchedulerProtocolTests {
 // Mock scheduler for testing
 private final class MockTaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     private let store: DynamicStore
+    private let lock = NSLock()
     
-    var wasScheduleCalled = false
-    var wasScheduleAndWaitCalled = false
-    var wasCancelCalled = false
-    var lastDescriptor: TaskDescriptor?
-    var lastCancelledTaskId: String?
+    private var _wasScheduleCalled = false
+    private var _wasScheduleAndWaitCalled = false
+    private var _wasCancelCalled = false
+    private var _lastDescriptor: TaskDescriptor?
+    private var _lastCancelledTaskId: String?
+    
+    var wasScheduleCalled: Bool { lock.withLock { _wasScheduleCalled } }
+    var wasScheduleAndWaitCalled: Bool { lock.withLock { _wasScheduleAndWaitCalled } }
+    var wasCancelCalled: Bool { lock.withLock { _wasCancelCalled } }
+    var lastDescriptor: TaskDescriptor? { lock.withLock { _lastDescriptor } }
+    var lastCancelledTaskId: String? { lock.withLock { _lastCancelledTaskId } }
     
     init(store: DynamicStore) {
         self.store = store
@@ -78,8 +85,10 @@ private final class MockTaskScheduler: TaskSchedulerProtocol, @unchecked Sendabl
         completion: ((Lease) -> Void)?,
         autoProcess: Bool
     ) -> Lease {
-        wasScheduleCalled = true
-        lastDescriptor = task
+        lock.withLock {
+            _wasScheduleCalled = true
+            _lastDescriptor = task
+        }
         let lease = Lease(task: task)
         lease.activate()
         lease.complete(with: nil)
@@ -91,14 +100,18 @@ private final class MockTaskScheduler: TaskSchedulerProtocol, @unchecked Sendabl
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async throws -> T
     ) async -> T? {
-        wasScheduleAndWaitCalled = true
-        lastDescriptor = task
+        lock.withLock {
+            _wasScheduleAndWaitCalled = true
+            _lastDescriptor = task
+        }
         return try? await taskExecution()
     }
     
     func cancel(taskId: String) {
-        wasCancelCalled = true
-        lastCancelledTaskId = taskId
+        lock.withLock {
+            _wasCancelCalled = true
+            _lastCancelledTaskId = taskId
+        }
     }
     
     var pendingCount: Int { 0 }

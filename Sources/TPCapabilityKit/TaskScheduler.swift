@@ -24,7 +24,6 @@ final class SendableBox<T>: @unchecked Sendable {
 /// priority queuing, and lease lifecycle.
 ///
 /// Inspired by Meta's Jupiter (capability matching) and Async (priority dispatching).
-/// Centralized task scheduler with capability-based routing.
 /// - Important: `@unchecked Sendable` is intentional — all mutable state
 ///   (`pendingTasks`, `activeLeases`, `taskExecutions`, `completionHandlers`)
 ///   is protected by `lock`. TaskStore tracks unstructured tasks for lifecycle
