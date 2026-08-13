@@ -2,7 +2,7 @@ import Combine
 
 /// Protocol defining the interface for task scheduling.
 /// Enables A/B testing of different scheduling implementations.
-protocol TaskSchedulerProtocol: AnyObject, Sendable {
+public protocol TaskSchedulerProtocol: AnyObject, Sendable {
     /// Schedules a task for execution.
     func schedule(
         _ task: TaskDescriptor,

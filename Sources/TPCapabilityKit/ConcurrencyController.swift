@@ -7,20 +7,20 @@ import Foundation
 /// Uses structured concurrency for safe slot management.
 actor ConcurrencyController {
     /// Configuration for concurrency limits.
-    public struct Configuration: Sendable {
+    struct Configuration: Sendable {
         /// Maximum concurrent tasks per capability. Nil means no per-capability limit.
-        public let maxPerCapability: Int?
+        let maxPerCapability: Int?
 
         /// Maximum concurrent tasks globally. Nil means no global limit.
-        public let maxGlobal: Int?
+        let maxGlobal: Int?
 
-        public init(maxPerCapability: Int? = nil, maxGlobal: Int? = nil) {
+        init(maxPerCapability: Int? = nil, maxGlobal: Int? = nil) {
             self.maxPerCapability = maxPerCapability
             self.maxGlobal = maxGlobal
         }
 
         /// Default configuration: 5 per capability, 20 global.
-        public static let `default` = Configuration(maxPerCapability: 5, maxGlobal: 20)
+        static let `default` = Configuration(maxPerCapability: 5, maxGlobal: 20)
     }
 
     private let configuration: Configuration

@@ -354,6 +354,12 @@ public final class DynamicStore: @unchecked Sendable {
     }
     private var _scheduler: (any TaskSchedulerProtocol)?
 
+    /// Replaces the internal task scheduler for A/B testing.
+    /// - Parameter scheduler: The custom scheduler to use.
+    public func replaceScheduler(_ scheduler: any TaskSchedulerProtocol) {
+        self.scheduler = scheduler
+    }
+
     /// Schedules a task for centralized execution with capability matching and priority.
     /// - Parameters:
     ///   - descriptor: The task descriptor.
