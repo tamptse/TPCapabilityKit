@@ -56,11 +56,10 @@ actor ConcurrencyController {
     func release(for task: TaskDescriptor) {
         decrementSlots(for: task)
 
-        // Wake up waiting continuations
-        let toResume = waitingContinuations
-        waitingContinuations = []
-
-        for continuation in toResume {
+        // Wake up only one waiting continuation (FIFO order)
+        // since releasing one slot can only satisfy one waiter
+        if !waitingContinuations.isEmpty {
+            let continuation = waitingContinuations.removeFirst()
             continuation.resume()
         }
     }

@@ -213,6 +213,8 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     func cancel(taskId: String) {
         var cancelledLease: Lease?
         var activeExpired = false
+        var expiredLease: Lease?
+        var expiredCompletion: ((Lease) -> Void)?
 
         lock.withLock {
             // Remove from pending queues using index
@@ -223,22 +225,19 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 taskPriorityIndex.removeValue(forKey: taskId)
             }
 
-            // Check if active (but don't expire yet - do it outside lock)
-            if activeLeases[taskId] != nil {
+            // Check if active and expire atomically
+            if let lease = activeLeases.removeValue(forKey: taskId) {
+                lease.expire()
+                expiredLease = lease
+                expiredCompletion = completionHandlers.removeValue(forKey: taskId)
                 activeExpired = true
             }
         }
 
-        // Handle active task expiration (outside lock)
-        if activeExpired {
-            lock.withLock {
-                if let lease = activeLeases.removeValue(forKey: taskId) {
-                    lease.expire()
-                    let completion = completionHandlers.removeValue(forKey: taskId)
-                    eventSubject.send(.taskExpired(lease: lease))
-                    completion?(lease)
-                }
-            }
+        // Handle active task expiration
+        if activeExpired, let lease = expiredLease {
+            eventSubject.send(.taskExpired(lease: lease))
+            expiredCompletion?(lease)
             return
         }
 
@@ -279,6 +278,8 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 // Re-queue and wait for capabilities
                 lock.withLock {
                     pendingTasks[nextLease.task.priority]?.append(nextLease)
+                    _pendingCount += 1
+                    taskPriorityIndex[nextLease.task.id] = nextLease.task.priority
                 }
 
                 // Wait for capabilities then retry

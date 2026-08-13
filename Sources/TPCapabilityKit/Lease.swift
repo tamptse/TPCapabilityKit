@@ -85,6 +85,7 @@ public final class Lease: @unchecked Sendable {
 
     /// Marks the lease as expired (timeout reached).
     func expire() {
+        guard !isTerminal else { return }
         state = .expired
         completedAt = Date()
     }
