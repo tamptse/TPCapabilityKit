@@ -47,14 +47,14 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     private func ensureSubject(for pluginId: String) -> CurrentValueSubject<Any?, Never> {
-        lock.lock()
-        defer { lock.unlock() }
-        if let existing = stateSubjects[pluginId] {
-            return existing
+        lock.withLock {
+            if let existing = stateSubjects[pluginId] {
+                return existing
+            }
+            let subject = CurrentValueSubject<Any?, Never>(nil)
+            stateSubjects[pluginId] = subject
+            return subject
         }
-        let subject = CurrentValueSubject<Any?, Never>(nil)
-        stateSubjects[pluginId] = subject
-        return subject
     }
 
     /// Cleans up reverse index entry and per-capability subject when no providers remain.
@@ -119,21 +119,21 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: The state cast to `T`, or `nil` if not set or type mismatch.
     public func getState<T>(pluginId: String, type: T.Type) -> T? {
         guard validatePluginId(pluginId) else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
-        guard let subject = stateSubjects[pluginId] else {
-            #if DEBUG
-            print("[DynamicStore] Warning: getState called for non-existent plugin '\(pluginId)'")
-            #endif
-            return nil
+        return lock.withLock {
+            guard let subject = stateSubjects[pluginId] else {
+                #if DEBUG
+                print("[DynamicStore] Warning: getState called for non-existent plugin '\(pluginId)'")
+                #endif
+                return nil
+            }
+            guard let value = subject.value as? T else {
+                #if DEBUG
+                print("[DynamicStore] Warning: Type mismatch for plugin '\(pluginId)': expected \(T.self)")
+                #endif
+                return nil
+            }
+            return value
         }
-        guard let value = subject.value as? T else {
-            #if DEBUG
-            print("[DynamicStore] Warning: Type mismatch for plugin '\(pluginId)': expected \(T.self)")
-            #endif
-            return nil
-        }
-        return value
     }
 
     /// Removes the state subject for a plugin identifier.
@@ -161,11 +161,11 @@ public final class DynamicStore: @unchecked Sendable {
     /// Returns all registered plugin identifiers.
     /// - Returns: Array of plugin IDs that have state or capabilities registered.
     var registeredPluginIds: [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        let stateIds = Set(stateSubjects.keys)
-        let capabilityIds = Set(capabilities.keys)
-        return Array(stateIds.union(capabilityIds))
+        lock.withLock {
+            let stateIds = Set(stateSubjects.keys)
+            let capabilityIds = Set(capabilities.keys)
+            return Array(stateIds.union(capabilityIds))
+        }
     }
 
     /// Checks whether a plugin is registered (has state or capabilities).
@@ -173,9 +173,9 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: `true` if the plugin has state or capabilities registered.
     func hasPlugin(id pluginId: String) -> Bool {
         guard validatePluginId(pluginId) else { return false }
-        lock.lock()
-        defer { lock.unlock() }
-        return stateSubjects[pluginId] != nil || capabilities[pluginId] != nil
+        return lock.withLock {
+            stateSubjects[pluginId] != nil || capabilities[pluginId] != nil
+        }
     }
 
     /// Subscribes reactively to state changes for a plugin identifier.
@@ -200,42 +200,40 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - capabilities: Set of capabilities the plugin provides.
     func registerCapability(for pluginId: String, capabilities: Set<Capability>) {
         guard validatePluginId(pluginId) else { return }
-        lock.lock()
-        defer { lock.unlock() }
-        
-        removeCapabilities(for: pluginId)
-        
-        // Add new capabilities
-        self.capabilities[pluginId] = capabilities
-        for cap in capabilities {
-            capabilityIndex[cap, default: []].insert(pluginId)
-            // Update per-capability subject
-            capabilitySubjects[cap]?.send(true)
+        lock.withLock {
+            removeCapabilities(for: pluginId)
+            
+            // Add new capabilities
+            self.capabilities[pluginId] = capabilities
+            for cap in capabilities {
+                capabilityIndex[cap, default: []].insert(pluginId)
+                // Update per-capability subject
+                capabilitySubjects[cap]?.send(true)
+            }
+            
+            capabilitySubject.send(self.capabilities)
         }
-        
-        capabilitySubject.send(self.capabilities)
     }
 
     /// Unregisters all capabilities for a plugin identifier.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     func unregisterCapability(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
-        lock.lock()
-        defer { lock.unlock() }
-        
-        removeCapabilities(for: pluginId)
-        
-        self.capabilities.removeValue(forKey: pluginId)
-        capabilitySubject.send(self.capabilities)
+        lock.withLock {
+            removeCapabilities(for: pluginId)
+            
+            self.capabilities.removeValue(forKey: pluginId)
+            capabilitySubject.send(self.capabilities)
+        }
     }
 
     /// Queries whether any registered plugin provides the specified capability.
     /// - Parameter capability: The capability to query.
     /// - Returns: `true` if at least one plugin provides the capability.
     public func queryCapability(_ capability: Capability) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return capabilityIndex[capability]?.isEmpty == false
+        lock.withLock {
+            return capabilityIndex[capability]?.isEmpty == false
+        }
     }
 
     /// Returns the capabilities registered by a specific plugin.
@@ -243,33 +241,33 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: Set of capabilities, or empty if plugin has none registered.
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
         guard validatePluginId(pluginId) else { return [] }
-        lock.lock()
-        defer { lock.unlock() }
-        return capabilities[pluginId] ?? []
+        return lock.withLock {
+            capabilities[pluginId] ?? []
+        }
     }
 
     /// Returns all registered capabilities across all plugins.
     /// - Returns: Dictionary mapping plugin IDs to their capabilities.
     func queryAllCapabilities() -> [String: Set<Capability>] {
-        lock.lock()
-        defer { lock.unlock() }
-        return capabilities
+        lock.withLock {
+            return capabilities
+        }
     }
 
     /// Reactively observes whether any plugin provides the specified capability.
     /// - Parameter capability: The capability to observe.
     /// - Returns: A publisher emitting `true` when the capability becomes available, `false` otherwise.
     public func observeCapability(_ capability: Capability) -> AnyPublisher<Bool, Never> {
-        lock.lock()
-        let subject: CurrentValueSubject<Bool, Never>
-        if let existing = capabilitySubjects[capability] {
-            subject = existing
-        } else {
-            let initialValue = capabilityIndex[capability]?.isEmpty == false
-            subject = CurrentValueSubject<Bool, Never>(initialValue)
-            capabilitySubjects[capability] = subject
+        let subject: CurrentValueSubject<Bool, Never> = lock.withLock {
+            if let existing = capabilitySubjects[capability] {
+                return existing
+            } else {
+                let initialValue = capabilityIndex[capability]?.isEmpty == false
+                let subject = CurrentValueSubject<Bool, Never>(initialValue)
+                capabilitySubjects[capability] = subject
+                return subject
+            }
         }
-        lock.unlock()
         
         return subject.eraseToAnyPublisher()
     }

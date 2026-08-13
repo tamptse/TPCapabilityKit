@@ -267,6 +267,17 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
 
     // MARK: - Private Methods
 
+    private func failLease(_ lease: Lease) {
+        lock.withLock {
+            activeLeases.removeValue(forKey: lease.task.id)
+            let completion = completionHandlers.removeValue(forKey: lease.task.id)
+            let error = TaskExecutionError()
+            lease.fail(with: error)
+            eventSubject.send(.taskFailed(lease: lease, error: error))
+            completion?(lease)
+        }
+    }
+
     private func processPendingTasks() async {
         // Process tasks in priority order
         while true {
@@ -371,15 +382,7 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     private func executeLease(_ lease: Lease) async {
         // Check if capability is available
         guard checkCapabilities(for: lease.task) else {
-            // Capability not available, fail the lease
-            lock.withLock {
-                activeLeases.removeValue(forKey: lease.task.id)
-                let completion = completionHandlers.removeValue(forKey: lease.task.id)
-                let error = TaskExecutionError()
-                lease.fail(with: error)
-                eventSubject.send(.taskFailed(lease: lease, error: error))
-                completion?(lease)
-            }
+            failLease(lease)
             return
         }
 
@@ -388,16 +391,8 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
 
         // Re-check capabilities after acquiring slot (capability may have been revoked)
         guard checkCapabilities(for: lease.task) else {
-            // Capability revoked while waiting, release slot and fail
             await concurrencyController.release(for: lease.task)
-            lock.withLock {
-                activeLeases.removeValue(forKey: lease.task.id)
-                let completion = completionHandlers.removeValue(forKey: lease.task.id)
-                let error = TaskExecutionError()
-                lease.fail(with: error)
-                eventSubject.send(.taskFailed(lease: lease, error: error))
-                completion?(lease)
-            }
+            failLease(lease)
             return
         }
 

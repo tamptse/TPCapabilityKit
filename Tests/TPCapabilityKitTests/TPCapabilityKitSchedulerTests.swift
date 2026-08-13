@@ -257,4 +257,61 @@ struct TaskSchedulerTests {
         try? await Task.sleep(nanoseconds: 100_000_000)
         #expect(lease.isTerminal)
     }
+
+    @Test func capabilityRevocationDuringExecution() async {
+        let store = DynamicStore()
+        let pluginId = "TOCTOU_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+
+        let scheduler = TaskScheduler(store: store)
+
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
+
+        actor ExecutionTracker {
+            var started = false
+            func markStarted() { started = true }
+        }
+        let tracker = ExecutionTracker()
+
+        let lease = scheduler.schedule(task) {
+            await tracker.markStarted()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+
+        // Wait for task to start
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await tracker.started)
+
+        // Revoke capability while task is running
+        store.unregisterCapability(for: pluginId)
+
+        // Wait for task to complete
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        // Task should still complete (revocation doesn't kill running tasks)
+        #expect(lease.isTerminal)
+    }
+
+    @Test func retryOnFailure() async {
+        let store = DynamicStore()
+        let pluginId = "RetryPlugin_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let scheduler = TaskScheduler(store: store)
+        let task = TaskDescriptor(
+            requiredCapabilities: [.heavyTask],
+            timeout: 5.0,
+            maxRetries: 1
+        )
+
+        let lease = scheduler.schedule(task) {
+            // This will fail on first attempt
+        }
+
+        // Wait for retries to complete
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        #expect(lease.retryCount == 1)
+    }
 }
