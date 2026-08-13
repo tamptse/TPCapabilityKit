@@ -345,12 +345,14 @@ public final class DynamicStore: @unchecked Sendable {
     /// Task scheduler instance. Can be replaced for A/B testing.
     var scheduler: any TaskSchedulerProtocol {
         get {
-            if let existing = _scheduler { return existing }
-            let new = TaskScheduler(store: self)
-            _scheduler = new
-            return new
+            lock.withLock {
+                if let existing = _scheduler { return existing }
+                let new = TaskScheduler(store: self)
+                _scheduler = new
+                return new
+            }
         }
-        set { _scheduler = newValue }
+        set { lock.withLock { _scheduler = newValue } }
     }
     private var _scheduler: (any TaskSchedulerProtocol)?
 
