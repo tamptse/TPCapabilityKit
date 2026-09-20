@@ -2,6 +2,11 @@
 import TPCapabilityKit
 
 /// Objective-C wrapper for task scheduling.
+///
+/// The single scheduling adapter behind the Bridge: a stateless live view over
+/// `DynamicStore` translating ObjC task types to the Swift Tasks Interface
+/// (`schedule/cancel/pending/active`). Holds no queue or count state — every
+/// call delegates to the store, so reads are always live.
 @objc(TPTaskScheduler)
 public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     private let store: DynamicStore

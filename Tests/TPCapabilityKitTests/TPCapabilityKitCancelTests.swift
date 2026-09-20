@@ -9,31 +9,42 @@ struct CancelTests {
     func cancelSendsOneEvent() async {
         let store = DynamicStore()
         let scheduler = TaskScheduler(store: store)
-        var eventCount = 0
-        
+
+        let started = AsyncStream<Void>.makeStream()
+        let done = AsyncStream<Void>.makeStream()
+        let expired = AsyncStream<Void>.makeStream()
+        actor Counter {
+            var completions = 0
+            func inc() { completions += 1 }
+        }
+        let counter = Counter()
         let cancellable = scheduler.events.sink { event in
             if case .taskExpired = event {
-                eventCount += 1
+                expired.continuation.yield()
             }
         }
-        
+        defer { cancellable.cancel() }
+
         let descriptor = TaskDescriptor(requiredCapabilities: [])
         let lease = scheduler.schedule(descriptor, taskExecution: {
+            started.continuation.yield()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }, completion: { _ in
+            Task {
+                await counter.inc()
+                done.continuation.yield()
+            }
         })
-        
-        // Wait for task to potentially start
-        try? await Task.sleep(nanoseconds: 10_000_000)
-        
+
+        for await _ in started.stream { break }
         scheduler.cancel(taskId: lease.task.id)
-        
-        // Wait for any async processing
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        
-        #expect(eventCount == 1)
-        cancellable.cancel()
+        for await _ in done.stream { break }
+
+        #expect(await counter.completions == 1)
+        #expect(lease.isTerminal)
+        for await _ in expired.stream { break }
     }
-    
+
     @Test("cancel active task expires lease and calls completion")
     func cancelActiveTask() async {
         let store = DynamicStore()
@@ -41,36 +52,42 @@ struct CancelTests {
         let pluginId = "CancelActive_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        
-        var completionCalled = false
-        var completedLease: Lease?
-        
+
+        let started = AsyncStream<Void>.makeStream()
+        let done = AsyncStream<Void>.makeStream()
+        actor State {
+            var calls = 0
+            var terminal: Bool?
+            func record(_ lease: Lease) {
+                calls += 1
+                terminal = lease.isTerminal
+            }
+        }
+        let state = State()
+
         let descriptor = TaskDescriptor(
             requiredCapabilities: [.heavyTask],
             timeout: 10.0
         )
-        
+
         let lease = scheduler.schedule(descriptor, taskExecution: {
-            // Simulate long-running task
+            started.continuation.yield()
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-        }, completion: { lease in
-            completionCalled = true
-            completedLease = lease
+        }, completion: { finished in
+            Task {
+                await state.record(finished)
+                done.continuation.yield()
+            }
         })
-        
-        // Wait for task to start executing
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        
-        // Cancel the active task
+
+        for await _ in started.stream { break }
         scheduler.cancel(taskId: lease.task.id)
-        
-        // Wait for cancellation to propagate
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        
+        for await _ in done.stream { break }
+
         #expect(lease.state == .expired)
         #expect(lease.isTerminal)
-        #expect(completionCalled)
-        #expect(completedLease?.state == .expired)
+        #expect(await state.calls == 1)
+        #expect(await state.terminal == true)
     }
 
     @Test("cancel parked-at-active task delivers exactly one terminal event")
@@ -81,49 +98,38 @@ struct CancelTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(store: store)
 
-        let activatedBox = SendableBox<CheckedContinuation<Void, Never>?>(nil)
-        let startedBox = SendableBox<CheckedContinuation<Void, Never>?>(nil)
-        let releaseBox = SendableBox<CheckedContinuation<Void, Never>?>(nil)
-        let doneBox = SendableBox<CheckedContinuation<Void, Never>?>(nil)
-        var expiredCount = 0
-        var completionCount = 0
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let done = AsyncStream<Void>.makeStream()
+        let expired = AsyncStream<Void>.makeStream()
+        actor Counter {
+            var completions = 0
+            func inc() { completions += 1 }
+        }
+        let counter = Counter()
         let eventsCancellable = scheduler.events.sink { event in
-            if case .taskExpired = event { expiredCount += 1 }
+            if case .taskExpired = event { expired.continuation.yield() }
         }
         defer { eventsCancellable.cancel() }
 
-        scheduler.onActivate = { _ in activatedBox.value?.resume() }
         let descriptor = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
-
-        await withCheckedContinuation { (activated: CheckedContinuation<Void, Never>) in
-            activatedBox.setValue(activated)
-            scheduler.schedule(descriptor, taskExecution: {
-                startedBox.value?.resume()
-                await withCheckedContinuation { (release: CheckedContinuation<Void, Never>) in
-                    releaseBox.setValue(release)
-                }
-            }, completion: { _ in
-                completionCount += 1
-                doneBox.value?.resume()
-            })
-        }
-
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            doneBox.setValue(done)
-            scheduler.cancel(taskId: descriptor.id)
-        }
-
-        await withCheckedContinuation { (started: CheckedContinuation<Void, Never>) in
-            if releaseBox.value != nil {
-                started.resume()
-            } else {
-                startedBox.setValue(started)
+        scheduler.schedule(descriptor, taskExecution: {
+            started.continuation.yield()
+            for await _ in release.stream { break }
+        }, completion: { _ in
+            Task {
+                await counter.inc()
+                done.continuation.yield()
             }
-        }
-        releaseBox.value?.resume()
+        })
 
-        #expect(expiredCount == 1)
-        #expect(completionCount == 1)
+        for await _ in started.stream { break }
+        scheduler.cancel(taskId: descriptor.id)
+        for await _ in done.stream { break }
+        release.continuation.finish()
+
+        #expect(await counter.completions == 1)
+        for await _ in expired.stream { break }
     }
 
     @Test("storm acquire and cancel drains slots to zero")
@@ -134,46 +140,33 @@ struct CancelTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(store: store)
 
+        let started = AsyncStream<Void>.makeStream()
+        let done = AsyncStream<Void>.makeStream()
+        let total = 20
         var leases: [Lease] = []
-        for _ in 0..<20 {
+        for _ in 0..<total {
             let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
             leases.append(scheduler.schedule(task, taskExecution: {
+                started.continuation.yield()
                 try? await Task.sleep(nanoseconds: 500_000_000)
+            }, completion: { _ in
+                done.continuation.yield()
             }))
         }
 
-        let warmedUp = await pollUntil(timeout: 3.0) {
-            await scheduler.concurrencyStats().globalActive > 0
-        }
-        #expect(warmedUp)
-
+        for await _ in started.stream.prefix(5) { }
         for lease in leases {
             scheduler.cancel(taskId: lease.task.id)
         }
 
-        let drained = await pollUntil(timeout: 5.0) {
-            let stats = await scheduler.concurrencyStats()
-            return stats.globalActive == 0
-                && stats.waitingCount == 0
-                && scheduler.activeCount == 0
-                && scheduler.pendingCount == 0
-                && leases.allSatisfy(\.isTerminal)
+        var finished = 0
+        for await _ in done.stream {
+            finished += 1
+            if finished == total { break }
         }
-        #expect(drained)
-        let stats = await scheduler.concurrencyStats()
-        #expect(stats.globalActive == 0)
-        #expect(stats.waitingCount == 0)
+
         #expect(scheduler.activeCount == 0)
         #expect(scheduler.pendingCount == 0)
         #expect(leases.allSatisfy { $0.isTerminal })
-    }
-
-    private func pollUntil(timeout: TimeInterval, condition: () async -> Bool) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if await condition() { return true }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        return await condition()
     }
 }

@@ -34,9 +34,17 @@ struct ObjcTaskDescriptorTests {
     @Test func underlyingProperty() {
         let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"])
         let underlying = descriptor.underlying
-        
+
         #expect(underlying.id == descriptor.id)
         #expect(underlying.requiredCapabilities == [.heavyTask])
+    }
+
+    @Test func outOfRangePriorityCoercesToNormal() {
+        let tooHigh = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: 99)
+        #expect(tooHigh.underlying.priority == .normal)
+
+        let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: -1)
+        #expect(negative.underlying.priority == .normal)
     }
 }
 
@@ -87,7 +95,7 @@ struct ObjcLeaseTests {
         #expect(objcLease.underlying === lease)
     }
 
-    @Test func refreshUpdatesState() {
+    @Test func liveViewReadsStateWithoutSync() {
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
         let lease = Lease(task: task)
         let objcLease = ObjcLease(underlying: lease)
@@ -146,15 +154,18 @@ struct ObjcStoreBridgeSchedulingTests {
         let store = DynamicStore()
         let bridge = ObjcStoreBridge(store: store)
         let uniqueCap = "cancelCap_\(UUID().uuidString)"
-        
+
         let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 5.0)
-        let lease = bridge.scheduleTask(descriptor) {
+        let done = AsyncStream<Void>.makeStream()
+        let lease = bridge.scheduleTask(descriptor, task: {
             // Should not execute
-        }
-        
+        }, completion: { _ in
+            done.continuation.yield()
+        })
+
         bridge.cancelTask(taskId: descriptor.id)
-        
-        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        for await _ in done.stream { break }
         #expect(lease.underlying.isTerminal)
     }
 
@@ -166,22 +177,39 @@ struct ObjcStoreBridgeSchedulingTests {
         #expect(bridge.activeTaskCount == 0)
     }
 
-    @Test func taskSchedulerReflectsReplacement() {
+    @Test func taskSchedulerIsLiveView() {
         let store = DynamicStore()
         let bridge = ObjcStoreBridge(store: store)
-        
-        // Get initial scheduler
+
         let scheduler1 = bridge.taskScheduler
-        
-        // Replace scheduler with a different instance
-        let newScheduler = TaskScheduler(store: store)
-        store.scheduler = newScheduler
-        
-        // Get new scheduler wrapper
         let scheduler2 = bridge.taskScheduler
-        
-        // Both should have same pending count (0)
-        #expect(scheduler1.pendingCount == 0)
-        #expect(scheduler2.pendingCount == 0)
+
+        #expect(scheduler1.pendingCount == store.pendingTaskCount)
+        #expect(scheduler2.pendingCount == store.pendingTaskCount)
+        #expect(scheduler1.activeCount == store.activeTaskCount)
+        #expect(scheduler2.activeCount == store.activeTaskCount)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
+
+    @Test func bridgeSchedulingDelegatesToSinglePath() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "singlePathCap_\(UUID().uuidString)"
+
+        let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 5.0)
+        let done = AsyncStream<Void>.makeStream()
+        let lease = bridge.scheduleTask(descriptor, task: {
+            // Should not execute
+        }, completion: { _ in
+            done.continuation.yield()
+        })
+
+        bridge.cancelTask(taskId: descriptor.id)
+
+        for await _ in done.stream { break }
+        #expect(lease.underlying.isTerminal)
+        #expect(bridge.taskScheduler.pendingCount == store.pendingTaskCount)
+        #expect(bridge.taskScheduler.activeCount == store.activeTaskCount)
     }
 }

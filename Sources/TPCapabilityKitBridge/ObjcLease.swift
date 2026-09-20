@@ -19,8 +19,16 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
     @objc public let taskId: String
 
     /// Current state of the lease, read live from the underlying lease.
+    /// Exhaustive switch keeps the mapping explicit: if `Lease.State` gains a
+    /// case, this fails to compile instead of silently coercing.
     @objc public var state: State {
-        State(rawValue: underlying.state.rawValue) ?? .pending
+        switch underlying.state {
+        case .pending: return .pending
+        case .active: return .active
+        case .completed: return .completed
+        case .failed: return .failed
+        case .expired: return .expired
+        }
     }
 
     /// The result of the task execution, if completed successfully.
@@ -36,8 +44,4 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
         self.taskId = underlying.task.id
         super.init()
     }
-
-    /// No-op kept for compatibility. State is live and needs no sync.
-    @available(*, deprecated, message: "ObjcLease reads live state; refresh() is a no-op.")
-    @objc public func refresh() {}
 }

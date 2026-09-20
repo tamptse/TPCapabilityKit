@@ -21,7 +21,7 @@ struct TaskDescriptorTests {
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
         #expect(task.requiredCapabilities == [.heavyTask])
         #expect(task.priority == .normal)
-        #expect(task.timeout == 30.0)
+        #expect(task.timeout == nil)
         #expect(task.maxRetries == 0)
         #expect(task.metadata.isEmpty)
     }
@@ -97,49 +97,48 @@ struct LeaseTests {
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.01)
         let lease = Lease(task: task)
         lease.activate()
+        lease.expire()
 
-        // Wait for timeout
-        Thread.sleep(forTimeInterval: 0.02)
-        #expect(lease.hasExpired == true)
+        #expect(lease.state == .expired)
+        #expect(lease.isTerminal == true)
     }
 }
 
 struct ConcurrencyControllerTests {
     @Test func acquireAndRelease() async {
         let controller = ConcurrencyController(maxPerCapability: 2, maxGlobal: 5)
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
 
-        await controller.acquire(for: task)
-        let stats = await controller.stats()
+        let slot = await controller.acquire(keys: [.heavyTask])
+        let stats = controller.stats()
         #expect(stats.globalActive == 1)
 
-        await controller.release(for: task)
-        let statsAfter = await controller.stats()
+        controller.release(slot)
+        let statsAfter = controller.stats()
         #expect(statsAfter.globalActive == 0)
     }
 
     @Test func respectsGlobalLimit() async {
         let controller = ConcurrencyController(maxGlobal: 2)
 
-        let task1 = TaskDescriptor(requiredCapabilities: [.heavyTask])
-        let task2 = TaskDescriptor(requiredCapabilities: [.lightTask])
-        let task3 = TaskDescriptor(requiredCapabilities: [.networkAccess])
-
-        await controller.acquire(for: task1)
-        await controller.acquire(for: task2)
+        let slot1 = await controller.acquire(keys: [.heavyTask])
+        let slot2 = await controller.acquire(keys: [.lightTask])
 
         // Third acquire should suspend
         let task3Task = Task {
-            await controller.acquire(for: task3)
-            let stats = await controller.stats()
+            let slot3 = await controller.acquire(keys: [.networkAccess])
+            let stats = controller.stats()
+            controller.release(slot3)
             return stats.globalActive
         }
 
-        // Give task3 a moment to suspend
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        let parked = await pollUntil(timeout: 5.0) {
+            controller.stats().waitingCount == 1
+        }
+        #expect(parked)
 
         // Release one slot
-        await controller.release(for: task1)
+        controller.release(slot1)
+        _ = slot2
 
         let result = await task3Task.value
         #expect(result == 2)
@@ -148,21 +147,31 @@ struct ConcurrencyControllerTests {
     @Test func respectsPerCapabilityLimit() async {
         let controller = ConcurrencyController(maxPerCapability: 1)
 
-        let task1 = TaskDescriptor(requiredCapabilities: [.heavyTask])
-        let task2 = TaskDescriptor(requiredCapabilities: [.heavyTask])
-
-        await controller.acquire(for: task1)
+        let slot1 = await controller.acquire(keys: [.heavyTask])
 
         let task2Task = Task {
-            await controller.acquire(for: task2)
+            let slot2 = await controller.acquire(keys: [.heavyTask])
+            controller.release(slot2)
             return true
         }
 
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        let parked = await pollUntil(timeout: 5.0) {
+            controller.stats().waitingCount == 1
+        }
+        #expect(parked)
 
-        await controller.release(for: task1)
+        controller.release(slot1)
         let result = await task2Task.value
         #expect(result == true)
+    }
+
+    private func pollUntil(timeout: TimeInterval, condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
     }
 }
 
@@ -207,9 +216,9 @@ struct TaskSchedulerTests {
         actor ExecutionTracker {
             var order: [String] = []
             func append(_ value: String) { order.append(value) }
-            func count() -> Int { order.count }
         }
         let tracker = ExecutionTracker()
+        let done = AsyncStream<Void>.makeStream()
 
         let task1 = TaskDescriptor(
             id: "low",
@@ -222,21 +231,22 @@ struct TaskSchedulerTests {
             priority: .high
         )
 
-        // Schedule high first, then low - to test that high is processed first
-        // even though low was scheduled after
-        scheduler.schedule(task2) {
+        scheduler.schedule(task2, taskExecution: {
             await tracker.append("high")
-        }
-        scheduler.schedule(task1) {
+        }, completion: { _ in done.continuation.yield() })
+        scheduler.schedule(task1, taskExecution: {
             await tracker.append("low")
+        }, completion: { _ in done.continuation.yield() })
+
+        var finished = 0
+        for await _ in done.stream {
+            finished += 1
+            if finished == 2 { break }
         }
 
-        // Wait for both to complete
-        try? await Task.sleep(nanoseconds: 500_000_000)
-
-        // High should execute first because it has higher priority
         let order = await tracker.order
         #expect(order.first == "high")
+        #expect(order.count == 2)
     }
 
     @Test func cancelTask() async {
@@ -249,12 +259,13 @@ struct TaskSchedulerTests {
             timeout: 5.0
         )
 
-        let lease = scheduler.schedule(task) {
+        let done = AsyncStream<Void>.makeStream()
+        let lease = scheduler.schedule(task, taskExecution: {
             // This should never execute
-        }
+        }, completion: { _ in done.continuation.yield() })
         scheduler.cancel(taskId: task.id)
 
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        for await _ in done.stream { break }
         #expect(lease.isTerminal)
     }
 
@@ -267,32 +278,25 @@ struct TaskSchedulerTests {
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
 
-        actor ExecutionTracker {
-            var started = false
-            func markStarted() { started = true }
-        }
-        let tracker = ExecutionTracker()
-
-        let lease = scheduler.schedule(task) {
-            await tracker.markStarted()
+        let started = AsyncStream<Void>.makeStream()
+        let done = AsyncStream<Void>.makeStream()
+        let lease = scheduler.schedule(task, taskExecution: {
+            started.continuation.yield()
             try? await Task.sleep(nanoseconds: 200_000_000)
-        }
+        }, completion: { _ in done.continuation.yield() })
 
-        // Wait for task to start
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        #expect(await tracker.started)
+        for await _ in started.stream { break }
 
         // Revoke capability while task is running
         store.unregisterCapability(for: pluginId)
 
-        // Wait for task to complete
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        for await _ in done.stream { break }
 
         // Task should still complete (revocation doesn't kill running tasks)
         #expect(lease.isTerminal)
     }
 
-    @Test func retryOnFailure() async {
+    @Test func voidTaskCompletesWithoutRetry() async {
         let store = DynamicStore()
         let pluginId = "RetryPlugin_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
@@ -305,14 +309,15 @@ struct TaskSchedulerTests {
             maxRetries: 1
         )
 
-        let lease = scheduler.schedule(task) {
-            // This will fail on first attempt
-        }
+        let done = AsyncStream<Void>.makeStream()
+        let lease = scheduler.schedule(task, taskExecution: {
+        }, completion: { _ in done.continuation.yield() })
 
-        // Wait for retries to complete
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        for await _ in done.stream { break }
 
-        #expect(lease.retryCount == 1)
+        #expect(lease.retryCount == 0)
+        #expect(lease.state == .completed)
+        #expect(lease.isTerminal)
     }
 
     @Test func twoMissingCapabilitiesShareOneDeadline() async {

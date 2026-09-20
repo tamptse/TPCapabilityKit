@@ -185,4 +185,17 @@ struct TPCapabilityKitObjCBridgeTests {
 
         #expect(bridge.queryCapability(uniqueCap) == true)
     }
+
+    @Test func objcPluginIsCapabilityConsumerOnly() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcConsumer_\(UUID().uuidString)"
+        let objcPlugin = MockObjcPlugin(id: pluginId)
+
+        bridge.register(plugin: objcPlugin)
+        #expect(objcPlugin.isStarted)
+
+        #expect(store.queryCapabilities(for: pluginId).isEmpty)
+        #expect(bridge.queryCapability("heavyTask") == false)
+    }
 }

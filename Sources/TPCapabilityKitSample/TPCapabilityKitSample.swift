@@ -105,6 +105,8 @@ final class NetworkPlugin: CapabilityProvider {
 // MARK: - 3. Objective-C Plugin Integration Sample
 
 /// Legacy Objective-C plugin interacting with the store via ObjcStoreBridge.
+/// Consumer-only: declares no capabilities, so it never satisfies queries —
+/// it consumes via the Bridge while Swift plugins provide.
 @objc(TPSampleObjcPlugin)
 final class SampleObjcPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
     @objc let id: String = "SampleObjcPlugin"
@@ -314,12 +316,19 @@ enum TPCapabilityKitSample {
         store.cancelTask(taskId: lease.task.id)
         print("[Scheduler] Cancelled task: \(lease.task.id)")
         
-        // 20. A/B Testing with Protocol
-        print("\n--- A/B Testing Example ---")
-        
-        // The scheduler is internal; replace via property for A/B testing
-        // store.scheduler = MyCustomScheduler(store: store)
-        print("[A/B] Scheduler is internal — replace via store.scheduler for A/B testing")
+        // 20. Tuning with Configuration
+        print("\n--- Configuration Example ---")
+
+        // Variation is via values, not a protocol. Configure once at startup,
+        // before scheduling: configureScheduler resets the scheduler.
+        store.configureScheduler(TaskScheduler.Configuration(
+            defaultTimeout: 10.0,
+            maxPerCapability: 2,
+            maxGlobal: 8
+        ))
+        print("[Configuration] Applied custom timeout/limits via configureScheduler")
+        store.configureScheduler(.default)
+        print("[Configuration] Restored defaults")
         
         // 21. ObjC Bridge - Task Scheduling
         print("\n--- ObjC Task Scheduling ---")

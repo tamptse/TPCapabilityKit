@@ -30,19 +30,26 @@ mechanism: immediate (`runTask`) vs queued (`scheduleTask`).
 Lifecycle tracker `pending → active → completed/failed/expired` for one
 scheduled Task. Mutations are internal to the Tasks module; callers only read
 `state/isTerminal/result`. Custom `==` ignores associated `Error` values.
+Deadline and retry decisions live in Settlement, not in Lease.
+
+## Settlement
+
+Single terminal decision for one Lease: timeout vs result vs retry vs
+cancel, with completion delivery and waiter preservation. Owned by Tasks.
 
 ## Tasks (Scheduler)
 
 Deep module behind `schedule/cancel/pending/active`. Hides priority queues,
 capability matching, timeout, retry, concurrency limits, and fire-and-forget
-tracking. `TaskSchedulerProtocol` is the A/B seam (one real adapter today).
+tracking. Variation is via `Configuration` values, not a protocol seam.
 `autoProcess` is an internal detail, not part of the seam.
-Owns the single capability waiter (one deadline per set), the terminalize path
-(exactly-once terminal delivery for cancel/fail/timeout/retry), and scoped slot
-acquisition with re-check inside. `executeLease` is the only prod activator.
+Owns the single capability waiter (one deadline per set), the Settlement path
+(exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
+across retry), and scoped slot acquisition with re-check inside.
+`executeLease` is the only prod activator.
 
 ## Bridge (ObjC adapter)
 
-Single scheduling adapter behind `TPStoreBridge`; `TPTaskScheduler` is the same
-implementation, not a second seam. `ObjcLease` is a live view of the underlying
-Lease. Capability/priority mapping lives in one internal mapper.
+Single scheduling adapter behind `TPStoreBridge`. `ObjcLease` is a live view
+of the underlying Lease. Capability/priority mapping lives in one internal
+mapper. ObjC Plugins are capability-consumers only (no `capabilities`).

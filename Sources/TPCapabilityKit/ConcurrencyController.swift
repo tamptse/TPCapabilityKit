@@ -1,94 +1,98 @@
 import Foundation
 
-/// Actor-based concurrency limiter that controls how many tasks can execute
-/// concurrently per capability and globally.
-///
-/// Inspired by Meta's AsyncLimiter and Swift's AsyncSemaphore.
-/// Uses structured concurrency for safe slot management.
-actor ConcurrencyController {
+/// Concurrency limiter keyed by Capability sets with scoped Slot tokens.
+/// Synchronous release on scope exit; idempotent via held-slot tracking.
+final class ConcurrencyController: @unchecked Sendable {
+    struct Slot: Sendable, Hashable {
+        let id: UUID
+        let keys: Set<Capability>
+    }
+
     private let maxPerCapability: Int?
     private let maxGlobal: Int?
+    private let lock = NSLock()
     private var capabilitySlots: [Capability: Int] = [:]
     private var globalSlots: Int = 0
+    private var heldSlots: [UUID: Set<Capability>] = [:]
     private var waitingContinuations: [CheckedContinuation<Void, Never>] = []
 
-    /// Creates a new ConcurrencyController.
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
         self.maxPerCapability = maxPerCapability
         self.maxGlobal = maxGlobal
     }
 
-    /// Acquires a slot for the given task. Suspends if no slots available.
-    /// - Parameter task: The task descriptor to acquire a slot for.
-    internal func acquire(for task: TaskDescriptor) async {
-        // Check if we can acquire immediately
-        if canAcquire(for: task) {
-            incrementSlots(for: task)
-            return
-        }
-
-        // Wait for a slot to become available
-        await withCheckedContinuation { continuation in
-            waitingContinuations.append(continuation)
-        }
-
-        // After suspension, acquire the slot
-        incrementSlots(for: task)
-    }
-
-    /// Releases the slot for the given task.
-    /// - Parameter task: The task descriptor to release the slot for.
-    internal func release(for task: TaskDescriptor) {
-        decrementSlots(for: task)
-
-        // Wake up only one waiting continuation (FIFO order)
-        // since releasing one slot can only satisfy one waiter
-        if !waitingContinuations.isEmpty {
-            let continuation = waitingContinuations.removeFirst()
-            continuation.resume()
+    internal func acquire(keys: Set<Capability>) async -> Slot {
+        while true {
+            if let slot = lock.withLock({ tryAcquire(keys: keys) }) {
+                return slot
+            }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                var resumeNow = false
+                lock.withLock {
+                    if canAcquire(keys: keys) {
+                        resumeNow = true
+                    } else {
+                        waitingContinuations.append(continuation)
+                    }
+                }
+                if resumeNow { continuation.resume() }
+            }
         }
     }
 
-    /// Returns current utilization stats.
+    internal func release(_ slot: Slot) {
+        var toResume: CheckedContinuation<Void, Never>?
+        lock.withLock {
+            guard heldSlots.removeValue(forKey: slot.id) != nil else { return }
+            globalSlots = max(0, globalSlots - 1)
+            for cap in slot.keys {
+                capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
+            }
+            if !waitingContinuations.isEmpty {
+                toResume = waitingContinuations.removeFirst()
+            }
+        }
+        toResume?.resume()
+    }
+
     func stats() -> Stats {
-        Stats(
-            globalActive: globalSlots,
-            globalMax: maxGlobal,
-            perCapability: capabilitySlots,
-            waitingCount: waitingContinuations.count
-        )
+        lock.withLock {
+            Stats(
+                globalActive: globalSlots,
+                globalMax: maxGlobal,
+                perCapability: capabilitySlots,
+                waitingCount: waitingContinuations.count
+            )
+        }
     }
 
     // MARK: - Private Helpers
 
-    private func canAcquire(for task: TaskDescriptor) -> Bool {
-        // Check global limit
+    private func canAcquire(keys: Set<Capability>) -> Bool {
         if let maxGlobal = maxGlobal {
             guard globalSlots < maxGlobal else { return false }
         }
-
-        // Check per-capability limits
         if let maxPerCap = maxPerCapability {
-            for cap in task.requiredCapabilities {
+            for cap in keys {
                 guard (capabilitySlots[cap] ?? 0) < maxPerCap else { return false }
             }
         }
-
         return true
     }
 
-    private func incrementSlots(for task: TaskDescriptor) {
+    private func makeSlot(keys: Set<Capability>) -> Slot {
         globalSlots += 1
-        for cap in task.requiredCapabilities {
+        for cap in keys {
             capabilitySlots[cap, default: 0] += 1
         }
+        let slot = Slot(id: UUID(), keys: keys)
+        heldSlots[slot.id] = keys
+        return slot
     }
 
-    private func decrementSlots(for task: TaskDescriptor) {
-        globalSlots = max(0, globalSlots - 1)
-        for cap in task.requiredCapabilities {
-            capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
-        }
+    private func tryAcquire(keys: Set<Capability>) -> Slot? {
+        guard canAcquire(keys: keys) else { return nil }
+        return makeSlot(keys: keys)
     }
 
     /// Statistics about current concurrency utilization.

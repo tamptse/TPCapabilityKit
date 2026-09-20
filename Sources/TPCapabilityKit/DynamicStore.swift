@@ -31,7 +31,9 @@ public final class DynamicStore: @unchecked Sendable {
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
-    internal init() {}
+    internal init(configuration: TaskScheduler.Configuration = .init()) {
+        self.schedulerConfiguration = configuration
+    }
 
     // MARK: - Private Helpers
 
@@ -309,7 +311,8 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Runs a task when the required capability becomes available, with a timeout.
-    /// If the capability is already available, the task runs immediately.
+    /// Shares the Tasks waiter with queued scheduling, so immediate and queued
+    /// styles behave identically.
     /// - Parameters:
     ///   - capability: The capability required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Default is 5.0.
@@ -319,35 +322,31 @@ public final class DynamicStore: @unchecked Sendable {
         capability: Capability,
         timeout: TimeInterval = 5.0,
         task: @escaping @Sendable () async throws -> T
-    ) async rethrows -> T? {
-        guard await waitForCapability(capability, timeout: timeout) else { return nil }
-        return try await task()
-    }
-
-    func waitForCapability(_ capability: Capability, timeout: TimeInterval) async -> Bool {
-        await waitForCapabilities([capability], timeout: timeout)
+    ) async -> T? {
+        await scheduleTaskAndWait(
+            TaskDescriptor(requiredCapabilities: [capability], timeout: timeout),
+            task: task
+        )
     }
 
     // MARK: - Task Scheduling
 
-    /// Task scheduler instance. Can be replaced for A/B testing.
-    var scheduler: any TaskSchedulerProtocol {
-        get {
-            lock.withLock {
-                if let existing = _scheduler { return existing }
-                let new = TaskScheduler(store: self)
-                _scheduler = new
-                return new
-            }
+    var scheduler: TaskScheduler {
+        lock.withLock {
+            if let existing = _scheduler { return existing }
+            let new = TaskScheduler(store: self, configuration: schedulerConfiguration)
+            _scheduler = new
+            return new
         }
-        set { lock.withLock { _scheduler = newValue } }
     }
-    private var _scheduler: (any TaskSchedulerProtocol)?
+    private var _scheduler: TaskScheduler?
+    private var schedulerConfiguration: TaskScheduler.Configuration
 
-    /// Replaces the internal task scheduler for A/B testing.
-    /// - Parameter scheduler: The custom scheduler to use.
-    public func replaceScheduler(_ scheduler: any TaskSchedulerProtocol) {
-        self.scheduler = scheduler
+    public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
+        lock.withLock {
+            schedulerConfiguration = configuration
+            _scheduler = nil
+        }
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.

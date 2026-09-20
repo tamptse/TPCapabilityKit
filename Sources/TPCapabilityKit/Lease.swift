@@ -118,12 +118,6 @@ public final class Lease: @unchecked Sendable {
         if case .pending = state { return true }
         return false
     }
-
-    /// Whether the lease has exceeded its timeout.
-    var hasExpired: Bool {
-        let deadline = activatedAt ?? createdAt
-        return Date().timeIntervalSince(deadline) > task.timeout
-    }
 }
 
 extension Lease.State {

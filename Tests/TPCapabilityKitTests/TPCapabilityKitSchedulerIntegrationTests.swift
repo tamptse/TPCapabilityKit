@@ -31,4 +31,68 @@ struct DynamicStoreSchedulerIntegrationTests {
 
         #expect(result == nil)
     }
+
+    @Test func immediateAndQueuedShareOneWaiterForLateCapability() async {
+        let store = DynamicStore()
+        let pluginId = "SharedWaiter_\(UUID().uuidString)"
+        let cap = Capability.custom("sharedWaiter_\(UUID().uuidString)")
+
+        async let immediate = store.runTaskWhenAvailable(capability: cap, timeout: 5.0) {
+            "immediate"
+        }
+        async let queued: String? = store.scheduleTaskAndWait(
+            TaskDescriptor(requiredCapabilities: [cap], timeout: 5.0)
+        ) {
+            "queued"
+        }
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        store.registerCapability(for: pluginId, capabilities: [cap])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let (immediateResult, queuedResult) = await (immediate, queued)
+        #expect(immediateResult == "immediate")
+        #expect(queuedResult == "queued")
+    }
+
+    @Test func manyWaitersWakeOnSingleLateRegistration() async {
+        let store = DynamicStore()
+        let pluginId = "SharedStorm_\(UUID().uuidString)"
+        let cap = Capability.custom("sharedStorm_\(UUID().uuidString)")
+        let total = 20
+
+        await withTaskGroup(of: Bool.self) { group in
+            for i in 0..<total {
+                if i % 2 == 0 {
+                    group.addTask {
+                        await store.runTaskWhenAvailable(capability: cap, timeout: 5.0) {
+                            "immediate"
+                        } == "immediate"
+                    }
+                } else {
+                    group.addTask {
+                        await store.scheduleTaskAndWait(
+                            TaskDescriptor(requiredCapabilities: [cap], timeout: 5.0)
+                        ) {
+                            "queued"
+                        } == "queued"
+                    }
+                }
+            }
+
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            store.registerCapability(for: pluginId, capabilities: [cap])
+            defer { store.unregisterCapability(for: pluginId) }
+
+            var delivered = 0
+            for await ok in group {
+                #expect(ok)
+                delivered += 1
+            }
+            #expect(delivered == total)
+        }
+
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
 }

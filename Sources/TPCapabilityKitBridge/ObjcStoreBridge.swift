@@ -8,6 +8,10 @@ enum ObjcMapper {
         Capability(rawValue: string)
     }
 
+    /// Maps a raw priority value to a domain priority.
+    /// Out-of-range values coerce to `.normal` — the safe default that neither
+    /// starves the task nor jumps the queue. Callers needing strict validation
+    /// should clamp before crossing the Bridge.
     static func taskPriority(from rawValue: Int) -> TaskPriority {
         TaskPriority(rawValue: rawValue) ?? .normal
     }
@@ -20,8 +24,6 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     @objc public static let shared = ObjcStoreBridge()
 
     private let store: DynamicStore
-    private let lock = NSLock()
-    private var _cachedScheduler: ObjcTaskScheduler?
 
     internal init(store: DynamicStore = .shared) {
         self.store = store
@@ -103,6 +105,11 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     // MARK: - Task Execution APIs
 
     /// Runs a task immediately if the required capability is available.
+    /// Mirrors `DynamicStore.runTask(requiring:)` semantics synchronously:
+    /// query the capability, run the closure inline, otherwise return nil.
+    /// True async delegation is impossible here — `@objc` cannot await the
+    /// store's async `runTask`, and blocking the calling thread on a semaphore
+    /// would risk deadlock. For wait-then-run use `runTaskWhenAvailable`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -135,7 +142,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         let taskBox = ObjcCallbackBox(task)
         let completionBox = ObjcCallbackBox(completion)
         Task {
-            let result: NSObject? = try? await store.runTaskWhenAvailable(capability: cap, timeout: timeout) {
+            let result: NSObject? = await store.runTaskWhenAvailable(capability: cap, timeout: timeout) {
                 taskBox.value()
             }
             targetQueue.async {
@@ -146,14 +153,13 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     // MARK: - Task Scheduling APIs
 
-    /// Shared task scheduler instance. Cached for a stable wrapper; counts read live from the store.
+    /// Scheduling adapter for Objective-C callers. A fresh stateless live view
+    /// on every access — all reads delegate to the store, so there is no cache
+    /// to go stale. The translation between ObjC and Swift task types lives in
+    /// `ObjcTaskScheduler`; the convenience methods below delegate to it, so
+    /// there is exactly one scheduling path behind the Bridge.
     @objc public var taskScheduler: ObjcTaskScheduler {
-        lock.withLock {
-            if let cached = _cachedScheduler { return cached }
-            let scheduler = ObjcTaskScheduler(store: store)
-            _cachedScheduler = scheduler
-            return scheduler
-        }
+        ObjcTaskScheduler(store: store)
     }
 
     /// Schedules a task for execution.
@@ -197,6 +203,11 @@ private final class ObjcCallbackBox<T>: @unchecked Sendable {
     init(_ value: T) { self.value = value }
 }
 
+/// Adapter registering an Objective-C plugin with the Swift store.
+/// Consumer-only contract: `ObjcAppPlugin` declares `id` + `start` but no
+/// `capabilities`, so the adapter relies on `AppPlugin`'s default empty set.
+/// ObjC Plugins consume capabilities via the Bridge (query/run/schedule) and
+/// never satisfy capability queries — register a Swift `AppPlugin` to provide.
 internal final class PluginObjcAdapter: AppPlugin {
     let id: String
     private let objcPlugin: ObjcAppPlugin

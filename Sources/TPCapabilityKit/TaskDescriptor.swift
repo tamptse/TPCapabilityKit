@@ -13,8 +13,8 @@ public struct TaskDescriptor: Sendable, Identifiable {
     public let priority: TaskPriority
 
     /// Maximum time in seconds the task can run before lease expires.
-    /// Default is 30.0 seconds.
-    public let timeout: TimeInterval
+    /// Nil means the scheduler's configured default applies.
+    public let timeout: TimeInterval?
 
     /// Maximum number of retry attempts on failure. Default is 0 (no retries).
     public let maxRetries: Int
@@ -27,7 +27,7 @@ public struct TaskDescriptor: Sendable, Identifiable {
         id: String = UUID().uuidString,
         requiredCapabilities: Set<Capability>,
         priority: TaskPriority = .normal,
-        timeout: TimeInterval = 30.0,
+        timeout: TimeInterval? = nil,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {

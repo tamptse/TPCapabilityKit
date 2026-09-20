@@ -29,6 +29,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     /// - Parameters:
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
+    ///     Out-of-range values coerce to normal (see `ObjcMapper.taskPriority`).
     ///   - timeout: Maximum execution time in seconds. Default is 30.0.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
@@ -60,7 +61,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         self.underlying = underlying
         self.id = underlying.id
         self.priority = underlying.priority.rawValue
-        self.timeout = underlying.timeout
+        self.timeout = underlying.timeout ?? 30.0
         self.maxRetries = underlying.maxRetries
         self.capabilities = underlying.requiredCapabilities.map { $0.rawValue }
         self.metadata = underlying.metadata

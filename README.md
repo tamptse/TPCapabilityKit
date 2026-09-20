@@ -10,7 +10,7 @@ A Swift package providing `DynamicStore` — an in-memory state database and cap
 - **Async Task Execution** — Run tasks conditionally based on available capabilities
 - **Centralized Task Scheduling** — Priority queues, capability-based routing, and lease lifecycle
 - **Concurrency Control** — Actor-based limiter with per-capability and global limits
-- **Protocol-based Design** — `TaskSchedulerProtocol` enables A/B testing of scheduling implementations
+- **Configuration-based Tuning** — `TaskScheduler.Configuration` varies timeout and concurrency limits without a protocol seam
 - **Thread Safety** — Single `NSLock` protects all mutable state
 - **Objective-C Bridge** — Full interop for legacy ObjC plugins via `ObjcStoreBridge`
 - **Strict Concurrency** — Swift 6.1 with strict concurrency checking enabled
@@ -137,38 +137,27 @@ let lease = store.scheduleTask(descriptor) {
 }
 
 // Cancel a pending task
-store.scheduler.cancel(taskId: descriptor.id)
+store.cancelTask(taskId: descriptor.id)
 
 // Check pending/active counts
-print("Pending: \(store.scheduler.pendingCount)")
-print("Active: \(store.scheduler.activeCount)")
+print("Pending: \(store.pendingTaskCount)")
+print("Active: \(store.activeTaskCount)")
 ```
 
-### A/B Testing with Protocol
+### Tuning with Configuration
 
 ```swift
-// Create custom scheduler implementation
-final class MyCustomScheduler: TaskSchedulerProtocol {
-    // Implement protocol methods
-    func schedule(_ task: TaskDescriptor, ...) -> Lease { ... }
-    func scheduleAndWait<T: Sendable>(_ task: TaskDescriptor, ...) async -> T? { ... }
-    func cancel(taskId: String) { ... }
-    var pendingCount: Int { 0 }
-    var activeCount: Int { 0 }
-    var events: AnyPublisher<TaskScheduler.SchedulerEvent, Never> { ... }
-}
+// Vary behavior via values, not a protocol: timeouts and concurrency limits
+// live in TaskScheduler.Configuration.
+store.configureScheduler(TaskScheduler.Configuration(
+    defaultTimeout: 10.0,
+    maxPerCapability: 2,
+    maxGlobal: 8
+))
 
-// Replace default scheduler
-store.scheduler = MyCustomScheduler(store: store)
-
-// A/B test different implementations
-let schedulerA = TaskScheduler(store: store)  // Default
-let schedulerB = MyCustomScheduler(store: store)  // Custom
-
-// Use based on experiment
-if experiments.isEnabled("new-scheduler") {
-    store.scheduler = schedulerB
-}
+// Configure once at startup, before scheduling anything:
+// configureScheduler resets the scheduler, so in-flight leases would lose
+// their tracking. Call it before the first scheduleTask call.
 ```
 
 ### Objective-C Integration
@@ -220,6 +209,11 @@ ObjcStoreBridge.shared().subscribe(pluginId: "MyObjCPlugin", queue: nil) { state
 }
 ```
 
+> **Consumer-only contract:** `ObjcAppPlugin` declares `id` + `start` but no
+> `capabilities`, so ObjC plugins consume capabilities (query/run/schedule via
+> the Bridge) and never satisfy capability queries. Provide capabilities with a
+> Swift `AppPlugin` instead.
+
 ## Architecture
 
 ```
@@ -228,8 +222,7 @@ Sources/
 │   ├── DynamicStore.swift        # Singleton state database + capability registry
 │   ├── Capability.swift          # Capability enum + CapabilityProvider protocol
 │   ├── AppPlugin.swift           # Plugin protocol
-│   ├── TaskSchedulerProtocol.swift # Protocol for A/B testing
-│   ├── TaskScheduler.swift       # Centralized task scheduler
+│   ├── TaskScheduler.swift       # Centralized task scheduler (Configuration varies behavior)
 │   ├── TaskDescriptor.swift      # Task metadata (capabilities, priority, timeout)
 │   ├── TaskPriority.swift        # Priority levels (background → critical)
 │   ├── Lease.swift               # Task lifecycle management
@@ -240,7 +233,7 @@ Sources/
 │   ├── ObjcCancellable.swift     # ObjC subscription token
 │   ├── ObjcTaskDescriptor.swift  # ObjC wrapper for TaskDescriptor
 │   ├── ObjcLease.swift           # ObjC wrapper for Lease
-│   └── ObjcTaskScheduler.swift   # ObjC wrapper for TaskSchedulerProtocol
+│   └── ObjcTaskScheduler.swift   # ObjC scheduling adapter (single path behind the Bridge)
 └── TPCapabilityKitSample/        # Sample usage examples
 ```
 
