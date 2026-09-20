@@ -40,10 +40,6 @@ public enum Capability: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-/// Protocol for plugins that declare capabilities beyond basic state management.
-/// Conforming to this protocol allows the plugin to be auto-registered
-/// in the capability registry when `DynamicStore.register(plugin:)` is called.
-public protocol CapabilityProvider: AppPlugin {
-    /// The set of capabilities this plugin provides.
-    var capabilities: Set<Capability> { get }
-}
+/// Legacy alias for `AppPlugin`, kept for source compatibility.
+@available(*, deprecated, renamed: "AppPlugin")
+public typealias CapabilityProvider = AppPlugin

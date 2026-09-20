@@ -82,8 +82,7 @@ private final class MockTaskScheduler: TaskSchedulerProtocol, @unchecked Sendabl
     func schedule(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async -> Void,
-        completion: ((Lease) -> Void)?,
-        autoProcess: Bool
+        completion: ((Lease) -> Void)? = nil
     ) -> Lease {
         lock.withLock {
             _wasScheduleCalled = true

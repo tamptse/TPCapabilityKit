@@ -5,13 +5,15 @@ public protocol AppPlugin {
     /// Unique identifier for the plugin.
     var id: String { get }
 
+    /// Capabilities provided by this plugin.
+    var capabilities: Set<Capability> { get }
+
     /// Initializes and starts the plugin with the shared dynamic store.
     /// - Parameter store: The `DynamicStore` instance used for state registration and observation.
     func start(with store: DynamicStore)
 }
 
 extension AppPlugin {
-    /// Capabilities provided by this plugin.
-    /// Default is empty. Override in conforming types or use `CapabilityProvider` for explicit declaration.
+    /// Default is empty. Override in conforming types to declare provided capabilities.
     public var capabilities: Set<Capability> { [] }
 }

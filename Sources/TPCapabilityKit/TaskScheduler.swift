@@ -101,7 +101,7 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     init(store: DynamicStore = .shared, configuration: Configuration = .init()) {
         self.store = store
         self.configuration = configuration
-        self.concurrencyController = ConcurrencyController(configuration: .init(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal))
+        self.concurrencyController = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
     /// Publisher for scheduler events.
@@ -114,14 +114,22 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     ///   - task: The task descriptor to schedule.
     ///   - taskExecution: The async closure to execute when capability is available.
     ///   - completion: Optional completion handler called when task reaches a terminal state.
-    ///   - autoProcess: Whether to automatically process pending tasks. Default is true.
     /// - Returns: The lease for tracking the task.
     @discardableResult
     func schedule(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async -> Void,
-        completion: ((Lease) -> Void)? = nil,
-        autoProcess: Bool = true
+        completion: ((Lease) -> Void)? = nil
+    ) -> Lease {
+        schedule(task, taskExecution: taskExecution, completion: completion, autoProcess: true)
+    }
+
+    @discardableResult
+    func schedule(
+        _ task: TaskDescriptor,
+        taskExecution: @escaping @Sendable () async -> Void,
+        completion: ((Lease) -> Void)?,
+        autoProcess: Bool
     ) -> Lease {
         let lease = Lease(task: task)
 
@@ -348,35 +356,11 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     /// Waits for capabilities to become available with a timeout.
     /// - Returns: `true` if all capabilities are available, `false` if timeout.
     private func waitForCapabilitiesWithTimeout(_ task: TaskDescriptor) async -> Bool {
-        // Fast path: already available
         if checkCapabilities(for: task) { return true }
-
-        // Wait for capabilities with timeout
-        return await withTaskGroup(of: Bool.self) { group in
-            // Task: wait for capabilities
-            group.addTask { [self] in
-                for cap in task.requiredCapabilities {
-                    for await isAvailable in self.store.observeCapability(cap).values {
-                        if isAvailable { break }
-                    }
-                }
-                return self.checkCapabilities(for: task)
-            }
-
-            // Task: timeout
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(task.timeout * 1_000_000_000))
-                return false
-            }
-
-            // Return first result, cancel the other
-            guard let result = await group.next() else {
-                group.cancelAll()
-                return false
-            }
-            group.cancelAll()
-            return result
+        for cap in task.requiredCapabilities {
+            guard await store.waitForCapability(cap, timeout: task.timeout) else { return false }
         }
+        return checkCapabilities(for: task)
     }
 
     private func executeLease(_ lease: Lease) async {
@@ -464,11 +448,5 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
         }
 
         completion?(lease)
-    }
-}
-
-extension TaskPriority: CaseIterable {
-    public static var allCases: [TaskPriority] {
-        [.background, .low, .normal, .high, .critical]
     }
 }

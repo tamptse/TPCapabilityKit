@@ -106,7 +106,7 @@ struct LeaseTests {
 
 struct ConcurrencyControllerTests {
     @Test func acquireAndRelease() async {
-        let controller = ConcurrencyController(configuration: .init(maxPerCapability: 2, maxGlobal: 5))
+        let controller = ConcurrencyController(maxPerCapability: 2, maxGlobal: 5)
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
 
         await controller.acquire(for: task)
@@ -119,7 +119,7 @@ struct ConcurrencyControllerTests {
     }
 
     @Test func respectsGlobalLimit() async {
-        let controller = ConcurrencyController(configuration: .init(maxGlobal: 2))
+        let controller = ConcurrencyController(maxGlobal: 2)
 
         let task1 = TaskDescriptor(requiredCapabilities: [.heavyTask])
         let task2 = TaskDescriptor(requiredCapabilities: [.lightTask])
@@ -146,7 +146,7 @@ struct ConcurrencyControllerTests {
     }
 
     @Test func respectsPerCapabilityLimit() async {
-        let controller = ConcurrencyController(configuration: .init(maxPerCapability: 1))
+        let controller = ConcurrencyController(maxPerCapability: 1)
 
         let task1 = TaskDescriptor(requiredCapabilities: [.heavyTask])
         let task2 = TaskDescriptor(requiredCapabilities: [.heavyTask])

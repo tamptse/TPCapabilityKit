@@ -6,31 +6,16 @@ import Foundation
 /// Inspired by Meta's AsyncLimiter and Swift's AsyncSemaphore.
 /// Uses structured concurrency for safe slot management.
 actor ConcurrencyController {
-    /// Configuration for concurrency limits.
-    struct Configuration: Sendable {
-        /// Maximum concurrent tasks per capability. Nil means no per-capability limit.
-        let maxPerCapability: Int?
-
-        /// Maximum concurrent tasks globally. Nil means no global limit.
-        let maxGlobal: Int?
-
-        init(maxPerCapability: Int? = nil, maxGlobal: Int? = nil) {
-            self.maxPerCapability = maxPerCapability
-            self.maxGlobal = maxGlobal
-        }
-
-        /// Default configuration: 5 per capability, 20 global.
-        static let `default` = Configuration(maxPerCapability: 5, maxGlobal: 20)
-    }
-
-    private let configuration: Configuration
+    private let maxPerCapability: Int?
+    private let maxGlobal: Int?
     private var capabilitySlots: [Capability: Int] = [:]
     private var globalSlots: Int = 0
     private var waitingContinuations: [CheckedContinuation<Void, Never>] = []
 
     /// Creates a new ConcurrencyController.
-    init(configuration: Configuration = .default) {
-        self.configuration = configuration
+    init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
+        self.maxPerCapability = maxPerCapability
+        self.maxGlobal = maxGlobal
     }
 
     /// Acquires a slot for the given task. Suspends if no slots available.
@@ -68,7 +53,7 @@ actor ConcurrencyController {
     func stats() -> Stats {
         Stats(
             globalActive: globalSlots,
-            globalMax: configuration.maxGlobal,
+            globalMax: maxGlobal,
             perCapability: capabilitySlots
         )
     }
@@ -77,12 +62,12 @@ actor ConcurrencyController {
 
     private func canAcquire(for task: TaskDescriptor) -> Bool {
         // Check global limit
-        if let maxGlobal = configuration.maxGlobal {
+        if let maxGlobal = maxGlobal {
             guard globalSlots < maxGlobal else { return false }
         }
 
         // Check per-capability limits
-        if let maxPerCap = configuration.maxPerCapability {
+        if let maxPerCap = maxPerCapability {
             for cap in task.requiredCapabilities {
                 guard (capabilitySlots[cap] ?? 0) < maxPerCap else { return false }
             }

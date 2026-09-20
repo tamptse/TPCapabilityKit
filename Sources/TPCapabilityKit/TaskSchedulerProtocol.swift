@@ -7,8 +7,7 @@ public protocol TaskSchedulerProtocol: AnyObject, Sendable {
     func schedule(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async -> Void,
-        completion: ((Lease) -> Void)?,
-        autoProcess: Bool
+        completion: ((Lease) -> Void)?
     ) -> Lease
     
     /// Schedules a task and waits for its result.

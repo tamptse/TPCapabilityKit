@@ -24,3 +24,9 @@ public enum TaskPriority: Int, Comparable, Sendable, CustomStringConvertible {
         lhs.rawValue < rhs.rawValue
     }
 }
+
+extension TaskPriority: CaseIterable {
+    public static var allCases: [TaskPriority] {
+        [.background, .low, .normal, .high, .critical]
+    }
+}

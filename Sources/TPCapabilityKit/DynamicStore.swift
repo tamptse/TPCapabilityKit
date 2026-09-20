@@ -88,14 +88,11 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Plugin Registration
 
     /// Registers a plugin and starts it with the current store instance.
-    /// If the plugin conforms to `CapabilityProvider`, its capabilities are
-    /// automatically registered in the capability registry.
+    /// Non-empty `capabilities` are automatically registered in the capability registry.
     /// - Parameter plugin: The plugin conforming to `AppPlugin`.
     public func register(plugin: AppPlugin) {
         // Register capabilities BEFORE starting plugin to avoid TOCTOU race
-        if let capabilityProvider = plugin as? CapabilityProvider {
-            registerCapability(for: plugin.id, capabilities: capabilityProvider.capabilities)
-        } else if !plugin.capabilities.isEmpty {
+        if !plugin.capabilities.isEmpty {
             registerCapability(for: plugin.id, capabilities: plugin.capabilities)
         }
 
@@ -281,6 +278,7 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Task Execution
 
     /// Runs a task only if the required capability is currently available.
+    /// Immediate fire; for queued work use scheduleTask.
     /// - Parameters:
     ///   - capability: The capability required to run the task.
     ///   - task: The async closure to execute.
@@ -305,33 +303,26 @@ public final class DynamicStore: @unchecked Sendable {
         timeout: TimeInterval = 5.0,
         task: @escaping @Sendable () async throws -> T
     ) async rethrows -> T? {
-        // Fast path: already available
-        if queryCapability(capability) {
-            return try await task()
-        }
+        guard await waitForCapability(capability, timeout: timeout) else { return nil }
+        return try await task()
+    }
 
-        // Wait for capability to become available
-        return try await withThrowingTaskGroup(of: T?.self) { group in
-            // Task 1: wait for capability then execute
+    func waitForCapability(_ capability: Capability, timeout: TimeInterval) async -> Bool {
+        if queryCapability(capability) { return true }
+        return await withTaskGroup(of: Bool.self) { group in
             group.addTask { [self] in
                 for await isAvailable in self.observeCapability(capability).values {
-                    if isAvailable {
-                        return try await task()
-                    }
+                    if isAvailable { return true }
                 }
-                return nil
+                return false
             }
-
-            // Task 2: timeout
             group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return nil
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
             }
-
-            // Return first non-nil result, cancel the other
-            guard let result = try await group.next() else {
+            guard let result = await group.next() else {
                 group.cancelAll()
-                return nil
+                return false
             }
             group.cancelAll()
             return result
@@ -361,6 +352,7 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
+    /// Queued work; for immediate fire use runTask.
     /// - Parameters:
     ///   - descriptor: The task descriptor.
     ///   - task: The async closure to execute.
@@ -372,7 +364,7 @@ public final class DynamicStore: @unchecked Sendable {
         task: @escaping @Sendable () async -> Void,
         completion: ((Lease) -> Void)? = nil
     ) -> Lease {
-        scheduler.schedule(descriptor, taskExecution: task, completion: completion, autoProcess: true)
+        scheduler.schedule(descriptor, taskExecution: task, completion: completion)
     }
 
     /// Schedules a task and waits for its result.
