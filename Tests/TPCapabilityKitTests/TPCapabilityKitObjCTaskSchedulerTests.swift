@@ -124,7 +124,7 @@ struct ObjcStoreBridgeSchedulingTests {
         let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"])
         
         await withCheckedContinuation { continuation in
-            bridge.scheduleTaskAndWait(descriptor, task: {
+            bridge.taskScheduler.scheduleAndWait(descriptor, task: {
                 NSString(string: "Result")
             }, completion: { result in
                 #expect((result as? String) == "Result")
@@ -137,11 +137,11 @@ struct ObjcStoreBridgeSchedulingTests {
         let store = DynamicStore()
         let bridge = ObjcStoreBridge(store: store)
         let uniqueCap = "missingCap_\(UUID().uuidString)"
-        
+
         let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 0.1)
-        
+
         await withCheckedContinuation { continuation in
-            bridge.scheduleTaskAndWait(descriptor, task: {
+            bridge.taskScheduler.scheduleAndWait(descriptor, task: {
                 NSString(string: "ShouldNotRun")
             }, completion: { result in
                 #expect(result == nil)
@@ -157,13 +157,13 @@ struct ObjcStoreBridgeSchedulingTests {
 
         let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 5.0)
         let done = AsyncStream<Void>.makeStream()
-        let lease = bridge.scheduleTask(descriptor, task: {
+        let lease = bridge.taskScheduler.schedule(descriptor, task: {
             // Should not execute
         }, completion: { _ in
             done.continuation.yield()
         })
 
-        bridge.cancelTask(taskId: descriptor.id)
+        bridge.taskScheduler.cancel(taskId: descriptor.id)
 
         for await _ in done.stream { break }
         #expect(lease.underlying.isTerminal)
@@ -172,9 +172,9 @@ struct ObjcStoreBridgeSchedulingTests {
     @Test func objcPendingAndActiveCounts() {
         let store = DynamicStore()
         let bridge = ObjcStoreBridge(store: store)
-        
-        #expect(bridge.pendingTaskCount == 0)
-        #expect(bridge.activeTaskCount == 0)
+
+        #expect(bridge.taskScheduler.pendingCount == 0)
+        #expect(bridge.taskScheduler.activeCount == 0)
     }
 
     @Test func taskSchedulerIsLiveView() {
@@ -199,13 +199,13 @@ struct ObjcStoreBridgeSchedulingTests {
 
         let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 5.0)
         let done = AsyncStream<Void>.makeStream()
-        let lease = bridge.scheduleTask(descriptor, task: {
+        let lease = bridge.taskScheduler.schedule(descriptor, task: {
             // Should not execute
         }, completion: { _ in
             done.continuation.yield()
         })
 
-        bridge.cancelTask(taskId: descriptor.id)
+        bridge.taskScheduler.cancel(taskId: descriptor.id)
 
         for await _ in done.stream { break }
         #expect(lease.underlying.isTerminal)

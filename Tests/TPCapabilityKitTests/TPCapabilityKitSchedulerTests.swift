@@ -80,17 +80,22 @@ struct LeaseTests {
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], maxRetries: 2)
         let lease = Lease(task: task)
 
+        #expect(lease.canRetry)
         lease.activate()
-        #expect(lease.retry() == true)
+        #expect(lease.activatedAt != nil)
+        lease.beginRetry()
         #expect(lease.retryCount == 1)
         #expect(lease.state == .pending)
+        #expect(lease.activatedAt == nil)
+        #expect(lease.completedAt == nil)
+        #expect(lease.result == nil)
+        #expect(lease.canRetry)
 
         lease.activate()
-        #expect(lease.retry() == true)
+        lease.beginRetry()
         #expect(lease.retryCount == 2)
-
-        lease.activate()
-        #expect(lease.retry() == false)
+        #expect(lease.state == .pending)
+        #expect(!lease.canRetry)
     }
 
     @Test func leaseExpiration() {
@@ -318,6 +323,38 @@ struct TaskSchedulerTests {
         #expect(lease.retryCount == 0)
         #expect(lease.state == .completed)
         #expect(lease.isTerminal)
+    }
+
+    @Test func retryPreservesWaiterThroughStoreFacade() async {
+        let store = DynamicStore()
+        let pluginId = "FacadeRetry_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let task = TaskDescriptor(
+            requiredCapabilities: [.heavyTask],
+            timeout: 5.0,
+            maxRetries: 2
+        )
+
+        actor Attempts {
+            var count = 0
+            func next() -> Int {
+                count += 1
+                return count
+            }
+        }
+        let attempts = Attempts()
+        struct FlakyFailure: Error {}
+
+        let result = await store.scheduleTaskAndWait(task) { () async throws -> String in
+            let n = await attempts.next()
+            if n <= 2 { throw FlakyFailure() }
+            return "recovered"
+        }
+
+        #expect(result == "recovered")
+        #expect(await attempts.count == 3)
     }
 
     @Test func twoMissingCapabilitiesShareOneDeadline() async {

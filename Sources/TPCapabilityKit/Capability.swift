@@ -39,7 +39,3 @@ public enum Capability: Hashable, Sendable, CustomStringConvertible {
         }
     }
 }
-
-/// Legacy alias for `AppPlugin`, kept for source compatibility.
-@available(*, deprecated, renamed: "AppPlugin")
-public typealias CapabilityProvider = AppPlugin

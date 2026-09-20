@@ -11,7 +11,7 @@ A Swift package providing `DynamicStore` — an in-memory state database and cap
 
 ## Architecture
 - **Entry point**: `Sources/TPCapabilityKit/DynamicStore.swift` — singleton (`DynamicStore.shared`)
-- **Plugin system**: `AppPlugin` protocol, `CapabilityProvider` protocol
+- **Plugin system**: `AppPlugin` protocol (single canonical protocol)
 - **Obj-C bridge**: `Sources/TPCapabilityKitBridge/` — wraps `DynamicStore` for Objective-C interop
 - **Sample usage**: `Sources/TPCapabilityKitSample/TPCapabilityKitSample.swift`
 - **Targets**: TPCapabilityKit (Core), TPCapabilityKitBridge, TPCapabilityKitSample

@@ -2,7 +2,7 @@ import Foundation
 
 /// Lifecycle tracker for scheduled tasks.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
-///   (`activate`, `complete`, `fail`, `expire`, `retry`) are `internal`
+///   (`activate`, `complete`, `fail`, `expire`, `beginRetry`) are `internal`
 ///   and only called by `TaskScheduler` which coordinates access via its
 ///   own lock. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
@@ -84,17 +84,20 @@ public final class Lease: @unchecked Sendable {
         completedAt = Date()
     }
 
-    /// Increments retry count and resets to pending state.
-    /// Returns true if retries remain, false if max retries exceeded.
-    @discardableResult
-    func retry() -> Bool {
-        guard retryCount < task.maxRetries else { return false }
+    /// Whether retry budget remains (`retryCount < task.maxRetries`).
+    /// Read-only view for Settlement; the retry decision lives there, not here.
+    public var canRetry: Bool {
+        retryCount < task.maxRetries
+    }
+
+    /// Resets to pending for another attempt and consumes one retry.
+    /// Infallible primitive; callers check `canRetry` before calling.
+    func beginRetry() {
         retryCount += 1
         state = .pending
         activatedAt = nil
         completedAt = nil
         result = nil
-        return true
     }
 
     /// Whether the lease is in a terminal state (completed, failed, or expired).

@@ -79,56 +79,6 @@ struct TPCapabilityKitCoreTests {
         #expect(state == nil)
     }
 
-    // MARK: - Coverage Gap Tests
-
-    @Test func registeredPluginIdsAfterRegisterAndUnregister() {
-        let store = DynamicStore()
-        let pluginIdA = "RegIdsPluginA_\(UUID().uuidString)"
-        let pluginIdB = "RegIdsPluginB_\(UUID().uuidString)"
-        let pluginA = TestPlugin(id: pluginIdA)
-        _ = TestPlugin(id: pluginIdB)
-
-        let beforeIDs = store.registeredPluginIds
-        #expect(!beforeIDs.contains(pluginIdA))
-        #expect(!beforeIDs.contains(pluginIdB))
-
-        store.register(plugin: pluginA)
-        store.registerCapability(for: pluginIdB, capabilities: [.custom(pluginIdB)])
-
-        let afterRegisterIDs = store.registeredPluginIds
-        #expect(afterRegisterIDs.contains(pluginIdA))
-        #expect(afterRegisterIDs.contains(pluginIdB))
-
-        store.unregister(plugin: pluginA)
-        store.unregisterCapability(for: pluginIdB)
-
-        let afterUnregisterIDs = store.registeredPluginIds
-        #expect(!afterUnregisterIDs.contains(pluginIdA))
-        #expect(!afterUnregisterIDs.contains(pluginIdB))
-    }
-
-    @Test func hasPluginIdTrueAndFalse() {
-        let store = DynamicStore()
-        let pluginId = "HasPlugin_\(UUID().uuidString)"
-
-        #expect(store.hasPlugin(id: pluginId) == false)
-
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        #expect(store.hasPlugin(id: pluginId) == true)
-
-        store.unregisterCapability(for: pluginId)
-        #expect(store.hasPlugin(id: pluginId) == false)
-
-        store.register(plugin: TestPlugin(id: pluginId))
-        #expect(store.hasPlugin(id: pluginId) == true)
-
-        store.removeState(for: pluginId)
-        #expect(store.hasPlugin(id: pluginId) == false)
-
-        // Empty pluginId returns false
-        #expect(store.hasPlugin(id: "") == false)
-    }
-
     @Test func removeStateStopsFutureObservations() {
         let store = DynamicStore()
         let pluginId = "RemoveNotify_\(UUID().uuidString)"

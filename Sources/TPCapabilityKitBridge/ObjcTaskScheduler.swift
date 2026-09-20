@@ -33,18 +33,23 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// Schedules a task and waits for result via completion handler.
+    /// Delivers the result on the specified queue.
     @objc public func scheduleAndWait(
         _ descriptor: ObjcTaskDescriptor,
+        queue: DispatchQueue? = nil,
         task: @escaping @Sendable () -> NSObject,
         completion: @escaping @Sendable (NSObject?) -> Void
     ) {
+        let targetQueue = queue ?? .main
         Task {
             let result: NSObject? = await store.scheduleTaskAndWait(
                 descriptor.underlying
             ) {
                 task() as NSObject
             }
-            completion(result)
+            targetQueue.async {
+                completion(result)
+            }
         }
     }
 

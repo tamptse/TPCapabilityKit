@@ -2,21 +2,6 @@ import Combine
 @preconcurrency import Foundation
 import TPCapabilityKit
 
-/// Single mapping point between Objective-C primitives and Swift domain types.
-enum ObjcMapper {
-    static func capability(from string: String) -> Capability {
-        Capability(rawValue: string)
-    }
-
-    /// Maps a raw priority value to a domain priority.
-    /// Out-of-range values coerce to `.normal` — the safe default that neither
-    /// starves the task nor jumps the queue. Callers needing strict validation
-    /// should clamp before crossing the Bridge.
-    static func taskPriority(from rawValue: Int) -> TaskPriority {
-        TaskPriority(rawValue: rawValue) ?? .normal
-    }
-}
-
 /// Objective-C singleton bridge exposing `DynamicStore` functionality to Objective-C modules.
 @objc(TPStoreBridge)
 public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
@@ -156,43 +141,10 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// Scheduling adapter for Objective-C callers. A fresh stateless live view
     /// on every access — all reads delegate to the store, so there is no cache
     /// to go stale. The translation between ObjC and Swift task types lives in
-    /// `ObjcTaskScheduler`; the convenience methods below delegate to it, so
-    /// there is exactly one scheduling path behind the Bridge.
+    /// `ObjcTaskScheduler`, so there is exactly one scheduling path behind
+    /// the Bridge.
     @objc public var taskScheduler: ObjcTaskScheduler {
         ObjcTaskScheduler(store: store)
-    }
-
-    /// Schedules a task for execution.
-    @objc public func scheduleTask(
-        _ descriptor: ObjcTaskDescriptor,
-        task: @escaping @Sendable () -> Void,
-        completion: (@Sendable (ObjcLease) -> Void)? = nil
-    ) -> ObjcLease {
-        taskScheduler.schedule(descriptor, task: task, completion: completion)
-    }
-
-    /// Schedules a task and waits for result via completion handler.
-    @objc public func scheduleTaskAndWait(
-        _ descriptor: ObjcTaskDescriptor,
-        task: @escaping @Sendable () -> NSObject,
-        completion: @escaping @Sendable (NSObject?) -> Void
-    ) {
-        taskScheduler.scheduleAndWait(descriptor, task: task, completion: completion)
-    }
-
-    /// Cancels a pending task.
-    @objc public func cancelTask(taskId: String) {
-        taskScheduler.cancel(taskId: taskId)
-    }
-
-    /// Returns number of pending tasks.
-    @objc public var pendingTaskCount: Int {
-        taskScheduler.pendingCount
-    }
-
-    /// Returns number of active tasks.
-    @objc public var activeTaskCount: Int {
-        taskScheduler.activeCount
     }
 
 }
@@ -201,25 +153,4 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 private final class ObjcCallbackBox<T>: @unchecked Sendable {
     let value: T
     init(_ value: T) { self.value = value }
-}
-
-/// Adapter registering an Objective-C plugin with the Swift store.
-/// Consumer-only contract: `ObjcAppPlugin` declares `id` + `start` but no
-/// `capabilities`, so the adapter relies on `AppPlugin`'s default empty set.
-/// ObjC Plugins consume capabilities via the Bridge (query/run/schedule) and
-/// never satisfy capability queries — register a Swift `AppPlugin` to provide.
-internal final class PluginObjcAdapter: AppPlugin {
-    let id: String
-    private let objcPlugin: ObjcAppPlugin
-    private let bridge: ObjcStoreBridge
-
-    init(objcPlugin: ObjcAppPlugin, bridge: ObjcStoreBridge) {
-        self.id = objcPlugin.id
-        self.objcPlugin = objcPlugin
-        self.bridge = bridge
-    }
-
-    func start(with store: DynamicStore) {
-        objcPlugin.start(with: bridge)
-    }
 }

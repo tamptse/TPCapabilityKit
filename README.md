@@ -83,7 +83,7 @@ store.observeState(pluginId: "UserProfilePlugin", type: UserProfileState.self)
 ### Capability Provider
 
 ```swift
-final class NetworkPlugin: CapabilityProvider {
+final class NetworkPlugin: AppPlugin {
     let id = "NetworkPlugin"
     let capabilities: Set<Capability> = [.networkAccess, .lightTask]
 
@@ -163,7 +163,7 @@ store.configureScheduler(TaskScheduler.Configuration(
 ### Objective-C Integration
 
 ```objc
-// Task Scheduling via Bridge
+// Task Scheduling via the single Bridge adapter (taskScheduler live view)
 TPTaskDescriptor *descriptor = [[TPTaskDescriptor alloc] 
     initWithCapabilities:@[@"networkAccess"] 
     priority:4 
@@ -172,7 +172,7 @@ TPTaskDescriptor *descriptor = [[TPTaskDescriptor alloc]
     metadata:@{@"source": @"objc"}];
 
 // Schedule and wait for result
-[[TPStoreBridge shared] scheduleTaskAndWait:descriptor 
+[[[TPStoreBridge shared] taskScheduler] scheduleAndWait:descriptor 
     task:^NSObject *{
         return [self fetchData];
     } 
@@ -181,11 +181,11 @@ TPTaskDescriptor *descriptor = [[TPTaskDescriptor alloc]
     }];
 
 // Cancel a task
-[[TPStoreBridge shared] cancelTaskWithTaskId:descriptor.id];
+[[[TPStoreBridge shared] taskScheduler] cancelWithTaskId:descriptor.id];
 
 // Check counts
-NSLog(@"Pending: %ld", [TPStoreBridge shared].pendingTaskCount);
-NSLog(@"Active: %ld", [TPStoreBridge shared].activeTaskCount);
+NSLog(@"Pending: %ld", [[[TPStoreBridge shared] taskScheduler] pendingCount]);
+NSLog(@"Active: %ld", [[[TPStoreBridge shared] taskScheduler] activeCount]);
 ```
 
 ### Objective-C Integration
@@ -220,7 +220,7 @@ ObjcStoreBridge.shared().subscribe(pluginId: "MyObjCPlugin", queue: nil) { state
 Sources/
 ├── TPCapabilityKit/              # Core library
 │   ├── DynamicStore.swift        # Singleton state database + capability registry
-│   ├── Capability.swift          # Capability enum + CapabilityProvider protocol
+│   ├── Capability.swift          # Capability enum
 │   ├── AppPlugin.swift           # Plugin protocol
 │   ├── TaskScheduler.swift       # Centralized task scheduler (Configuration varies behavior)
 │   ├── TaskDescriptor.swift      # Task metadata (capabilities, priority, timeout)
@@ -228,7 +228,8 @@ Sources/
 │   ├── Lease.swift               # Task lifecycle management
 │   └── ConcurrencyController.swift # Actor-based concurrency limiter
 ├── TPCapabilityKitBridge/        # Objective-C interop bridge
-│   ├── ObjcStoreBridge.swift     # ObjC bridge singleton + scheduling APIs
+│   ├── ObjcStoreBridge.swift     # ObjC bridge singleton (state + capability + immediate run)
+│   ├── ObjcMapper.swift          # Capability/priority mapping (single internal point)
 │   ├── ObjcAppPlugin.swift       # ObjC plugin protocol
 │   ├── ObjcCancellable.swift     # ObjC subscription token
 │   ├── ObjcTaskDescriptor.swift  # ObjC wrapper for TaskDescriptor

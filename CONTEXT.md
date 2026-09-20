@@ -4,14 +4,19 @@
 
 A micro-frontend unit. Has an `id`, declares `capabilities` (default empty),
 and `start(with:)` against the Store. Single protocol `AppPlugin` is canonical;
-`CapabilityProvider` is a legacy alias, not a separate concept.
+the `CapabilityProvider` legacy alias is removed.
 
 ## Store
 
 The in-memory state database + capability registry (`DynamicStore`).
 Owns state subjects and the capability index. Single lock protects mutable state.
 Changes are collected under lock and emitted after unlock; waiting is delegated
-to Tasks. Public seam: register/update/get/observe state, query/observe capability.
+to Tasks. Public seam: register/update/get/observe state, query/observe capability,
+plus the scheduling facade (schedule/schedule-and-wait/cancel/pending/active/configure,
+immediate run styles).
+The scheduler instance itself is private; all scheduling crosses the facade.
+Two observation granularities: per-Capability observation serves UI-style
+subscribers; whole-registry observation serves the Tasks waiter only.
 
 ## Capability
 
@@ -28,14 +33,19 @@ mechanism: immediate (`runTask`) vs queued (`scheduleTask`).
 ## Lease
 
 Lifecycle tracker `pending → active → completed/failed/expired` for one
-scheduled Task. Mutations are internal to the Tasks module; callers only read
-`state/isTerminal/result`. Custom `==` ignores associated `Error` values.
+scheduled Task. Exposes state transitions only; callers read
+`state/isTerminal/result` plus the retry budget view. Retry budget checks
+and reset decisions live in Settlement, not in Lease.
+Custom `==` ignores associated `Error` values.
 Deadline and retry decisions live in Settlement, not in Lease.
 
 ## Settlement
 
 Single terminal decision for one Lease: timeout vs result vs retry vs
 cancel, with completion delivery and waiter preservation. Owned by Tasks.
+Owns the retry budget check, the void-completion policy, and the retry
+re-queue; `enqueue` is the only queue writer conceptually, retry re-uses the
+same Lease identity through a shared re-queue path.
 
 ## Tasks (Scheduler)
 
@@ -50,6 +60,8 @@ across retry), and scoped slot acquisition with re-check inside.
 
 ## Bridge (ObjC adapter)
 
-Single scheduling adapter behind `TPStoreBridge`. `ObjcLease` is a live view
+Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
+live view. `ObjcLease` is a live view
 of the underlying Lease. Capability/priority mapping lives in one internal
-mapper. ObjC Plugins are capability-consumers only (no `capabilities`).
+mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
+Completion delivery defaults to the main queue unless a queue is given.

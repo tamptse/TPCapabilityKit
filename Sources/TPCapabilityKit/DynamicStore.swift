@@ -157,26 +157,6 @@ public final class DynamicStore: @unchecked Sendable {
         unregisterCapability(for: plugin.id)
     }
 
-    /// Returns all registered plugin identifiers.
-    /// - Returns: Array of plugin IDs that have state or capabilities registered.
-    var registeredPluginIds: [String] {
-        lock.withLock {
-            let stateIds = Set(stateSubjects.keys)
-            let capabilityIds = Set(capabilities.keys)
-            return Array(stateIds.union(capabilityIds))
-        }
-    }
-
-    /// Checks whether a plugin is registered (has state or capabilities).
-    /// - Parameter pluginId: Unique identifier of the target plugin.
-    /// - Returns: `true` if the plugin has state or capabilities registered.
-    func hasPlugin(id pluginId: String) -> Bool {
-        guard validatePluginId(pluginId) else { return false }
-        return lock.withLock {
-            stateSubjects[pluginId] != nil || capabilities[pluginId] != nil
-        }
-    }
-
     /// Subscribes reactively to state changes for a plugin identifier.
     /// - Parameters:
     ///   - pluginId: Unique identifier of the target plugin.
@@ -269,6 +249,7 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Reactively observes whether any plugin provides the specified capability.
+    /// For UI-style subscribers; the Tasks waiter uses whole-registry observation.
     /// - Parameter capability: The capability to observe.
     /// - Returns: A publisher emitting `true` when the capability becomes available, `false` otherwise.
     /// - Note: Values are delivered synchronously on the writer's thread with no
@@ -289,6 +270,7 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Reactively observes capabilities changes across all plugins.
+    /// For the Tasks waiter; UI-style subscribers prefer per-Capability observation.
     /// - Returns: A publisher emitting the full capabilities dictionary on each change.
     func observeAllCapabilities() -> AnyPublisher<[String: Set<Capability>], Never> {
         capabilitySubject.eraseToAnyPublisher()
@@ -331,7 +313,7 @@ public final class DynamicStore: @unchecked Sendable {
 
     // MARK: - Task Scheduling
 
-    var scheduler: TaskScheduler {
+    private var scheduler: TaskScheduler {
         lock.withLock {
             if let existing = _scheduler { return existing }
             let new = TaskScheduler(store: self, configuration: schedulerConfiguration)

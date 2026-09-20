@@ -75,7 +75,7 @@ final class ChatPlugin: AppPlugin {
 }
 
 /// Micro-frontend plugin providing background task capabilities.
-final class BackgroundTaskPlugin: CapabilityProvider {
+final class BackgroundTaskPlugin: AppPlugin {
     let id: String = "BackgroundTaskPlugin"
     let capabilities: Set<Capability> = [.heavyTask, .lightTask, .backgroundExecution]
     private var store: DynamicStore?
@@ -89,7 +89,7 @@ final class BackgroundTaskPlugin: CapabilityProvider {
 }
 
 /// Micro-frontend plugin providing network capabilities.
-final class NetworkPlugin: CapabilityProvider {
+final class NetworkPlugin: AppPlugin {
     let id: String = "NetworkPlugin"
     let capabilities: Set<Capability> = [.networkAccess, .lightTask]
     private var store: DynamicStore?
@@ -342,27 +342,27 @@ enum TPCapabilityKitSample {
         )
         
         // Schedule via ObjC bridge
-        let objcLease = bridge.scheduleTask(objcDescriptor) {
+        let objcLease = bridge.taskScheduler.schedule(objcDescriptor) {
             print("[ObjC scheduleTask] Executing...")
         } completion: { lease in
             print("[ObjC scheduleTask] Completed: \(lease.state)")
         }
         print("[ObjC scheduleTask] Lease ID: \(objcLease.taskId)")
-        
+
         // Schedule and wait via ObjC bridge
-        bridge.scheduleTaskAndWait(objcDescriptor, task: {
+        bridge.taskScheduler.scheduleAndWait(objcDescriptor, task: {
             return NSString(string: "ObjCResult")
         }, completion: { result in
             print("[ObjC scheduleTaskAndWait] Result: \(String(describing: result))")
         })
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        
+
         // Cancel via ObjC bridge
-        bridge.cancelTask(taskId: objcLease.taskId)
+        bridge.taskScheduler.cancel(taskId: objcLease.taskId)
         print("[ObjC] Cancelled task: \(objcLease.taskId)")
-        
+
         // Check counts via ObjC bridge
-        print("[ObjC] Pending: \(bridge.pendingTaskCount), Active: \(bridge.activeTaskCount)")
+        print("[ObjC] Pending: \(bridge.taskScheduler.pendingCount), Active: \(bridge.taskScheduler.activeCount)")
 
         // Cleanup
         store.unregister(plugin: profilePlugin)

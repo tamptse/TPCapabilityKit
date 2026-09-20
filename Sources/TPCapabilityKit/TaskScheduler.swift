@@ -4,6 +4,8 @@ import Combine
 /// Internal error type for task execution failures.
 private struct TaskExecutionError: Error, Sendable {}
 
+private struct VoidCompletionSentinel: Sendable {}
+
 /// Typed one-shot handoff: result-write, resume-once, and completion
 /// co-located so no caller orchestrates locks or resumed flags.
 private final class OneShot<T>: @unchecked Sendable {
@@ -34,7 +36,7 @@ private final class OneShot<T>: @unchecked Sendable {
 /// Inspired by Meta's Jupiter (capability matching) and Async (priority dispatching).
 /// - Important: `@unchecked Sendable` is intentional — all mutable state
 ///   (`pendingTasks`, `activeLeases`, `taskExecutions`, `completionHandlers`,
-///   `parkedWaiters`, `voidTaskIds`) is protected by `lock`. Parked capability waiters are
+///   `parkedWaiters`) is protected by `lock`. Parked capability waiters are
 ///   tracked per lease and cancelled on terminal settlement. Do not add
 ///   unsynchronized mutable state.
 public final class TaskScheduler: @unchecked Sendable {
@@ -79,10 +81,6 @@ public final class TaskScheduler: @unchecked Sendable {
 
     private var completionHandlers: [String: (Lease) -> Void] = [:]
 
-    // Fire-and-forget task IDs. Their execution returns no value, so running
-    // to completion settles .completed instead of taking the nil-means-failure path.
-    private var voidTaskIds: Set<String> = []
-
     // Cached pending count for O(1) access
     private var _pendingCount: Int = 0
 
@@ -123,6 +121,7 @@ public final class TaskScheduler: @unchecked Sendable {
         self.concurrencyController = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
+    /// Intentional observability seam for tests and diagnostics, alongside `ConcurrencyController.stats()`.
     var events: AnyPublisher<SchedulerEvent, Never> {
         eventSubject.eraseToAnyPublisher()
     }
@@ -141,8 +140,8 @@ public final class TaskScheduler: @unchecked Sendable {
     ) -> Lease {
         let lease = enqueue(task, execution: {
             await taskExecution()
-            return nil
-        }, completion: completion, isVoid: true)
+            return VoidCompletionSentinel()
+        }, completion: completion)
         Task { await self.processPendingTasks() }
         return lease
     }
@@ -151,8 +150,7 @@ public final class TaskScheduler: @unchecked Sendable {
     private func enqueue(
         _ task: TaskDescriptor,
         execution: @escaping @Sendable () async -> Any?,
-        completion: ((Lease) -> Void)?,
-        isVoid: Bool = false
+        completion: ((Lease) -> Void)?
     ) -> Lease {
         let lease = Lease(task: task)
 
@@ -162,9 +160,6 @@ public final class TaskScheduler: @unchecked Sendable {
             taskPriorityIndex[task.id] = task.priority
             leasesById[task.id] = lease
             taskExecutions[task.id] = execution
-            if isVoid {
-                voidTaskIds.insert(task.id)
-            }
             if let completion {
                 completionHandlers[task.id] = completion
             }
@@ -271,8 +266,7 @@ public final class TaskScheduler: @unchecked Sendable {
             settle(lease, as: .expired)
             return
         }
-        let isVoid: Bool = lock.withLock { voidTaskIds.contains(lease.task.id) }
-        if isVoid {
+        if result is VoidCompletionSentinel {
             settle(lease, as: .completed(nil))
             return
         }
@@ -280,11 +274,20 @@ public final class TaskScheduler: @unchecked Sendable {
             settle(lease, as: .completed(result))
             return
         }
-        var retried = false
+        if requeueForRetry(lease, execution: execution) {
+            return
+        }
+        if lease.isTerminal { return }
+        settle(lease, as: .failed)
+    }
+
+    private func requeueForRetry(_ lease: Lease, execution: (@Sendable () async -> Any?)?) -> Bool {
         var slotToRelease: ConcurrencyController.Slot?
+        var retried = false
         lock.withLock {
             guard !lease.isTerminal else { return }
-            if lease.retry() {
+            if lease.canRetry {
+                lease.beginRetry()
                 activeLeases.removeValue(forKey: lease.task.id)
                 deadlines.removeValue(forKey: lease.task.id)
                 slotToRelease = slotsByTaskId.removeValue(forKey: lease.task.id)
@@ -303,10 +306,9 @@ public final class TaskScheduler: @unchecked Sendable {
         if retried {
             eventSubject.send(.taskRetried(lease: lease, attempt: lease.retryCount))
             Task { await self.processPendingTasks() }
-            return
+            return true
         }
-        if lease.isTerminal { return }
-        settle(lease, as: .failed)
+        return false
     }
 
     /// Single terminal path: cleanup under lock, state + event decided under
@@ -335,7 +337,6 @@ public final class TaskScheduler: @unchecked Sendable {
             waiterToCancel = parkedWaiters.removeValue(forKey: lease.task.id)
             slotToRelease = slotsByTaskId.removeValue(forKey: lease.task.id)
             taskExecutions.removeValue(forKey: lease.task.id)
-            voidTaskIds.remove(lease.task.id)
             completion = completionHandlers.removeValue(forKey: lease.task.id)
             applyState(lease)
             event = makeEvent(lease)
@@ -435,7 +436,7 @@ public final class TaskScheduler: @unchecked Sendable {
 
     /// Single capability waiter owned by Tasks: one deadline shared by the
     /// whole set. Serves immediate (run-when-available) and queued
-    /// (schedule/schedule-and-wait) execution alike.
+    /// (schedule/schedule-and-wait) execution alike, preserved across retry.
     private func waitForCapabilities(_ capabilities: Set<Capability>, timeout: TimeInterval) async -> Bool {
         guard let store else { return false }
         if capabilities.isEmpty { return true }

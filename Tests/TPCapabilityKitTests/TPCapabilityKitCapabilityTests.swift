@@ -5,7 +5,7 @@ import Testing
 
 struct TPCapabilityKitCapabilityTests {
     
-    struct TestCapabilityPlugin: CapabilityProvider {
+    struct TestCapabilityPlugin: AppPlugin {
         let id: String
         let capabilities: Set<Capability>
         
