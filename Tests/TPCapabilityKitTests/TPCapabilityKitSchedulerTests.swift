@@ -314,4 +314,25 @@ struct TaskSchedulerTests {
 
         #expect(lease.retryCount == 1)
     }
+
+    @Test func twoMissingCapabilitiesShareOneDeadline() async {
+        let store = DynamicStore()
+        let scheduler = TaskScheduler(store: store)
+
+        let task = TaskDescriptor(
+            requiredCapabilities: [
+                .custom("NoCapA_\(UUID().uuidString)"),
+                .custom("NoCapB_\(UUID().uuidString)")
+            ],
+            timeout: 1.0
+        )
+        let start = Date()
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            scheduler.schedule(task, taskExecution: {}, completion: { _ in done.resume() })
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(elapsed < 2.0)
+        #expect(elapsed > 0.5)
+    }
 }

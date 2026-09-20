@@ -1,11 +1,5 @@
 import Foundation
 
-/// Represents the lifecycle of a scheduled task execution.
-/// A lease tracks the task from scheduling through completion or failure.
-///
-/// - Note: This class is `@unchecked Sendable` because it requires mutable state
-///   for lifecycle management. All mutations should be coordinated through the
-///   TaskScheduler to ensure thread safety.
 /// Lifecycle tracker for scheduled tasks.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
 ///   (`activate`, `complete`, `fail`, `expire`, `retry`) are `internal`

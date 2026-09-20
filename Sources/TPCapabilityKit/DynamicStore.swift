@@ -6,8 +6,7 @@ import Foundation
 ///
 /// ## Thread Safety
 /// - Single `lock` protects all mutable state (stateSubjects, capabilities, capabilityIndex, capabilitySubjects)
-/// - `CurrentValueSubject.send()` is thread-safe by Combine guarantee; some sends occur inside lock for atomicity
-/// - `capabilitySubject` is a CurrentValueSubject, also thread-safe
+/// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
 /// ## Debug Logging
 /// - All debug logs are guarded by `#if DEBUG` and only appear in Debug builds
@@ -58,30 +57,31 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Cleans up reverse index entry and per-capability subject when no providers remain.
-    /// Sends `false` on the per-capability subject to notify observers.
-    ///
-    /// - Important: This method sends Combine values while the lock is held.
-    ///   This is safe because `CurrentValueSubject.send()` is thread-safe.
-    ///   However, if an observer re-enters this store (e.g., calls `queryCapability`),
-    ///   it would deadlock on `NSLock`. Current observers do not re-enter,
-    ///   but this invariant must be maintained if new observers are added.
+    /// Queues a `false` notification; the caller sends it after unlocking.
     ///
     /// Must be called after removing a pluginId from capabilityIndex[cap], while holding `lock`.
-    private func cleanupCapabilityIfEmpty(_ cap: Capability) {
+    private func cleanupCapabilityIfEmpty(
+        _ cap: Capability,
+        pending: inout [(CurrentValueSubject<Bool, Never>, Bool)]
+    ) {
         if capabilityIndex[cap]?.isEmpty == true {
             capabilityIndex.removeValue(forKey: cap)
-            capabilitySubjects[cap]?.send(false)
-            capabilitySubjects.removeValue(forKey: cap)
+            if let subject = capabilitySubjects.removeValue(forKey: cap) {
+                pending.append((subject, false))
+            }
         }
     }
 
     /// Removes a plugin's capabilities from the reverse index and cleans up empty entries.
     /// Must be called while holding `lock`.
-    private func removeCapabilities(for pluginId: String) {
+    private func removeCapabilities(
+        for pluginId: String,
+        pending: inout [(CurrentValueSubject<Bool, Never>, Bool)]
+    ) {
         guard let oldCapabilities = capabilities[pluginId] else { return }
         for cap in oldCapabilities {
             capabilityIndex[cap]?.remove(pluginId)
-            cleanupCapabilityIfEmpty(cap)
+            cleanupCapabilityIfEmpty(cap, pending: &pending)
         }
     }
 
@@ -182,6 +182,8 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: A publisher emitting values matching type `T`. Subscribers must handle thread scheduling.
     /// - Note: If the plugin doesn't exist, a subject will be created automatically.
     ///   Use `removeState(for:)` to clean up unused subjects.
+    /// - Note: Values are delivered synchronously on the writer's thread with no
+    ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeState<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
         let subject = ensureSubject(for: pluginId)
         return subject
@@ -197,31 +199,44 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - capabilities: Set of capabilities the plugin provides.
     func registerCapability(for pluginId: String, capabilities: Set<Capability>) {
         guard validatePluginId(pluginId) else { return }
+        var pending: [(CurrentValueSubject<Bool, Never>, Bool)] = []
+        var snapshot: [String: Set<Capability>] = [:]
         lock.withLock {
-            removeCapabilities(for: pluginId)
-            
+            removeCapabilities(for: pluginId, pending: &pending)
+
             // Add new capabilities
             self.capabilities[pluginId] = capabilities
             for cap in capabilities {
                 capabilityIndex[cap, default: []].insert(pluginId)
-                // Update per-capability subject
-                capabilitySubjects[cap]?.send(true)
+                if let subject = capabilitySubjects[cap] {
+                    pending.append((subject, true))
+                }
             }
-            
-            capabilitySubject.send(self.capabilities)
+
+            snapshot = self.capabilities
         }
+        for (subject, value) in pending {
+            subject.send(value)
+        }
+        capabilitySubject.send(snapshot)
     }
 
     /// Unregisters all capabilities for a plugin identifier.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     func unregisterCapability(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
+        var pending: [(CurrentValueSubject<Bool, Never>, Bool)] = []
+        var snapshot: [String: Set<Capability>] = [:]
         lock.withLock {
-            removeCapabilities(for: pluginId)
-            
+            removeCapabilities(for: pluginId, pending: &pending)
+
             self.capabilities.removeValue(forKey: pluginId)
-            capabilitySubject.send(self.capabilities)
+            snapshot = self.capabilities
         }
+        for (subject, value) in pending {
+            subject.send(value)
+        }
+        capabilitySubject.send(snapshot)
     }
 
     /// Queries whether any registered plugin provides the specified capability.
@@ -254,6 +269,8 @@ public final class DynamicStore: @unchecked Sendable {
     /// Reactively observes whether any plugin provides the specified capability.
     /// - Parameter capability: The capability to observe.
     /// - Returns: A publisher emitting `true` when the capability becomes available, `false` otherwise.
+    /// - Note: Values are delivered synchronously on the writer's thread with no
+    ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeCapability(_ capability: Capability) -> AnyPublisher<Bool, Never> {
         let subject: CurrentValueSubject<Bool, Never> = lock.withLock {
             if let existing = capabilitySubjects[capability] {
@@ -308,25 +325,7 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     func waitForCapability(_ capability: Capability, timeout: TimeInterval) async -> Bool {
-        if queryCapability(capability) { return true }
-        return await withTaskGroup(of: Bool.self) { group in
-            group.addTask { [self] in
-                for await isAvailable in self.observeCapability(capability).values {
-                    if isAvailable { return true }
-                }
-                return false
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return false
-            }
-            guard let result = await group.next() else {
-                group.cancelAll()
-                return false
-            }
-            group.cancelAll()
-            return result
-        }
+        await waitForCapabilities([capability], timeout: timeout)
     }
 
     // MARK: - Task Scheduling

@@ -84,8 +84,20 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     // Lookup index for O(1) cancel: taskId -> priority
     private var taskPriorityIndex: [String: TaskPriority] = [:]
 
+    // Lease index: taskId -> lease, live from schedule until terminalize.
+    // Lets cancel find a lease even while it is dequeued between queues.
+    private var leasesById: [String: Lease] = [:]
+
+    // Task IDs with a live capability waiter. One waiter per lease at a time,
+    // so the pending loop never spawns duplicate waiters for the same lease.
+    private var waitingLeases: Set<String> = []
+
     // Subject for scheduler events
     private let eventSubject = PassthroughSubject<SchedulerEvent, Never>()
+
+    /// Test-only hook fired after a lease is activated in `executeLease`.
+    /// Lets tests park a task at active deterministically instead of sleeping.
+    var onActivate: ((Lease) -> Void)?
 
     /// Events emitted by the scheduler.
     enum SchedulerEvent: Sendable {
@@ -137,6 +149,7 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
             pendingTasks[task.priority]?.append(lease)
             _pendingCount += 1
             taskPriorityIndex[task.id] = task.priority
+            leasesById[task.id] = lease
             taskExecutions[task.id] = { @Sendable in
                 await taskExecution()
                 return nil
@@ -218,47 +231,9 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     /// Cancels a pending task.
     /// - Parameter taskId: The ID of the task to cancel.
     func cancel(taskId: String) {
-        var cancelledLease: Lease?
-        var activeExpired = false
-        var expiredLease: Lease?
-        var expiredCompletion: ((Lease) -> Void)?
-
-        lock.withLock {
-            // Remove from pending queues using index
-            if let priority = taskPriorityIndex[taskId],
-               let index = pendingTasks[priority]?.firstIndex(where: { $0.task.id == taskId }) {
-                cancelledLease = pendingTasks[priority]?.remove(at: index)
-                _pendingCount -= 1
-                taskPriorityIndex.removeValue(forKey: taskId)
-            }
-
-            // Check if active and expire atomically
-            if let lease = activeLeases.removeValue(forKey: taskId) {
-                lease.expire()
-                expiredLease = lease
-                expiredCompletion = completionHandlers.removeValue(forKey: taskId)
-                activeExpired = true
-            }
-        }
-
-        // Handle active task expiration
-        if activeExpired, let lease = expiredLease {
-            eventSubject.send(.taskExpired(lease: lease))
-            expiredCompletion?(lease)
-            return
-        }
-
-        // Handle pending task expiration
-        if let lease = cancelledLease {
-            lease.expire()
-            eventSubject.send(.taskExpired(lease: lease))
-
-            // Call completion handler
-            let completion: ((Lease) -> Void)? = lock.withLock {
-                completionHandlers.removeValue(forKey: taskId)
-            }
-            completion?(lease)
-        }
+        let target: Lease? = lock.withLock { leasesById[taskId] }
+        guard let target else { return }
+        terminalize(target, applyState: { $0.expire() }, makeEvent: { .taskExpired(lease: $0) })
     }
 
     /// Returns the number of pending tasks.
@@ -275,33 +250,58 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
 
     // MARK: - Private Methods
 
-    private func failLease(_ lease: Lease) {
+    /// Single terminal path: cleanup under lock, state + event decided under
+    /// lock, `send` and completion outside the lock. Fires exactly once per
+    /// lease via the `isTerminal` guard.
+    private func terminalize(
+        _ lease: Lease,
+        applyState: (Lease) -> Void,
+        makeEvent: (Lease) -> SchedulerEvent
+    ) {
+        var completion: ((Lease) -> Void)?
+        var event: SchedulerEvent?
         lock.withLock {
+            guard !lease.isTerminal else { return }
+            if let priority = taskPriorityIndex.removeValue(forKey: lease.task.id),
+               let index = pendingTasks[priority]?.firstIndex(where: { $0.task.id == lease.task.id }) {
+                pendingTasks[priority]?.remove(at: index)
+                _pendingCount -= 1
+            }
             activeLeases.removeValue(forKey: lease.task.id)
-            let completion = completionHandlers.removeValue(forKey: lease.task.id)
-            let error = TaskExecutionError()
-            lease.fail(with: error)
-            eventSubject.send(.taskFailed(lease: lease, error: error))
-            completion?(lease)
+            leasesById.removeValue(forKey: lease.task.id)
+            taskExecutions.removeValue(forKey: lease.task.id)
+            completion = completionHandlers.removeValue(forKey: lease.task.id)
+            applyState(lease)
+            event = makeEvent(lease)
         }
+        guard let event else { return }
+        eventSubject.send(event)
+        completion?(lease)
+    }
+
+    private func failLease(_ lease: Lease) {
+        let error = TaskExecutionError()
+        terminalize(lease, applyState: { $0.fail(with: error) }, makeEvent: { .taskFailed(lease: $0, error: error) })
     }
 
     private func processPendingTasks() async {
         // Process tasks in priority order
         while true {
             guard let nextLease = dequeueNext() else { break }
+            guard !nextLease.isTerminal else { continue }
 
             // Check capability availability
             guard checkCapabilities(for: nextLease.task) else {
-                // Re-queue and wait for capabilities
-                lock.withLock {
-                    pendingTasks[nextLease.task.priority]?.append(nextLease)
-                    _pendingCount += 1
-                    taskPriorityIndex[nextLease.task.id] = nextLease.task.priority
+                // Park the lease outside the queue with a single waiter;
+                // the waiter executes or expires it when done.
+                let shouldWait: Bool = lock.withLock {
+                    if waitingLeases.contains(nextLease.task.id) { return false }
+                    waitingLeases.insert(nextLease.task.id)
+                    return true
                 }
-
-                // Wait for capabilities then retry
-                await taskStore.store(Task { await waitForCapabilitiesAndProcess(nextLease) })
+                if shouldWait {
+                    await taskStore.store(Task { await waitForCapabilitiesAndProcess(nextLease) })
+                }
                 continue
             }
 
@@ -336,16 +336,12 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     private func waitForCapabilitiesAndProcess(_ lease: Lease) async {
         // Wait for capability to be available (with timeout)
         let capabilityAvailable = await waitForCapabilitiesWithTimeout(lease.task)
+        lock.withLock { waitingLeases.remove(lease.task.id) }
+
+        guard !lease.isTerminal else { return }
 
         guard capabilityAvailable else {
-            // Timeout, expire the lease
-            lock.withLock {
-                let completion = completionHandlers.removeValue(forKey: lease.task.id)
-                taskExecutions.removeValue(forKey: lease.task.id)
-                lease.expire()
-                eventSubject.send(.taskExpired(lease: lease))
-                completion?(lease)
-            }
+            terminalize(lease, applyState: { $0.expire() }, makeEvent: { .taskExpired(lease: $0) })
             return
         }
 
@@ -356,38 +352,56 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
     /// Waits for capabilities to become available with a timeout.
     /// - Returns: `true` if all capabilities are available, `false` if timeout.
     private func waitForCapabilitiesWithTimeout(_ task: TaskDescriptor) async -> Bool {
-        if checkCapabilities(for: task) { return true }
-        for cap in task.requiredCapabilities {
-            guard await store.waitForCapability(cap, timeout: task.timeout) else { return false }
-        }
-        return checkCapabilities(for: task)
+        await store.waitForCapabilities(task.requiredCapabilities, timeout: task.timeout)
     }
 
+    /// Sole production activator: every prod path to `active` goes through here
+    /// (wait via the shared waiter, terminal via `terminalize`).
+    /// Tests may still call `Lease.activate()` directly.
     private func executeLease(_ lease: Lease) async {
-        // Check if capability is available
         guard checkCapabilities(for: lease.task) else {
             failLease(lease)
             return
         }
 
-        // Acquire concurrency slot
+        await withSlot(for: lease) {
+            await self.runActivatedLease(lease)
+        }
+    }
+
+    /// Scoped concurrency slot: acquire, re-check capability, activate, and
+    /// always release on scope exit so no path can leak or double-release.
+    func withSlot(for lease: Lease, operation: @escaping () async -> Void) async {
         await concurrencyController.acquire(for: lease.task)
+        defer {
+            Task { [concurrencyController, task = lease.task] in
+                await concurrencyController.release(for: task)
+            }
+        }
 
-        // Re-check capabilities after acquiring slot (capability may have been revoked)
+        guard !lease.isTerminal else { return }
         guard checkCapabilities(for: lease.task) else {
-            await concurrencyController.release(for: lease.task)
             failLease(lease)
             return
         }
 
-        // Activate lease
         lease.activate()
         lock.withLock {
             activeLeases[lease.task.id] = lease
         }
 
         eventSubject.send(.taskStarted(lease: lease))
+        onActivate?(lease)
 
+        await operation()
+    }
+
+    /// Current concurrency utilization. Exposed for tests to assert slot balance.
+    func concurrencyStats() async -> ConcurrencyController.Stats {
+        await concurrencyController.stats()
+    }
+
+    private func runActivatedLease(_ lease: Lease) async {
         // Get the task execution closure
         let taskExecution: (@Sendable () async -> Any?)? = lock.withLock {
             taskExecutions.removeValue(forKey: lease.task.id)
@@ -415,25 +429,18 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
             return result
         }
 
-        // Complete lease
-        let completion: ((Lease) -> Void)? = lock.withLock {
-            activeLeases.removeValue(forKey: lease.task.id)
-            return completionHandlers.removeValue(forKey: lease.task.id)
-        }
-
-        await concurrencyController.release(for: lease.task)
-
+        // Complete lease (slot is released by `withSlot` on scope exit)
         if let result = result?.value {
-            lease.complete(with: result)
-            eventSubject.send(.taskCompleted(lease: lease))
+            terminalize(lease, applyState: { $0.complete(with: result) }, makeEvent: { .taskCompleted(lease: $0) })
         } else {
-            // Check if it was a timeout or retryable failure
             if lease.hasExpired {
-                lease.expire()
-                eventSubject.send(.taskExpired(lease: lease))
+                terminalize(lease, applyState: { $0.expire() }, makeEvent: { .taskExpired(lease: $0) })
             } else if lease.retry() {
                 eventSubject.send(.taskRetried(lease: lease, attempt: lease.retryCount))
                 lock.withLock {
+                    activeLeases.removeValue(forKey: lease.task.id)
+                    completionHandlers.removeValue(forKey: lease.task.id)
+                    taskExecutions.removeValue(forKey: lease.task.id)
                     pendingTasks[lease.task.priority]?.append(lease)
                     _pendingCount += 1
                     taskPriorityIndex[lease.task.id] = lease.task.priority
@@ -442,11 +449,35 @@ final class TaskScheduler: TaskSchedulerProtocol, @unchecked Sendable {
                 return
             } else {
                 let error = TaskExecutionError()
-                lease.fail(with: error)
-                eventSubject.send(.taskFailed(lease: lease, error: error))
+                terminalize(lease, applyState: { $0.fail(with: error) }, makeEvent: { .taskFailed(lease: $0, error: error) })
             }
         }
+    }
+}
 
-        completion?(lease)
+/// Single capability waiter owned by the Tasks module: one deadline shared by
+/// the whole set. `DynamicStore.waitForCapability` delegates here.
+extension DynamicStore {
+    func waitForCapabilities(_ capabilities: Set<Capability>, timeout: TimeInterval) async -> Bool {
+        if capabilities.isEmpty { return true }
+        if capabilities.allSatisfy({ queryCapability($0) }) { return true }
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask { [self] in
+                for await _ in self.observeAllCapabilities().values {
+                    if capabilities.allSatisfy({ self.queryCapability($0) }) { return true }
+                }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
+            }
+            guard let result = await group.next() else {
+                group.cancelAll()
+                return false
+            }
+            group.cancelAll()
+            return result
+        }
     }
 }

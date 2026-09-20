@@ -39,10 +39,10 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
-        let caps = capabilities.map { Capability(rawValue: $0) }
+        let caps = capabilities.map { ObjcMapper.capability(from: $0) }
         self.underlying = TaskDescriptor(
             requiredCapabilities: Set(caps),
-            priority: TaskPriority(rawValue: priority) ?? .normal,
+            priority: ObjcMapper.taskPriority(from: priority),
             timeout: timeout,
             maxRetries: maxRetries,
             metadata: metadata

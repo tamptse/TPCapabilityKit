@@ -3,9 +3,7 @@ import TPCapabilityKit
 
 /// Objective-C wrapper for Lease.
 ///
-/// - Important: This wrapper captures a snapshot of the lease state at creation time.
-///   If the underlying lease changes state after creation, call `refresh()` to sync.
-///   Alternatively, access the `underlying` property for the live lease object.
+/// Reads live state from the underlying lease; no manual sync needed.
 @objc(TPLease)
 public final class ObjcLease: NSObject, @unchecked Sendable {
     /// Lease state for ObjC consumers.
@@ -20,11 +18,15 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
     /// Task identifier this lease is for.
     @objc public let taskId: String
 
-    /// Current state of the lease.
-    @objc public private(set) var state: State
+    /// Current state of the lease, read live from the underlying lease.
+    @objc public var state: State {
+        State(rawValue: underlying.state.rawValue) ?? .pending
+    }
 
     /// The result of the task execution, if completed successfully.
-    @objc public private(set) var result: Any?
+    @objc public var result: Any? {
+        underlying.result
+    }
 
     /// The underlying Swift Lease.
     public let underlying: Lease
@@ -32,15 +34,10 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
     internal init(underlying: Lease) {
         self.underlying = underlying
         self.taskId = underlying.task.id
-        self.state = State(rawValue: underlying.state.rawValue) ?? .pending
-        self.result = underlying.result
         super.init()
     }
 
-    /// Refreshes cached state from the underlying lease.
-    /// Call this after the underlying lease may have changed state.
-    @objc public func refresh() {
-        state = State(rawValue: underlying.state.rawValue) ?? .pending
-        result = underlying.result
-    }
+    /// No-op kept for compatibility. State is live and needs no sync.
+    @available(*, deprecated, message: "ObjcLease reads live state; refresh() is a no-op.")
+    @objc public func refresh() {}
 }

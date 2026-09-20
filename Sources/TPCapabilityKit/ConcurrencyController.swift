@@ -20,7 +20,7 @@ actor ConcurrencyController {
 
     /// Acquires a slot for the given task. Suspends if no slots available.
     /// - Parameter task: The task descriptor to acquire a slot for.
-    func acquire(for task: TaskDescriptor) async {
+    internal func acquire(for task: TaskDescriptor) async {
         // Check if we can acquire immediately
         if canAcquire(for: task) {
             incrementSlots(for: task)
@@ -38,7 +38,7 @@ actor ConcurrencyController {
 
     /// Releases the slot for the given task.
     /// - Parameter task: The task descriptor to release the slot for.
-    func release(for task: TaskDescriptor) {
+    internal func release(for task: TaskDescriptor) {
         decrementSlots(for: task)
 
         // Wake up only one waiting continuation (FIFO order)
@@ -54,7 +54,8 @@ actor ConcurrencyController {
         Stats(
             globalActive: globalSlots,
             globalMax: maxGlobal,
-            perCapability: capabilitySlots
+            perCapability: capabilitySlots,
+            waitingCount: waitingContinuations.count
         )
     }
 
@@ -95,5 +96,6 @@ actor ConcurrencyController {
         let globalActive: Int
         let globalMax: Int?
         let perCapability: [Capability: Int]
+        let waitingCount: Int
     }
 }

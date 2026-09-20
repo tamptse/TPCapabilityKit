@@ -254,4 +254,27 @@ struct TPCapabilityKitCapabilityTests {
         store.unregisterCapability(for: pluginId)
         cancellables.removeAll()
     }
+
+    @Test func reentrantSubscriberQueriesBackWithoutDeadlock() {
+        let store = DynamicStore()
+        let pluginId = "Reentrant_\(UUID().uuidString)"
+        let cap = Capability.custom("reentrant_\(UUID().uuidString)")
+        var received: [Bool] = []
+        var queried: [Bool] = []
+        var cancellables = Set<AnyCancellable>()
+
+        store.observeCapability(cap)
+            .sink { value in
+                received.append(value)
+                queried.append(store.queryCapability(cap))
+            }
+            .store(in: &cancellables)
+
+        store.registerCapability(for: pluginId, capabilities: [cap])
+        store.unregisterCapability(for: pluginId)
+
+        #expect(received == [false, true, false])
+        #expect(queried == [false, true, false])
+        cancellables.removeAll()
+    }
 }

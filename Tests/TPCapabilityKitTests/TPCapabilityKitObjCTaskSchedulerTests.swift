@@ -91,21 +91,17 @@ struct ObjcLeaseTests {
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
         let lease = Lease(task: task)
         let objcLease = ObjcLease(underlying: lease)
-        
-        // Initial state
+
         #expect(objcLease.state == .pending)
-        
-        // Activate underlying lease
+
         lease.activate()
-        
-        // ObjcLease still shows pending (snapshot)
-        #expect(objcLease.state == .pending)
-        
-        // Refresh from underlying
-        objcLease.refresh()
-        
-        // Now shows active
+
         #expect(objcLease.state == .active)
+
+        lease.complete(with: "result")
+
+        #expect(objcLease.state == .completed)
+        #expect(objcLease.result as? String == "result")
     }
 }
 

@@ -2,6 +2,17 @@ import Combine
 @preconcurrency import Foundation
 import TPCapabilityKit
 
+/// Single mapping point between Objective-C primitives and Swift domain types.
+enum ObjcMapper {
+    static func capability(from string: String) -> Capability {
+        Capability(rawValue: string)
+    }
+
+    static func taskPriority(from rawValue: Int) -> TaskPriority {
+        TaskPriority(rawValue: rawValue) ?? .normal
+    }
+}
+
 /// Objective-C singleton bridge exposing `DynamicStore` functionality to Objective-C modules.
 @objc(TPStoreBridge)
 public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
@@ -22,7 +33,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// Registers an Objective-C plugin into the store via an internal adapter.
     /// - Parameter plugin: Objective-C plugin conforming to `ObjcAppPlugin`.
     @objc public func register(plugin: ObjcAppPlugin) {
-        let adapter = PluginObjcAdapter(objcPlugin: plugin)
+        let adapter = PluginObjcAdapter(objcPlugin: plugin, bridge: self)
         store.register(plugin: adapter)
     }
 
@@ -67,8 +78,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// - Parameter capability: Capability string identifier.
     /// - Returns: `true` if at least one plugin provides the capability.
     @objc public func queryCapability(_ capability: String) -> Bool {
-        let cap = Capability(rawValue: capability)
-        return store.queryCapability(cap)
+        store.queryCapability(ObjcMapper.capability(from: capability))
     }
 
     /// Subscribes to capability availability updates, delivering callbacks on the specified queue.
@@ -83,7 +93,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
         let targetQueue = queue ?? .main
-        let cap = Capability(rawValue: capability)
+        let cap = ObjcMapper.capability(from: capability)
         let cancellable = store.observeCapability(cap)
             .receive(on: targetQueue)
             .sink { observer($0) }
@@ -101,8 +111,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        let cap = Capability(rawValue: capability)
-        guard store.queryCapability(cap) else { return nil }
+        guard store.queryCapability(ObjcMapper.capability(from: capability)) else { return nil }
         return task()
     }
 
@@ -122,27 +131,17 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         completion: @escaping (NSObject?) -> Void
     ) {
         let targetQueue = queue ?? .main
-        let cap = Capability(rawValue: capability)
-        let box = ObserverBox()
-        
-        // Subscribe to capability, run task when available
-        box.cancellable = store.observeCapability(cap)
-            .receive(on: targetQueue)
-            .sink { [weak self] isAvailable in
-                guard isAvailable, let self = self, box.isActive else { return }
-                box.deactivate()
-                let result = self.runTask(capability: capability, task: task)
-                completion(result)
+        let cap = ObjcMapper.capability(from: capability)
+        let taskBox = ObjcCallbackBox(task)
+        let completionBox = ObjcCallbackBox(completion)
+        Task {
+            let result: NSObject? = try? await store.runTaskWhenAvailable(capability: cap, timeout: timeout) {
+                taskBox.value()
             }
-        
-        // Timeout
-        let timeoutWorkItem = DispatchWorkItem {
-            guard box.isActive else { return }
-            box.deactivate()
-            completion(nil)
+            targetQueue.async {
+                completionBox.value(result)
+            }
         }
-        box.timeoutItem = timeoutWorkItem
-        targetQueue.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
     }
 
     // MARK: - Task Scheduling APIs
@@ -163,14 +162,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         task: @escaping @Sendable () -> Void,
         completion: (@Sendable (ObjcLease) -> Void)? = nil
     ) -> ObjcLease {
-        let lease = store.scheduleTask(
-            descriptor.underlying,
-            task: { task() },
-            completion: completion.map { handler in
-                { lease in handler(ObjcLease(underlying: lease)) }
-            }
-        )
-        return ObjcLease(underlying: lease)
+        taskScheduler.schedule(descriptor, task: task, completion: completion)
     }
 
     /// Schedules a task and waits for result via completion handler.
@@ -179,73 +171,44 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         task: @escaping @Sendable () -> NSObject,
         completion: @escaping @Sendable (NSObject?) -> Void
     ) {
-        Task {
-            let result = await store.scheduleTaskAndWait(
-                descriptor.underlying
-            ) {
-                task() as NSObject
-            }
-            completion(result)
-        }
+        taskScheduler.scheduleAndWait(descriptor, task: task, completion: completion)
     }
 
     /// Cancels a pending task.
     @objc public func cancelTask(taskId: String) {
-        store.cancelTask(taskId: taskId)
+        taskScheduler.cancel(taskId: taskId)
     }
 
     /// Returns number of pending tasks.
     @objc public var pendingTaskCount: Int {
-        store.pendingTaskCount
+        taskScheduler.pendingCount
     }
 
     /// Returns number of active tasks.
     @objc public var activeTaskCount: Int {
-        store.activeTaskCount
+        taskScheduler.activeCount
     }
 
+}
+
+/// @unchecked Sendable box for passing non-Sendable ObjC closures into Tasks.
+private final class ObjcCallbackBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
 
 internal final class PluginObjcAdapter: AppPlugin {
     let id: String
     private let objcPlugin: ObjcAppPlugin
+    private let bridge: ObjcStoreBridge
 
-    init(objcPlugin: ObjcAppPlugin) {
+    init(objcPlugin: ObjcAppPlugin, bridge: ObjcStoreBridge) {
         self.id = objcPlugin.id
         self.objcPlugin = objcPlugin
+        self.bridge = bridge
     }
 
     func start(with store: DynamicStore) {
-        let bridge = ObjcStoreBridge(store: store)
         objcPlugin.start(with: bridge)
-    }
-}
-
-/// Holds cancellable and timeout for runTaskWhenAvailable.
-private final class ObserverBox {
-    var cancellable: AnyCancellable?
-    var timeoutItem: DispatchWorkItem?
-    private let lock = NSLock()
-    private var _active = true
-    
-    var isActive: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return _active
-    }
-    
-    func deactivate() {
-        lock.lock()
-        let wasActive = _active
-        _active = false
-        let cancellableToCancel = cancellable
-        let timeoutToCancel = timeoutItem
-        cancellable = nil
-        timeoutItem = nil
-        lock.unlock()
-        
-        guard wasActive else { return }
-        cancellableToCancel?.cancel()
-        timeoutToCancel?.cancel()
     }
 }
