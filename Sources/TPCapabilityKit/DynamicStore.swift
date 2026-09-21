@@ -5,7 +5,7 @@ import Foundation
 /// Provides both state management and capability registry functionality.
 ///
 /// ## Thread Safety
-/// - Single `lock` protects all mutable state (stateSubjects, capabilities, capabilityIndex, capabilitySubjects)
+/// - Single `lock` protects all mutable state (stateSubjects, registry)
 /// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
 /// ## Debug Logging
@@ -23,11 +23,8 @@ public final class DynamicStore: @unchecked Sendable {
 
     // MARK: - Mutable State (all protected by single `lock`)
     private var stateSubjects: [String: CurrentValueSubject<Any?, Never>] = [:]
-    private var capabilities: [String: Set<Capability>] = [:]
-    private var capabilityIndex: [Capability: Set<String>] = [:]  // Reverse index for O(1) queries
-    private var capabilitySubjects: [Capability: CurrentValueSubject<Bool, Never>] = [:]  // Per-capability subjects
+    private let registry = CapabilityRegistry()
     private let lock = NSLock()
-    private let capabilitySubject = CurrentValueSubject<[String: Set<Capability>], Never>([:])
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
@@ -55,35 +52,6 @@ public final class DynamicStore: @unchecked Sendable {
             let subject = CurrentValueSubject<Any?, Never>(nil)
             stateSubjects[pluginId] = subject
             return subject
-        }
-    }
-
-    /// Cleans up reverse index entry and per-capability subject when no providers remain.
-    /// Queues a `false` notification; the caller sends it after unlocking.
-    ///
-    /// Must be called after removing a pluginId from capabilityIndex[cap], while holding `lock`.
-    private func cleanupCapabilityIfEmpty(
-        _ cap: Capability,
-        pending: inout [(CurrentValueSubject<Bool, Never>, Bool)]
-    ) {
-        if capabilityIndex[cap]?.isEmpty == true {
-            capabilityIndex.removeValue(forKey: cap)
-            if let subject = capabilitySubjects.removeValue(forKey: cap) {
-                pending.append((subject, false))
-            }
-        }
-    }
-
-    /// Removes a plugin's capabilities from the reverse index and cleans up empty entries.
-    /// Must be called while holding `lock`.
-    private func removeCapabilities(
-        for pluginId: String,
-        pending: inout [(CurrentValueSubject<Bool, Never>, Bool)]
-    ) {
-        guard let oldCapabilities = capabilities[pluginId] else { return }
-        for cap in oldCapabilities {
-            capabilityIndex[cap]?.remove(pluginId)
-            cleanupCapabilityIfEmpty(cap, pending: &pending)
         }
     }
 
@@ -181,44 +149,26 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - capabilities: Set of capabilities the plugin provides.
     func registerCapability(for pluginId: String, capabilities: Set<Capability>) {
         guard validatePluginId(pluginId) else { return }
-        var pending: [(CurrentValueSubject<Bool, Never>, Bool)] = []
-        var snapshot: [String: Set<Capability>] = [:]
-        lock.withLock {
-            removeCapabilities(for: pluginId, pending: &pending)
-
-            // Add new capabilities
-            self.capabilities[pluginId] = capabilities
-            for cap in capabilities {
-                capabilityIndex[cap, default: []].insert(pluginId)
-                if let subject = capabilitySubjects[cap] {
-                    pending.append((subject, true))
-                }
-            }
-
-            snapshot = self.capabilities
+        let mutation: CapabilityRegistry.MutationResult = lock.withLock {
+            registry.register(for: pluginId, capabilities: capabilities)
         }
-        for (subject, value) in pending {
+        for (subject, value) in mutation.notifications {
             subject.send(value)
         }
-        capabilitySubject.send(snapshot)
+        registry.publish(snapshot: mutation.snapshot)
     }
 
     /// Unregisters all capabilities for a plugin identifier.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     func unregisterCapability(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
-        var pending: [(CurrentValueSubject<Bool, Never>, Bool)] = []
-        var snapshot: [String: Set<Capability>] = [:]
-        lock.withLock {
-            removeCapabilities(for: pluginId, pending: &pending)
-
-            self.capabilities.removeValue(forKey: pluginId)
-            snapshot = self.capabilities
+        let mutation: CapabilityRegistry.MutationResult = lock.withLock {
+            registry.unregister(for: pluginId)
         }
-        for (subject, value) in pending {
+        for (subject, value) in mutation.notifications {
             subject.send(value)
         }
-        capabilitySubject.send(snapshot)
+        registry.publish(snapshot: mutation.snapshot)
     }
 
     /// Queries whether any registered plugin provides the specified capability.
@@ -226,7 +176,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: `true` if at least one plugin provides the capability.
     public func queryCapability(_ capability: Capability) -> Bool {
         lock.withLock {
-            return capabilityIndex[capability]?.isEmpty == false
+            registry.query(capability)
         }
     }
 
@@ -236,7 +186,7 @@ public final class DynamicStore: @unchecked Sendable {
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
         guard validatePluginId(pluginId) else { return [] }
         return lock.withLock {
-            capabilities[pluginId] ?? []
+            registry.queryCapabilities(for: pluginId)
         }
     }
 
@@ -244,7 +194,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: Dictionary mapping plugin IDs to their capabilities.
     func queryAllCapabilities() -> [String: Set<Capability>] {
         lock.withLock {
-            return capabilities
+            registry.queryAll()
         }
     }
 
@@ -255,25 +205,16 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Note: Values are delivered synchronously on the writer's thread with no
     ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeCapability(_ capability: Capability) -> AnyPublisher<Bool, Never> {
-        let subject: CurrentValueSubject<Bool, Never> = lock.withLock {
-            if let existing = capabilitySubjects[capability] {
-                return existing
-            } else {
-                let initialValue = capabilityIndex[capability]?.isEmpty == false
-                let subject = CurrentValueSubject<Bool, Never>(initialValue)
-                capabilitySubjects[capability] = subject
-                return subject
-            }
+        lock.withLock {
+            registry.observe(capability)
         }
-        
-        return subject.eraseToAnyPublisher()
     }
 
     /// Reactively observes capabilities changes across all plugins.
     /// For the Tasks waiter; UI-style subscribers prefer per-Capability observation.
     /// - Returns: A publisher emitting the full capabilities dictionary on each change.
     func observeAllCapabilities() -> AnyPublisher<[String: Set<Capability>], Never> {
-        capabilitySubject.eraseToAnyPublisher()
+        registry.observeAll()
     }
 
     // MARK: - Task Execution
