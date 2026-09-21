@@ -35,7 +35,7 @@ private final class OneShot<T>: @unchecked Sendable {
 ///
 /// Inspired by Meta's Jupiter (capability matching) and Async (priority dispatching).
 /// - Important: `@unchecked Sendable` is intentional — all mutable state
-///   (`pendingTasks`, `activeLeases`, `taskExecutions`, `completionHandlers`,
+///   (`pendingQueue`, `activeLeases`, `taskExecutions`, `completionHandlers`,
 ///   `parkedWaiters`) is protected by `lock`. Parked capability waiters are
 ///   tracked per lease and cancelled on terminal settlement. Do not add
 ///   unsynchronized mutable state.
@@ -67,28 +67,13 @@ public final class TaskScheduler: @unchecked Sendable {
         task.timeout ?? configuration.defaultTimeout
     }
 
-    private var pendingTasks: [TaskPriority: [Lease]] = [
-        .critical: [],
-        .high: [],
-        .normal: [],
-        .low: [],
-        .background: []
-    ]
+    private var pendingQueue = PendingQueue()
 
     private var activeLeases: [String: Lease] = [:]
 
     private var taskExecutions: [String: @Sendable () async -> Any?] = [:]
 
     private var completionHandlers: [String: (Lease) -> Void] = [:]
-
-    // Cached pending count for O(1) access
-    private var _pendingCount: Int = 0
-
-    // Lookup index for O(1) cancel: taskId -> priority
-    private var taskPriorityIndex: [String: TaskPriority] = [:]
-
-    // Lets cancel find a lease even while it is dequeued between queues.
-    private var leasesById: [String: Lease] = [:]
 
     // One waiter per lease at a time, so the pending loop never spawns duplicates.
     private var waitingLeases: Set<String> = []
@@ -155,10 +140,7 @@ public final class TaskScheduler: @unchecked Sendable {
         let lease = Lease(task: task)
 
         lock.withLock {
-            pendingTasks[task.priority]?.append(lease)
-            _pendingCount += 1
-            taskPriorityIndex[task.id] = task.priority
-            leasesById[task.id] = lease
+            pendingQueue.enqueue(lease)
             taskExecutions[task.id] = execution
             if let completion {
                 completionHandlers[task.id] = completion
@@ -221,14 +203,14 @@ public final class TaskScheduler: @unchecked Sendable {
     /// Cancels a pending task.
     /// - Parameter taskId: The ID of the task to cancel.
     func cancel(taskId: String) {
-        let target: Lease? = lock.withLock { leasesById[taskId] }
+        let target: Lease? = lock.withLock { pendingQueue.lease(taskId: taskId) }
         guard let target else { return }
         settle(target, as: .cancelled)
     }
 
     /// Returns the number of pending tasks.
     var pendingCount: Int {
-        lock.withLock { _pendingCount }
+        lock.withLock { pendingQueue.count }
     }
 
     /// Returns the number of active tasks.
@@ -294,9 +276,7 @@ public final class TaskScheduler: @unchecked Sendable {
                 if let execution {
                     taskExecutions[lease.task.id] = execution
                 }
-                pendingTasks[lease.task.priority]?.append(lease)
-                _pendingCount += 1
-                taskPriorityIndex[lease.task.id] = lease.task.priority
+                pendingQueue.requeue(lease)
                 retried = true
             }
         }
@@ -325,13 +305,8 @@ public final class TaskScheduler: @unchecked Sendable {
         var waiterToCancel: Task<Void, Never>?
         lock.withLock {
             guard !lease.isTerminal else { return }
-            if let priority = taskPriorityIndex.removeValue(forKey: lease.task.id),
-               let index = pendingTasks[priority]?.firstIndex(where: { $0.task.id == lease.task.id }) {
-                pendingTasks[priority]?.remove(at: index)
-                _pendingCount -= 1
-            }
+            _ = pendingQueue.remove(taskId: lease.task.id)
             activeLeases.removeValue(forKey: lease.task.id)
-            leasesById.removeValue(forKey: lease.task.id)
             deadlines.removeValue(forKey: lease.task.id)
             waitingLeases.remove(lease.task.id)
             waiterToCancel = parkedWaiters.removeValue(forKey: lease.task.id)
@@ -392,17 +367,7 @@ public final class TaskScheduler: @unchecked Sendable {
 
     private func dequeueNext() -> Lease? {
         lock.withLock {
-            // Find highest priority non-empty queue
-            for priority in [TaskPriority.critical, .high, .normal, .low, .background] {
-                if var queue = pendingTasks[priority], !queue.isEmpty {
-                    let lease = queue.removeFirst()
-                    pendingTasks[priority] = queue
-                    _pendingCount -= 1
-                    taskPriorityIndex.removeValue(forKey: lease.task.id)
-                    return lease
-                }
-            }
-            return nil
+            pendingQueue.dequeue()
         }
     }
 
