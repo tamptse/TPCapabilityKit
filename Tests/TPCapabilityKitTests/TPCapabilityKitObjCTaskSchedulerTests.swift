@@ -23,8 +23,8 @@ struct ObjcTaskDescriptorTests {
             maxRetries: 3,
             metadata: ["source": "test"]
         )
-        
-        #expect(descriptor.capabilities == ["networkAccess", "backgroundExecution"])
+
+        #expect(Set(descriptor.capabilities) == Set(["networkAccess", "backgroundExecution"]))
         #expect(descriptor.priority == 4)
         #expect(descriptor.timeout == 60.0)
         #expect(descriptor.maxRetries == 3)
@@ -45,6 +45,44 @@ struct ObjcTaskDescriptorTests {
 
         let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: -1)
         #expect(negative.underlying.priority == .normal)
+    }
+
+    @Test func outOfRangePriorityReadBackIsCoerced() {
+        let tooHigh = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: 99)
+        #expect(tooHigh.priority == TaskPriority.normal.rawValue)
+        #expect(tooHigh.priority == tooHigh.underlying.priority.rawValue)
+
+        let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: -1)
+        #expect(negative.priority == TaskPriority.normal.rawValue)
+        #expect(negative.priority == negative.underlying.priority.rawValue)
+    }
+
+    @Test func defaultTimeoutTracksConfiguration() {
+        let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"])
+        #expect(descriptor.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(descriptor.timeout == (descriptor.underlying.timeout ?? TaskScheduler.Configuration.default.defaultTimeout))
+
+        let nilTimeout = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: nil)
+        let wrapped = ObjcTaskDescriptor(underlying: nilTimeout)
+        #expect(wrapped.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+    }
+
+    @Test func explicitValuesRoundTrip() {
+        let descriptor = ObjcTaskDescriptor(
+            capabilities: ["networkAccess", "backgroundExecution"],
+            priority: 4,
+            timeout: 60.0,
+            maxRetries: 3,
+            metadata: ["source": "test"]
+        )
+
+        #expect(Set(descriptor.capabilities) == Set(["networkAccess", "backgroundExecution"]))
+        #expect(descriptor.priority == TaskPriority.critical.rawValue)
+        #expect(descriptor.timeout == 60.0)
+        #expect(descriptor.maxRetries == 3)
+        #expect(descriptor.metadata == ["source": "test"])
+        #expect(descriptor.id == descriptor.underlying.id)
+        #expect(descriptor.priority == descriptor.underlying.priority.rawValue)
     }
 }
 

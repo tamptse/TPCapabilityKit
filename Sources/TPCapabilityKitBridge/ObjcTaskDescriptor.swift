@@ -4,23 +4,21 @@ import TPCapabilityKit
 /// Objective-C wrapper for TaskDescriptor.
 @objc(TPTaskDescriptor)
 public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
-    /// Unique identifier for this task.
-    @objc public let id: String
+    @objc public var id: String { underlying.id }
 
-    /// Priority level (TaskPriority.rawValue).
-    @objc public let priority: Int
+    @objc public var priority: Int { underlying.priority.rawValue }
 
-    /// Maximum time in seconds the task can run.
-    @objc public let timeout: TimeInterval
+    @objc public var timeout: TimeInterval {
+        underlying.timeout ?? TaskScheduler.Configuration.default.defaultTimeout
+    }
 
-    /// Maximum number of retry attempts.
-    @objc public let maxRetries: Int
+    @objc public var maxRetries: Int { underlying.maxRetries }
 
-    /// Capabilities required to execute this task.
-    @objc public let capabilities: [String]
+    @objc public var capabilities: [String] {
+        underlying.requiredCapabilities.map { $0.rawValue }
+    }
 
-    /// Metadata for debugging or custom logic.
-    @objc public let metadata: [String: String]
+    @objc public var metadata: [String: String] { underlying.metadata }
 
     /// The underlying Swift TaskDescriptor.
     public let underlying: TaskDescriptor
@@ -30,13 +28,13 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
     ///     Out-of-range values coerce to normal (see `ObjcMapper.taskPriority`).
-    ///   - timeout: Maximum execution time in seconds. Default is 30.0.
+    ///   - timeout: Maximum execution time in seconds. Defaults to the scheduler Configuration default.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
     @objc public init(
         capabilities: [String],
         priority: Int = 2,
-        timeout: TimeInterval = 30.0,
+        timeout: TimeInterval = TaskScheduler.Configuration.default.defaultTimeout,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
@@ -48,23 +46,11 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
             maxRetries: maxRetries,
             metadata: metadata
         )
-        self.id = underlying.id
-        self.priority = priority
-        self.timeout = timeout
-        self.maxRetries = maxRetries
-        self.capabilities = capabilities
-        self.metadata = metadata
         super.init()
     }
 
     internal init(underlying: TaskDescriptor) {
         self.underlying = underlying
-        self.id = underlying.id
-        self.priority = underlying.priority.rawValue
-        self.timeout = underlying.timeout ?? 30.0
-        self.maxRetries = underlying.maxRetries
-        self.capabilities = underlying.requiredCapabilities.map { $0.rawValue }
-        self.metadata = underlying.metadata
         super.init()
     }
 }
