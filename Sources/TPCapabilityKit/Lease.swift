@@ -1,6 +1,16 @@
 import Foundation
 
 /// Lifecycle tracker for scheduled tasks.
+///
+/// Transition contract (Lease records, Settlement decides — see `TaskScheduler`):
+/// - pending → active via `activate()`.
+/// - active → completed via `complete(with:)`; active → failed via `fail(with:)`.
+/// - Any non-terminal (pending, active) → expired via `expire()`; terminal
+///   states reject `activate`/`complete`/`fail`/`expire` as no-ops.
+/// - `beginRetry()` resets to pending with cleared result and `retryCount + 1`.
+/// Only `expire()` accepts pending: cancel-of-pending settles through the same
+/// expired path (`TaskScheduler.settle(_:as:)` → `terminalize`), so
+/// `complete`/`fail` staying active-only is intentional, not a missing case.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
 ///   (`activate`, `complete`, `fail`, `expire`, `beginRetry`) are `internal`
 ///   and only called by `TaskScheduler` which coordinates access via its
@@ -56,6 +66,7 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Marks the lease as active (task started executing).
+    /// Legal only from pending; all other states are no-ops per the contract above.
     func activate() {
         guard isPending else { return }
         state = .active
@@ -63,6 +74,7 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Marks the lease as completed with a result.
+    /// Legal only from active; pending and terminal states are no-ops per the contract above.
     func complete(with result: Any?) {
         guard isActive else { return }
         self.result = result
@@ -71,6 +83,7 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Marks the lease as failed with an error.
+    /// Legal only from active; pending and terminal states are no-ops per the contract above.
     func fail(with error: Error) {
         guard isActive else { return }
         state = .failed(error)
@@ -78,6 +91,8 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Marks the lease as expired (timeout reached).
+    /// Legal from any non-terminal state; terminal states are no-ops.
+    /// Pending is accepted here so cancel-of-pending can settle via Settlement.
     func expire() {
         guard !isTerminal else { return }
         state = .expired
@@ -92,6 +107,7 @@ public final class Lease: @unchecked Sendable {
 
     /// Resets to pending for another attempt and consumes one retry.
     /// Infallible primitive; callers check `canRetry` before calling.
+    /// Clears `result`, `activatedAt`, and `completedAt` per the contract above.
     func beginRetry() {
         retryCount += 1
         state = .pending

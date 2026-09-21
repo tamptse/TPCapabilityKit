@@ -282,6 +282,8 @@ public final class TaskScheduler: @unchecked Sendable {
         settle(lease, as: .failed)
     }
 
+    /// Retry path: guards `isTerminal`/`canRetry`, then `beginRetry()` resets to pending.
+    /// See the Lease transition contract for the legal graph.
     private func requeueForRetry(_ lease: Lease, execution: (@Sendable () async -> Any?)?) -> Bool {
         var slotToRelease: ConcurrencyController.Slot?
         var retried = false
@@ -313,6 +315,8 @@ public final class TaskScheduler: @unchecked Sendable {
     /// Single terminal path: cleanup under lock, state + event decided under
     /// lock, `send` and completion outside the lock. Fires exactly once per
     /// lease via the `isTerminal` guard.
+    /// See the Lease transition contract for the legal graph; cancel-of-pending
+    /// settles here via `expire()`, the only terminal move accepting pending.
     private func terminalize(
         _ lease: Lease,
         applyState: (Lease) -> Void,
