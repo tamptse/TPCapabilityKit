@@ -67,6 +67,25 @@ public final class TaskScheduler: @unchecked Sendable {
         task.timeout ?? configuration.defaultTimeout
     }
 
+    private func raceAgainstTimeout(
+        timeout: TimeInterval,
+        operation: @Sendable @escaping () async -> Bool
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask(operation: operation)
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
+            }
+            guard let first = await group.next() else {
+                group.cancelAll()
+                return false
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
     private var pendingQueue = PendingQueue()
 
     private var activeLeases: [String: Lease] = [:]
@@ -406,23 +425,11 @@ public final class TaskScheduler: @unchecked Sendable {
         guard let store else { return false }
         if capabilities.isEmpty { return true }
         if capabilities.allSatisfy({ store.queryCapability($0) }) { return true }
-        return await withTaskGroup(of: Bool.self) { group in
-            group.addTask { [store] in
-                for await _ in store.observeAllCapabilities().values {
-                    if capabilities.allSatisfy({ store.queryCapability($0) }) { return true }
-                }
-                return false
+        return await raceAgainstTimeout(timeout: timeout) { [store, capabilities] in
+            for await _ in store.observeAllCapabilities().values {
+                if capabilities.allSatisfy({ store.queryCapability($0) }) { return true }
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return false
-            }
-            guard let result = await group.next() else {
-                group.cancelAll()
-                return false
-            }
-            group.cancelAll()
-            return result
+            return false
         }
     }
 
@@ -473,24 +480,10 @@ public final class TaskScheduler: @unchecked Sendable {
         }
 
         let box = OneShot<Any?>()
-        let executedFirst = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { @Sendable in
-                let value = await taskExecution?()
-                box.store(value)
-                return true
-            }
-
-            group.addTask { @Sendable [lease] in
-                try? await Task.sleep(nanoseconds: UInt64(self.effectiveTimeout(for: lease.task) * 1_000_000_000))
-                return false
-            }
-
-            guard let first = await group.next() else {
-                group.cancelAll()
-                return false
-            }
-            group.cancelAll()
-            return first
+        let executedFirst = await raceAgainstTimeout(timeout: effectiveTimeout(for: lease.task)) {
+            let value = await taskExecution?()
+            box.store(value)
+            return true
         }
 
         let value: Any? = executedFirst ? (box.load() ?? nil) : nil
