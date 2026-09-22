@@ -9,7 +9,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     @objc public var priority: Int { underlying.priority.rawValue }
 
     @objc public var timeout: TimeInterval {
-        underlying.timeout ?? TaskScheduler.Configuration.default.defaultTimeout
+        ObjcMapper.displayTimeout(for: underlying)
     }
 
     @objc public var hasExplicitTimeout: Bool { underlying.timeout != nil }
@@ -25,12 +25,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     /// The underlying Swift TaskDescriptor.
     public let underlying: TaskDescriptor
 
-    /// Creates a new task descriptor.
-    /// Timeout compat fork: an omitted ObjC timeout pins the
-    /// construction-time default as an explicit value, so existing callers
-    /// omitting timeout keep their behavior even under a non-default
-    /// scheduler Configuration. Pass a negative timeout for truly
-    /// unspecified (nil), letting the scheduler default resolve at enqueue.
+    /// Creates a new task descriptor. Timeout compat follows the single
+    /// mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
     /// - Parameters:
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
@@ -58,6 +54,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// Creates a new task descriptor with a client-chosen identifier.
     /// The identifier survives the Bridge round-trip, so cancel-by-id works from ObjC.
+    /// Timeout compat follows the single mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
     /// - Parameters:
     ///   - clientId: Client-chosen task identifier, preserved as the descriptor id.
     ///   - capabilities: Array of capability strings required.

@@ -52,10 +52,11 @@ Single terminal decision for one Lease: timeout vs result vs retry vs
 cancel, with completion delivery and waiter preservation. Owned by Tasks.
 Owns the retry budget check, the void-completion policy, and the retry
 re-queue; `enqueue` is the only queue writer conceptually, retry re-uses the
-same Lease identity through a shared re-queue path. Owns the single expiry
-clock: race outcome authoritative, timeout resolved once at enqueue.
-Owns the lease lifecycle row (place, execution, waiters) and the single
+same Lease identity through a shared re-queue path. Owns the lease lifecycle row (place, execution, waiters) and the single
 release shared by terminal, retry, and scope-exit paths.
+_Deadline_ (expiry detail): timeout resolves once at enqueue and travels with
+the Task; one Deadline module owns the single race for both the capability
+wait and the execution path, with recording behind its seam.
 
 ## Tasks (Scheduler)
 
@@ -69,8 +70,10 @@ active; order stays in the queue), the single capability waiter (one deadline pe
 across retry), and scoped slot acquisition with re-check inside.
  `executeLease` is the only prod activator. Serves every wait through one
  result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
- by task identity with owner-guarded release.
-Availability wait crosses one `wait(descriptor, timeout)` seam with an
+ by task identity with owner-guarded release. Slot hold is scoped: one
+ scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
+ scope-exit release.
+Availability wait crosses one `wait(for:deadline:)` seam with an
 injectable clock, so waiter and executor share one expiry.
 
 ## Bridge (ObjC adapter)
@@ -80,7 +83,8 @@ live view. `ObjcLease` is a live view
 of the underlying Lease. Capability/priority/state/timeout/descriptor mapping lives in one internal
 mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
  Completion delivery defaults to the main queue unless a queue is given.
-Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
-default applies at enqueue); an omitted ObjC timeout is instead the pinned
-construction-time default carried as an explicit value for compat.
+ Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
+ default applies at enqueue); an omitted ObjC timeout is instead the pinned
+ construction-time default carried as an explicit value for compat. One
+ mapper-owned resolver states the fork once.
 Immediate sync and wait-then-run agree through the one Tasks waiter.

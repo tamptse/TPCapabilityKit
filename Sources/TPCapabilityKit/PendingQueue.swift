@@ -17,10 +17,22 @@ struct PendingQueue: Sendable {
 
     init() {}
 
-    var count: Int { prioritiesById.count }
-
     mutating func enqueue(id: String, priority: TaskPriority) {
-        insertAtTail(id: id, priority: priority)
+        if let existing = prioritiesById[id] {
+            unlink(taskId: id, priority: existing)
+        }
+        prioritiesById[id] = priority
+        if let tailId = tails[priority] {
+            nextById[tailId] = id
+            prevById[id] = tailId
+            tails[priority] = id
+            nextById.removeValue(forKey: id)
+        } else {
+            heads[priority] = id
+            tails[priority] = id
+            prevById.removeValue(forKey: id)
+            nextById.removeValue(forKey: id)
+        }
     }
 
     mutating func dequeue() -> String? {
@@ -37,34 +49,12 @@ struct PendingQueue: Sendable {
         return nil
     }
 
-    mutating func requeue(id: String, priority: TaskPriority) {
-        insertAtTail(id: id, priority: priority)
-    }
-
     @discardableResult
     mutating func remove(taskId: String) -> Bool {
         guard let priority = prioritiesById[taskId] else { return false }
         unlink(taskId: taskId, priority: priority)
         prioritiesById.removeValue(forKey: taskId)
         return true
-    }
-
-    private mutating func insertAtTail(id: String, priority: TaskPriority) {
-        if let existing = prioritiesById[id] {
-            unlink(taskId: id, priority: existing)
-        }
-        prioritiesById[id] = priority
-        if let tailId = tails[priority] {
-            nextById[tailId] = id
-            prevById[id] = tailId
-            tails[priority] = id
-            nextById.removeValue(forKey: id)
-        } else {
-            heads[priority] = id
-            tails[priority] = id
-            prevById.removeValue(forKey: id)
-            nextById.removeValue(forKey: id)
-        }
     }
 
     private mutating func repairDanglingHead(_ headId: String, priority: TaskPriority) {

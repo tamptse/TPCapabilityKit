@@ -3,6 +3,26 @@ import TPCapabilityKit
 
 /// Single mapping point between Objective-C primitives and Swift domain types.
 enum ObjcMapper {
+    /// Pinned construction-time default carried as explicit for compat.
+    static var omittedTimeout: TimeInterval {
+        TaskScheduler.Configuration.default.defaultTimeout
+    }
+
+    /// Single statement of ObjC timeout compat, shared by both descriptor
+    /// initializers and the wait-then-run entry: omitted (nil wire) pins the
+    /// construction-time default as explicit; wire-negative means unspecified
+    /// (nil, scheduler default applies at enqueue); explicit non-negative
+    /// travels as explicit. Swift nil (wrapped descriptors) resolves at
+    /// enqueue and never crosses this resolver.
+    static func resolveTimeout(wire: TimeInterval?) -> TimeInterval? {
+        guard let wire else { return omittedTimeout }
+        return wire < 0 ? nil : wire
+    }
+
+    static func displayTimeout(for descriptor: TaskDescriptor) -> TimeInterval {
+        descriptor.timeout ?? omittedTimeout
+    }
+
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
     }
@@ -15,10 +35,9 @@ enum ObjcMapper {
         TaskPriority(rawValue: rawValue) ?? .normal
     }
 
-    /// Maps an ObjC timeout to the Swift domain spelling: negative means
-    /// unspecified (nil) so the scheduler default applies at enqueue.
+    /// Maps an ObjC timeout to the Swift domain spelling via the single resolver.
     static func taskTimeout(from rawValue: TimeInterval) -> TimeInterval? {
-        rawValue < 0 ? nil : rawValue
+        resolveTimeout(wire: rawValue)
     }
 
     static func leaseState(from state: Lease.State) -> ObjcLease.State {

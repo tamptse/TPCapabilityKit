@@ -16,6 +16,18 @@ import Foundation
 ///   and only called by `TaskScheduler` which coordinates access via its
 ///   own lock. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
+    enum Transition: Sendable, Equatable {
+        case activate
+        case complete
+        case fail
+        case expire
+        case beginRetry
+    }
+
+    struct TransitionRecord: Sendable, Equatable {
+        let transition: Transition
+        let accepted: Bool
+    }
     /// State of the lease.
     public enum State: Sendable, Equatable {
         case pending
@@ -57,6 +69,13 @@ public final class Lease: @unchecked Sendable {
     /// Number of times this task has been retried.
     private(set) var retryCount: Int
 
+    internal var transcript: [TransitionRecord] {
+        recordLock.withLock { records }
+    }
+
+    private let recordLock = NSLock()
+    private var records: [TransitionRecord] = []
+
     /// Creates a new lease for a task.
     init(task: TaskDescriptor) {
         self.task = task
@@ -68,7 +87,7 @@ public final class Lease: @unchecked Sendable {
     /// Marks the lease as active (task started executing).
     /// Legal only from pending; all other states are no-ops per the contract above.
     func activate() {
-        guard isPending else { return }
+        guard record(.activate, accepted: isPending) else { return }
         state = .active
         activatedAt = Date()
     }
@@ -76,7 +95,7 @@ public final class Lease: @unchecked Sendable {
     /// Marks the lease as completed with a result.
     /// Legal only from active; pending and terminal states are no-ops per the contract above.
     func complete(with result: Any?) {
-        guard isActive else { return }
+        guard record(.complete, accepted: isActive) else { return }
         self.result = result
         state = .completed
         completedAt = Date()
@@ -85,7 +104,7 @@ public final class Lease: @unchecked Sendable {
     /// Marks the lease as failed with an error.
     /// Legal only from active; pending and terminal states are no-ops per the contract above.
     func fail(with error: Error) {
-        guard isActive else { return }
+        guard record(.fail, accepted: isActive) else { return }
         state = .failed(error)
         completedAt = Date()
     }
@@ -94,7 +113,7 @@ public final class Lease: @unchecked Sendable {
     /// Legal from any non-terminal state; terminal states are no-ops.
     /// Pending is accepted here so cancel-of-pending can settle via Settlement.
     func expire() {
-        guard !isTerminal else { return }
+        guard record(.expire, accepted: !isTerminal) else { return }
         state = .expired
         completedAt = Date()
     }
@@ -109,11 +128,22 @@ public final class Lease: @unchecked Sendable {
     /// Infallible primitive; callers check `canRetry` before calling.
     /// Clears `result`, `activatedAt`, and `completedAt` per the contract above.
     func beginRetry() {
+        record(.beginRetry, accepted: true)
         retryCount += 1
         state = .pending
         activatedAt = nil
         completedAt = nil
         result = nil
+    }
+
+    /// Single funnel for all recording: every primitive reports accepted vs
+    /// rejected here, so the transition contract reads in one place.
+    /// Recording never decides — retry budget, void policy, and the retry
+    /// decision stay in Settlement.
+    @discardableResult
+    private func record(_ transition: Transition, accepted: Bool) -> Bool {
+        recordLock.withLock { records.append(TransitionRecord(transition: transition, accepted: accepted)) }
+        return accepted
     }
 
     /// Whether the lease is in a terminal state (completed, failed, or expired).

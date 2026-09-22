@@ -43,23 +43,20 @@ struct PendingQueueTests {
         #expect(queue.dequeue() == third)
     }
 
-    @Test("count tracks enqueue, dequeue and remove")
-    func countTracksTransitions() {
+    @Test("enqueue, dequeue and remove track order")
+    func enqueueDequeueRemoveOrder() {
         var queue = PendingQueue()
-        #expect(queue.count == 0)
+        #expect(queue.dequeue() == nil)
 
         let first = makeId()
         let second = makeId()
         queue.enqueue(id: first, priority: .high)
-        #expect(queue.count == 1)
         queue.enqueue(id: second, priority: .low)
-        #expect(queue.count == 2)
 
-        _ = queue.dequeue()
-        #expect(queue.count == 1)
+        #expect(queue.dequeue() == first)
 
         #expect(queue.remove(taskId: second) == true)
-        #expect(queue.count == 0)
+        #expect(queue.dequeue() == nil)
     }
 
     @Test("remove returns false for unknown id and dequeue on empty returns nil")
@@ -71,7 +68,8 @@ struct PendingQueueTests {
         let id = makeId()
         queue.enqueue(id: id, priority: .normal)
         #expect(queue.remove(taskId: "unknown-id") == false)
-        #expect(queue.count == 1)
+        #expect(queue.dequeue() == id)
+        #expect(queue.dequeue() == nil)
     }
 
     @Test("dequeued id is gone from the queue")
@@ -81,41 +79,37 @@ struct PendingQueueTests {
         queue.enqueue(id: id, priority: .high)
 
         #expect(queue.dequeue() == id)
-        #expect(queue.count == 0)
+        #expect(queue.dequeue() == nil)
         #expect(queue.remove(taskId: id) == false)
     }
 
-    @Test("remove after dequeue returns false and count stays derived")
-    func removeAfterDequeueStaysDerived() {
+    @Test("remove after dequeue returns false")
+    func removeAfterDequeue() {
         var queue = PendingQueue()
         let first = makeId()
         let second = makeId()
         queue.enqueue(id: first, priority: .normal)
         queue.enqueue(id: second, priority: .normal)
 
-        _ = queue.dequeue()
-        #expect(queue.count == 1)
+        #expect(queue.dequeue() == first)
         #expect(queue.remove(taskId: first) == false)
-        #expect(queue.count == 1)
 
         #expect(queue.remove(taskId: second) == true)
-        #expect(queue.count == 0)
         #expect(queue.dequeue() == nil)
     }
 
-    @Test("requeued id dequeues again")
-    func requeueSameIdentity() {
+    @Test("enqueued id dequeues again after dequeue")
+    func enqueueSameIdentityAgain() {
         var queue = PendingQueue()
         let id = makeId()
         queue.enqueue(id: id, priority: .normal)
 
         #expect(queue.dequeue() == id)
-        #expect(queue.count == 0)
+        #expect(queue.dequeue() == nil)
 
-        queue.requeue(id: id, priority: .normal)
-        #expect(queue.count == 1)
+        queue.enqueue(id: id, priority: .normal)
         #expect(queue.dequeue() == id)
-        #expect(queue.count == 0)
+        #expect(queue.dequeue() == nil)
     }
 
     @Test("cancel removes pending id, preserves order of remainder")
@@ -129,13 +123,11 @@ struct PendingQueueTests {
         queue.enqueue(id: last, priority: .normal)
 
         #expect(queue.remove(taskId: cancelled) == true)
-        #expect(queue.count == 2)
         #expect(queue.remove(taskId: cancelled) == false)
 
         #expect(queue.dequeue() == first)
         #expect(queue.dequeue() == last)
         #expect(queue.dequeue() == nil)
-        #expect(queue.count == 0)
     }
 
     @Test("cancel of highest priority promotes next priority")
@@ -147,8 +139,8 @@ struct PendingQueueTests {
         queue.enqueue(id: critical, priority: .critical)
 
         #expect(queue.remove(taskId: critical) == true)
-        #expect(queue.count == 1)
         #expect(queue.dequeue() == high)
+        #expect(queue.dequeue() == nil)
     }
 
     @Test("middle removal preserves FIFO order of remainder")
@@ -164,15 +156,14 @@ struct PendingQueueTests {
         queue.enqueue(id: d, priority: .normal)
 
         #expect(queue.remove(taskId: b) == true)
-        #expect(queue.count == 3)
         #expect(queue.dequeue() == a)
         #expect(queue.dequeue() == c)
         #expect(queue.dequeue() == d)
         #expect(queue.dequeue() == nil)
     }
 
-    @Test("requeue appends to tail behind waiting ids")
-    func requeueAppendsToTail() {
+    @Test("enqueue after dequeue appends to tail behind waiting ids")
+    func enqueueAfterDequeueAppendsToTail() {
         var queue = PendingQueue()
         let first = makeId()
         let second = makeId()
@@ -180,7 +171,7 @@ struct PendingQueueTests {
         queue.enqueue(id: second, priority: .normal)
 
         #expect(queue.dequeue() == first)
-        queue.requeue(id: first, priority: .normal)
+        queue.enqueue(id: first, priority: .normal)
 
         #expect(queue.dequeue() == second)
         #expect(queue.dequeue() == first)
@@ -196,7 +187,6 @@ struct PendingQueueTests {
         queue.enqueue(id: second, priority: .normal)
         queue.enqueue(id: first, priority: .normal)
 
-        #expect(queue.count == 2)
         #expect(queue.dequeue() == second)
         #expect(queue.dequeue() == first)
         #expect(queue.dequeue() == nil)

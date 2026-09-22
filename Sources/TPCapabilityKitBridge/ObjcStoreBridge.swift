@@ -112,10 +112,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     /// Runs a task when the required capability becomes available, with a timeout.
     /// Delivers the result on the specified queue.
-    /// Delegates to the one Tasks waiter (`scheduleTaskAndWait`) via the shared
-    /// descriptor path, so a wire-negative timeout means unspecified (nil) and
-    /// the scheduler default applies exactly once at enqueue. (An omitted ObjC
-    /// timeout is instead the pinned construction-time default, not nil.)
+    /// Timeout compat follows the single mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Negative means
