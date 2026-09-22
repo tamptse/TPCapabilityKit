@@ -158,9 +158,3 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     }
 
 }
-
-/// @unchecked Sendable box for passing non-Sendable ObjC closures into Tasks.
-private final class ObjcCallbackBox<T>: @unchecked Sendable {
-    let value: T
-    init(_ value: T) { self.value = value }
-}

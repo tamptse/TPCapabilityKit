@@ -192,21 +192,14 @@ struct SettlementTests {
         let started = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let done = AsyncStream<Void>.makeStream()
-        let expired = AsyncStream<Void>.makeStream()
         actor Counter {
             var completions = 0
             func inc() { completions += 1 }
         }
         let counter = Counter()
-        let cancellable = scheduler.events.sink { event in
-            if case .taskExpired = event {
-                expired.continuation.yield()
-            }
-        }
-        defer { cancellable.cancel() }
 
         let descriptor = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
-        scheduler.schedule(descriptor, taskExecution: {
+        let lease = scheduler.schedule(descriptor, taskExecution: {
             started.continuation.yield()
             for await _ in release.stream { break }
         }, completion: { _ in
@@ -222,6 +215,9 @@ struct SettlementTests {
         release.continuation.finish()
 
         #expect(await counter.completions == 1)
-        for await _ in expired.stream { break }
+        #expect(lease.isTerminal)
+        #expect(lease.state == .expired)
+        #expect(scheduler.pendingCount == 0)
+        #expect(scheduler.activeCount == 0)
     }
 }

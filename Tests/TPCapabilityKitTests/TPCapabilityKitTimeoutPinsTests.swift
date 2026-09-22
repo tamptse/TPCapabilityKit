@@ -73,4 +73,50 @@ struct TimeoutPinsTests {
         #expect(elapsed >= 0.15)
         #expect(elapsed < 2.0)
     }
+
+    @Test("nil timeout resolves to configured default once at enqueue")
+    func nilTimeoutResolvesOnceAtEnqueue() async {
+        let store = DynamicStore()
+        let scheduler = TaskScheduler(
+            store: store,
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+        )
+
+        let task = TaskDescriptor(
+            requiredCapabilities: [.custom("ResolveOnce_\(UUID().uuidString)")]
+        )
+        #expect(task.timeout == nil)
+
+        let done = AsyncStream<Void>.makeStream()
+        let lease = scheduler.schedule(task, taskExecution: {}, completion: { _ in
+            done.continuation.yield()
+        })
+        #expect(lease.task.timeout == 0.3)
+        #expect(task.timeout == nil)
+
+        for await _ in done.stream { break }
+        #expect(lease.state == .expired)
+    }
+
+    @Test("explicit timeout travels unchanged through enqueue")
+    func explicitTimeoutTravelsUnchanged() async {
+        let store = DynamicStore()
+        let pluginId = "ExplicitPin_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+        let scheduler = TaskScheduler(
+            store: store,
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+        )
+
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)
+        let done = AsyncStream<Void>.makeStream()
+        let lease = scheduler.schedule(task, taskExecution: {}, completion: { _ in
+            done.continuation.yield()
+        })
+        #expect(lease.task.timeout == 30.0)
+
+        for await _ in done.stream { break }
+        #expect(lease.state == .completed)
+    }
 }

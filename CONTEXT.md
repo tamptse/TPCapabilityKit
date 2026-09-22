@@ -18,6 +18,13 @@ The scheduler instance itself is private; all scheduling crosses the facade.
 Two observation granularities: per-Capability observation serves UI-style
 subscribers; whole-registry observation serves the Tasks waiter only.
 
+## State
+
+A per-Plugin value keyed by Plugin id, held by the Store and observed typed.
+Removal detaches the subject: typed observers see nothing further, the next
+update creates a fresh subject.
+_Avoid_: cache, snapshot
+
 ## Capability
 
 A skill a Plugin provides (`heavyTask`, `lightTask`, `networkAccess`,
@@ -65,6 +72,6 @@ by task identity with idempotent release.
 
 Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
 live view. `ObjcLease` is a live view
-of the underlying Lease. Capability/priority mapping lives in one internal
+of the underlying Lease. Capability/priority/state/timeout/descriptor mapping lives in one internal
 mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
 Completion delivery defaults to the main queue unless a queue is given.

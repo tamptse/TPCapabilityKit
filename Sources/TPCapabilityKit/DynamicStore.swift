@@ -5,7 +5,7 @@ import Foundation
 /// Provides both state management and capability registry functionality.
 ///
 /// ## Thread Safety
-/// - Single `lock` protects all mutable state (stateSubjects, registry)
+/// - Single `lock` protects all mutable state (stateStore, registry)
 /// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
 /// ## Debug Logging
@@ -22,7 +22,7 @@ public final class DynamicStore: @unchecked Sendable {
     public static let shared = DynamicStore()
 
     // MARK: - Mutable State (all protected by single `lock`)
-    private var stateSubjects: [String: CurrentValueSubject<Any?, Never>] = [:]
+    private let stateStore = StateStore()
     private let registry = CapabilityRegistry()
     private let lock = NSLock()
 
@@ -42,17 +42,6 @@ public final class DynamicStore: @unchecked Sendable {
             return false
         }
         return true
-    }
-
-    private func ensureSubject(for pluginId: String) -> CurrentValueSubject<Any?, Never> {
-        lock.withLock {
-            if let existing = stateSubjects[pluginId] {
-                return existing
-            }
-            let subject = CurrentValueSubject<Any?, Never>(nil)
-            stateSubjects[pluginId] = subject
-            return subject
-        }
     }
 
     // MARK: - Plugin Registration
@@ -76,7 +65,9 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - newState: The new state value to update or broadcast.
     public func updateState<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let subject = ensureSubject(for: pluginId)
+        let subject = lock.withLock {
+            stateStore.ensureSubject(for: pluginId)
+        }
         subject.send(newState)
     }
 
@@ -88,7 +79,7 @@ public final class DynamicStore: @unchecked Sendable {
     public func getState<T>(pluginId: String, type: T.Type) -> T? {
         guard validatePluginId(pluginId) else { return nil }
         return lock.withLock {
-            guard let subject = stateSubjects[pluginId] else {
+            guard let subject = stateStore.subject(for: pluginId) else {
                 #if DEBUG
                 print("[DynamicStore] Warning: getState called for non-existent plugin '\(pluginId)'")
                 #endif
@@ -112,9 +103,8 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Parameter pluginId: Unique identifier of the target plugin.
     public func removeState(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
-        var subject: CurrentValueSubject<Any?, Never>?
-        lock.withLock {
-            subject = stateSubjects.removeValue(forKey: pluginId)
+        let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
+            stateStore.removeSubject(for: pluginId)
         }
 
         // Complete the detached subject's lifecycle; typed observers filter the nil.
@@ -140,7 +130,9 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Note: Values are delivered synchronously on the writer's thread with no
     ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeState<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
-        let subject = ensureSubject(for: pluginId)
+        let subject = lock.withLock {
+            stateStore.ensureSubject(for: pluginId)
+        }
         return subject
             .compactMap { $0 as? T }
             .eraseToAnyPublisher()

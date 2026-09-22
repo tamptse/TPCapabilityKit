@@ -1,29 +1,21 @@
 import Testing
-import Combine
 import Foundation
 @testable import TPCapabilityKit
 
 @Suite("Cancel Task Tests")
 struct CancelTests {
-    @Test("cancel sends only one expired event")
+    @Test("cancel settles expired exactly once")
     func cancelSendsOneEvent() async {
         let store = DynamicStore()
         let scheduler = TaskScheduler(store: store)
 
         let started = AsyncStream<Void>.makeStream()
         let done = AsyncStream<Void>.makeStream()
-        let expired = AsyncStream<Void>.makeStream()
         actor Counter {
             var completions = 0
             func inc() { completions += 1 }
         }
         let counter = Counter()
-        let cancellable = scheduler.events.sink { event in
-            if case .taskExpired = event {
-                expired.continuation.yield()
-            }
-        }
-        defer { cancellable.cancel() }
 
         let descriptor = TaskDescriptor(requiredCapabilities: [])
         let lease = scheduler.schedule(descriptor, taskExecution: {
@@ -42,7 +34,9 @@ struct CancelTests {
 
         #expect(await counter.completions == 1)
         #expect(lease.isTerminal)
-        for await _ in expired.stream { break }
+        #expect(lease.state == .expired)
+        #expect(scheduler.pendingCount == 0)
+        #expect(scheduler.activeCount == 0)
     }
 
     @Test("cancel active task expires lease and calls completion")
@@ -90,7 +84,7 @@ struct CancelTests {
         #expect(await state.terminal == true)
     }
 
-    @Test("cancel parked-at-active task delivers exactly one terminal event")
+    @Test("cancel parked-at-active task settles expired exactly once")
     func cancelParkedActiveDeliversOnce() async {
         let store = DynamicStore()
         let pluginId = "ParkActive_\(UUID().uuidString)"
@@ -101,19 +95,14 @@ struct CancelTests {
         let started = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let done = AsyncStream<Void>.makeStream()
-        let expired = AsyncStream<Void>.makeStream()
         actor Counter {
             var completions = 0
             func inc() { completions += 1 }
         }
         let counter = Counter()
-        let eventsCancellable = scheduler.events.sink { event in
-            if case .taskExpired = event { expired.continuation.yield() }
-        }
-        defer { eventsCancellable.cancel() }
 
         let descriptor = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
-        scheduler.schedule(descriptor, taskExecution: {
+        let lease = scheduler.schedule(descriptor, taskExecution: {
             started.continuation.yield()
             for await _ in release.stream { break }
         }, completion: { _ in
@@ -129,7 +118,10 @@ struct CancelTests {
         release.continuation.finish()
 
         #expect(await counter.completions == 1)
-        for await _ in expired.stream { break }
+        #expect(lease.isTerminal)
+        #expect(lease.state == .expired)
+        #expect(scheduler.pendingCount == 0)
+        #expect(scheduler.activeCount == 0)
     }
 
     @Test("storm acquire and cancel drains slots to zero")

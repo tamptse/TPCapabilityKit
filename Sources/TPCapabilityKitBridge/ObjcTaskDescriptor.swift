@@ -34,22 +34,21 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     ///     so the scheduler Configuration default applies at execution.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
-    @objc public init(
+    @objc public convenience init(
         capabilities: [String],
         priority: Int = 2,
         timeout: TimeInterval = TaskScheduler.Configuration.default.defaultTimeout,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
-        let caps = capabilities.map { ObjcMapper.capability(from: $0) }
-        self.underlying = TaskDescriptor(
-            requiredCapabilities: Set(caps),
-            priority: ObjcMapper.taskPriority(from: priority),
-            timeout: timeout < 0 ? nil : timeout,
+        self.init(
+            id: nil,
+            capabilities: capabilities,
+            priority: priority,
+            timeout: timeout,
             maxRetries: maxRetries,
             metadata: metadata
         )
-        super.init()
     }
 
     /// Creates a new task descriptor with a client-chosen identifier.
@@ -63,7 +62,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     ///     so the scheduler Configuration default applies at execution.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
-    @objc public init(
+    @objc public convenience init(
         clientId: String,
         capabilities: [String],
         priority: Int = 2,
@@ -71,12 +70,29 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
-        let caps = capabilities.map { ObjcMapper.capability(from: $0) }
-        self.underlying = TaskDescriptor(
+        self.init(
             id: clientId,
-            requiredCapabilities: Set(caps),
-            priority: ObjcMapper.taskPriority(from: priority),
-            timeout: timeout < 0 ? nil : timeout,
+            capabilities: capabilities,
+            priority: priority,
+            timeout: timeout,
+            maxRetries: maxRetries,
+            metadata: metadata
+        )
+    }
+
+    private init(
+        id: String?,
+        capabilities: [String],
+        priority: Int,
+        timeout: TimeInterval,
+        maxRetries: Int,
+        metadata: [String: String]
+    ) {
+        self.underlying = ObjcMapper.makeDescriptor(
+            id: id,
+            capabilities: capabilities,
+            priority: priority,
+            timeout: timeout,
             maxRetries: maxRetries,
             metadata: metadata
         )
