@@ -23,9 +23,8 @@ private final class OneShot<T>: @unchecked Sendable {
 ///
 /// Inspired by Meta's Jupiter (capability matching) and Async (priority dispatching).
 /// - Important: `@unchecked Sendable` is intentional — all mutable state
-///   (`pendingQueue`, `parkedLeases`, `activeLeases`, `taskExecutions`,
-///   `rendezvous`, `waitingLeases`, `parkedWaiters`) is protected by `lock`. Parked capability waiters are
-///   tracked per lease and cancelled on terminal settlement. Do not add
+///   (`pendingQueue`, `lifecycle`) is protected by `lock`. Parked capability waiters are
+///   tracked per row and cancelled on terminal settlement. Do not add
 ///   unsynchronized mutable state.
 public final class TaskScheduler: @unchecked Sendable {
     public struct Configuration: Sendable {
@@ -51,43 +50,59 @@ public final class TaskScheduler: @unchecked Sendable {
     private let concurrencyController: ConcurrencyController
     private let lock = NSLock()
 
-    /// Capability gate: conjunction with one shared deadline.
-    ///
-    /// Hides availability check, wait, and slot re-check behind one seam.
-    /// Holds no lock or waiter state; single waiter, rendezvous, and expiry
-    /// clock stay owned by the scheduler.
-    private struct CapabilityGate: Sendable {
-        private let isSatisfied: @Sendable (Set<Capability>) -> Bool
-        private let snapshot: @Sendable () -> AnyPublisher<[String: Set<Capability>], Never>?
-        private let race: @Sendable (TimeInterval, @Sendable @escaping () async -> Bool) async -> Bool
+    /// Injectable expiry clock shared by the waiter-timeout and
+    /// executor-timeout races. Value type holding the sleep function;
+    /// defaults to live time so all existing call sites behave identically.
+    /// Internal so timeout behavior pins deterministically in tests.
+    /// Scheduler-level (@testable, internal) seam only — the Store facade
+    /// always uses live time.
+    struct ExpiryClock: Sendable {
+        var sleep: @Sendable (TimeInterval) async -> Void
 
-        init(
-            isSatisfied: @escaping @Sendable (Set<Capability>) -> Bool,
-            snapshot: @escaping @Sendable () -> AnyPublisher<[String: Set<Capability>], Never>?,
-            race: @escaping @Sendable (TimeInterval, @Sendable @escaping () async -> Bool) async -> Bool
-        ) {
-            self.isSatisfied = isSatisfied
-            self.snapshot = snapshot
-            self.race = race
+        static var live: ExpiryClock {
+            ExpiryClock(
+                sleep: { timeout in
+                    try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+                }
+            )
+        }
+    }
+
+    /// One capability waiter owned by Tasks.
+    ///
+    /// Folds availability check, single-deadline wait, and slot re-check
+    /// behind one `wait(descriptor, timeout)` seam serving immediate
+    /// (runTaskWhenAvailable via DynamicStore.scheduleTaskAndWait) and queued
+    /// paths alike. Holds the store and the injected clock (not a protocol);
+    /// waiter-timeout and executor-timeout share the one expiry clock through
+    /// the single `race` helper.
+    struct CapabilityWaiter: Sendable {
+        private weak var store: DynamicStore?
+        private let clock: ExpiryClock
+
+        init(store: DynamicStore?, clock: ExpiryClock) {
+            self.store = store
+            self.clock = clock
         }
 
         func isAvailable(_ capabilities: Set<Capability>) -> Bool {
-            isSatisfied(capabilities)
+            guard let store else { return false }
+            return capabilities.allSatisfy { store.queryCapability($0) }
         }
 
         func isAvailable(for task: TaskDescriptor) -> Bool {
             isAvailable(task.requiredCapabilities)
         }
 
-        func wait(for capabilities: Set<Capability>, timeout: TimeInterval) async -> Bool {
+        func wait(for task: TaskDescriptor, timeout: TimeInterval) async -> Bool {
+            let capabilities = task.requiredCapabilities
             if capabilities.isEmpty { return true }
             if isAvailable(capabilities) { return true }
-            let probe = isSatisfied
-            let observe = snapshot
-            return await race(timeout) {
-                guard let publisher = observe() else { return false }
+            let probe = self
+            return await race(timeout: timeout) {
+                guard let publisher = probe.store?.observeAllCapabilities() else { return false }
                 for await _ in publisher.values {
-                    if probe(capabilities) { return true }
+                    if probe.isAvailable(capabilities) { return true }
                 }
                 return false
             }
@@ -96,66 +111,55 @@ public final class TaskScheduler: @unchecked Sendable {
         func recheck(for task: TaskDescriptor) -> Bool {
             isAvailable(for: task)
         }
-    }
 
-    private var capabilityGate: CapabilityGate {
-        let store = self.store
-        return CapabilityGate(
-            isSatisfied: { [weak store] capabilities in
-                guard let store else { return false }
-                return capabilities.allSatisfy { store.queryCapability($0) }
-            },
-            snapshot: { [weak store] in store?.observeAllCapabilities() },
-            race: { timeout, operation in await TaskScheduler.race(timeout: timeout, operation: operation) }
-        )
-    }
-
-    private static func race(
-        timeout: TimeInterval,
-        operation: @Sendable @escaping () async -> Bool
-    ) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask(operation: operation)
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return false
-            }
-            guard let first = await group.next() else {
+        /// Single expiry race for both waiter-timeout and executor-timeout
+        /// call sites; the injected clock decides the deadline.
+        func race(
+            timeout: TimeInterval,
+            operation: @Sendable @escaping () async -> Bool
+        ) async -> Bool {
+            let clock = self.clock
+            return await withTaskGroup(of: Bool.self) { group in
+                group.addTask(operation: operation)
+                group.addTask {
+                    await clock.sleep(timeout)
+                    return false
+                }
+                guard let first = await group.next() else {
+                    group.cancelAll()
+                    return false
+                }
                 group.cancelAll()
-                return false
+                return first
             }
-            group.cancelAll()
-            return first
         }
     }
 
-    private func raceAgainstTimeout(
-        timeout: TimeInterval,
-        operation: @Sendable @escaping () async -> Bool
-    ) async -> Bool {
-        await Self.race(timeout: timeout, operation: operation)
-    }
+    private let waiter: CapabilityWaiter
 
     private var pendingQueue = PendingQueue()
 
-    private var activeLeases: [String: Lease] = [:]
+    private enum Place: Sendable {
+        case pending
+        case parked
+        case active
+    }
 
-    private var parkedLeases: [String: Lease] = [:]
+    private struct LifecycleRow {
+        var lease: Lease
+        var place: Place
+        var execution: (@Sendable () async -> Any?)?
+        var waiters: [(Lease) -> Void]
+        var waiter: Task<Void, Never>?
+        var waiting: Bool
+    }
 
-    private var taskExecutions: [String: @Sendable () async -> Any?] = [:]
+    private var lifecycle: [String: LifecycleRow] = [:]
 
-    // Single rendezvous keyed by Lease identity so same-id Tasks never overwrite each other.
-    private var rendezvous: [ObjectIdentifier: [(Lease) -> Void]] = [:]
-
-    // One waiter per lease at a time, so the pending loop never spawns duplicates.
-    private var waitingLeases: Set<String> = []
-
-    // Cancelled on settlement so a parked waiter wakes promptly instead of lingering until timeout.
-    private var parkedWaiters: [String: Task<Void, Never>] = [:]
-
-    init(store: DynamicStore = .shared, configuration: Configuration = .init()) {
+    init(store: DynamicStore = .shared, configuration: Configuration = .init(), clock: ExpiryClock = .live) {
         self.store = store
         self.configuration = configuration
+        self.waiter = CapabilityWaiter(store: store, clock: clock)
         self.concurrencyController = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
@@ -199,13 +203,30 @@ public final class TaskScheduler: @unchecked Sendable {
             : task
         let lease = Lease(task: resolvedTask)
 
+        // Same-id concurrent scheduling is unsupported: a non-terminal row for
+        // this id belongs to an in-flight lease, so settle it first (expired —
+        // the only outcome the Lease contract accepts from pending — so its
+        // waiters are delivered exactly once, its waiter Task cancelled, its
+        // slot released) before the new row takes the id. A terminal row needs
+        // no settle, so sequential reuse after terminal keeps working.
+        let displaced: Lease? = lock.withLock {
+            guard let row = lifecycle[task.id], !row.lease.isTerminal else { return nil }
+            return row.lease
+        }
+        if let displaced {
+            settle(displaced, as: .expired)
+        }
+
         lock.withLock {
-            pendingQueue.enqueue(lease)
-            taskExecutions[task.id] = execution
-            rendezvous[ObjectIdentifier(lease)] = []
-            if let completion {
-                rendezvous[ObjectIdentifier(lease), default: []].append(completion)
-            }
+            lifecycle[task.id] = LifecycleRow(
+                lease: lease,
+                place: .pending,
+                execution: execution,
+                waiters: completion.map { [$0] } ?? [],
+                waiter: nil,
+                waiting: false
+            )
+            pendingQueue.enqueue(id: task.id, priority: resolvedTask.priority)
         }
 
         return lease
@@ -238,7 +259,17 @@ public final class TaskScheduler: @unchecked Sendable {
                 if lease.isTerminal {
                     return lease
                 }
-                rendezvous[ObjectIdentifier(lease), default: []].append({ resume(with: $0) })
+                guard var row = lifecycle[task.id] else { return lease }
+                // Invariant: every row replacement settles our lease first
+                // (displacement settles the old lease before the new row takes
+                // the id; terminalize removes the row), so a mismatched row
+                // means our lease is already settled — return it, never append
+                // to another lease's waiter list.
+                if row.lease !== lease {
+                    return lease
+                }
+                row.waiters.append({ resume(with: $0) })
+                lifecycle[task.id] = row
                 return nil
             }
             if let settled = settledEarly {
@@ -253,24 +284,20 @@ public final class TaskScheduler: @unchecked Sendable {
     /// Cancels a pending task.
     /// - Parameter taskId: The ID of the task to cancel.
     func cancel(taskId: String) {
-        let target: Lease? = lock.withLock {
-            pendingQueue.lease(taskId: taskId)
-                ?? parkedLeases[taskId]
-                ?? activeLeases[taskId]
-        }
+        let target: Lease? = lock.withLock { lifecycle[taskId]?.lease }
         guard let target else { return }
         settle(target, as: .cancelled)
     }
 
     /// Returns the number of pending tasks.
     var pendingCount: Int {
-        lock.withLock { pendingQueue.count }
+        lock.withLock { lifecycle.values.filter { $0.place == .pending }.count }
     }
 
     /// Returns the number of active tasks.
     var activeCount: Int {
         lock.withLock {
-            activeLeases.count
+            lifecycle.values.filter { $0.place == .active }.count
         }
     }
 
@@ -283,89 +310,84 @@ public final class TaskScheduler: @unchecked Sendable {
         case cancelled
     }
 
-    private func settle(_ lease: Lease, as outcome: Settlement) {
-        switch outcome {
-        case .completed(let result):
-            terminalize(lease, applyState: { $0.complete(with: result) })
-        case .failed:
-            let error = TaskExecutionError()
-            terminalize(lease, applyState: { $0.fail(with: error) })
-        case .expired, .cancelled:
-            terminalize(lease, applyState: { $0.expire() })
-        }
-    }
-
+    /// Single entry for execution outcomes: timeout vs result.
+    /// The void-completion policy lives in the row transition below, not here.
     private func settle(_ lease: Lease, result: Any?, timedOut: Bool, execution: (@Sendable () async -> Any?)?) async {
-        if lease.isTerminal { return }
         if timedOut {
             settle(lease, as: .expired)
             return
         }
-        if result != nil {
-            settle(lease, as: .completed(result))
-            return
-        }
-        if requeueForRetry(lease, execution: execution) {
-            return
-        }
-        if lease.isTerminal { return }
-        settle(lease, as: .failed)
+        settle(lease, as: .completed(result), execution: execution)
     }
 
-    /// Retry path: guards `isTerminal`/`canRetry`, then `beginRetry()` resets to pending.
-    /// See the Lease transition contract for the legal graph.
-    private func requeueForRetry(_ lease: Lease, execution: (@Sendable () async -> Any?)?) -> Bool {
-        var retried = false
+    /// The single row-transition path. Owns the exactly-once guard, retry
+    /// budget check, void-completion policy, rendezvous delivery, waiter
+    /// cancellation, and the controller release shared with scope exit.
+    /// Cancel settles via the expired path with no Lease state-shape change.
+    private func settle(_ lease: Lease, as outcome: Settlement, execution: (@Sendable () async -> Any?)? = nil) {
+        var waiters: [(Lease) -> Void] = []
+        var waiterToCancel: Task<Void, Never>?
+        var settled = false
+        var didRetry = false
         lock.withLock {
             guard !lease.isTerminal else { return }
-            if lease.canRetry {
-                lease.beginRetry()
-                activeLeases.removeValue(forKey: lease.task.id)
-                if let execution {
-                    taskExecutions[lease.task.id] = execution
+            guard var row = lifecycle[lease.task.id], row.lease === lease else { return }
+            switch outcome {
+            case .completed(let result):
+                if result == nil, lease.canRetry {
+                    lease.beginRetry()
+                    row.place = .pending
+                    if let execution {
+                        row.execution = execution
+                    }
+                    lifecycle[lease.task.id] = row
+                    pendingQueue.requeue(id: lease.task.id, priority: lease.task.priority)
+                    didRetry = true
+                    return
                 }
-                pendingQueue.requeue(lease)
-                retried = true
+                lifecycle.removeValue(forKey: lease.task.id)
+                pendingQueue.remove(taskId: lease.task.id)
+                waiterToCancel = row.waiter
+                waiters = row.waiters
+                if result != nil {
+                    lease.complete(with: result)
+                } else {
+                    lease.fail(with: TaskExecutionError())
+                }
+                settled = true
+            case .failed:
+                lifecycle.removeValue(forKey: lease.task.id)
+                pendingQueue.remove(taskId: lease.task.id)
+                waiterToCancel = row.waiter
+                waiters = row.waiters
+                lease.fail(with: TaskExecutionError())
+                settled = true
+            case .expired, .cancelled:
+                lifecycle.removeValue(forKey: lease.task.id)
+                pendingQueue.remove(taskId: lease.task.id)
+                waiterToCancel = row.waiter
+                waiters = row.waiters
+                lease.expire()
+                settled = true
             }
         }
-        if retried {
-            concurrencyController.release(taskId: lease.task.id)
+        if didRetry {
+            releaseSlot(taskId: lease.task.id, owner: ObjectIdentifier(lease))
             Task { await self.processPendingTasks() }
-            return true
-        }
-        return false
-    }
-
-    /// Single terminal path: cleanup under lock, state decided under
-    /// lock, completion outside the lock. Fires exactly once per
-    /// lease via the `isTerminal` guard.
-    /// See the Lease transition contract for the legal graph; cancel-of-pending
-    /// settles here via `expire()`, the only terminal move accepting pending.
-    private func terminalize(
-        _ lease: Lease,
-        applyState: (Lease) -> Void
-    ) {
-        var waiters: [(Lease) -> Void] = []
-        var settled = false
-        var waiterToCancel: Task<Void, Never>?
-        lock.withLock {
-            guard !lease.isTerminal else { return }
-            _ = pendingQueue.remove(taskId: lease.task.id)
-            activeLeases.removeValue(forKey: lease.task.id)
-            parkedLeases.removeValue(forKey: lease.task.id)
-            waitingLeases.remove(lease.task.id)
-            waiterToCancel = parkedWaiters.removeValue(forKey: lease.task.id)
-            taskExecutions.removeValue(forKey: lease.task.id)
-            waiters = rendezvous.removeValue(forKey: ObjectIdentifier(lease)) ?? []
-            applyState(lease)
-            settled = true
+            return
         }
         guard settled else { return }
         waiterToCancel?.cancel()
-        concurrencyController.release(taskId: lease.task.id)
+        releaseSlot(taskId: lease.task.id, owner: ObjectIdentifier(lease))
         for waiter in waiters {
             waiter(lease)
         }
+    }
+
+    /// Single controller release shared by terminal, retry, and scope exit;
+    /// guarded by the Lease owner token so a stale scope-exit defer no-ops.
+    private func releaseSlot(taskId: String, owner: ObjectIdentifier) {
+        concurrencyController.release(taskId: taskId, owner: owner)
     }
 
     private func processPendingTasks() async {
@@ -380,19 +402,23 @@ public final class TaskScheduler: @unchecked Sendable {
             }
 
             // Check capability availability
-            guard checkCapabilities(for: nextLease.task) else {
-                // Park the lease outside the queue with a single waiter;
+            guard waiter.isAvailable(for: nextLease.task) else {
+                // Park the row with a single waiter;
                 // the waiter executes or expires it when done.
                 let shouldWait: Bool = lock.withLock {
-                    if waitingLeases.contains(nextLease.task.id) { return false }
-                    waitingLeases.insert(nextLease.task.id)
-                    parkedLeases[nextLease.task.id] = nextLease
+                    guard var row = lifecycle[nextLease.task.id], row.lease === nextLease else { return false }
+                    if row.waiting { return false }
+                    row.waiting = true
+                    lifecycle[nextLease.task.id] = row
                     return true
                 }
                 if shouldWait {
                     let waiter = Task { await self.waitForCapabilitiesAndProcess(nextLease, timeout: timeout) }
                     let alreadyTerminal: Bool = lock.withLock {
-                        parkedWaiters[nextLease.task.id] = waiter
+                        if var row = lifecycle[nextLease.task.id], row.lease === nextLease {
+                            row.waiter = waiter
+                            lifecycle[nextLease.task.id] = row
+                        }
                         return nextLease.isTerminal
                     }
                     if alreadyTerminal { waiter.cancel() }
@@ -407,24 +433,28 @@ public final class TaskScheduler: @unchecked Sendable {
 
     private func dequeueNext() -> Lease? {
         lock.withLock {
-            guard let lease = pendingQueue.dequeue() else { return nil }
-            parkedLeases[lease.task.id] = lease
-            return lease
+            while let id = pendingQueue.dequeue() {
+                if var row = lifecycle[id] {
+                    row.place = .parked
+                    lifecycle[id] = row
+                    return row.lease
+                }
+            }
+            return nil
         }
-    }
-
-    private func checkCapabilities(for task: TaskDescriptor) -> Bool {
-        capabilityGate.isAvailable(for: task)
     }
 
     private func waitForCapabilitiesAndProcess(_ lease: Lease, timeout: TimeInterval) async {
         let capabilityAvailable = await waitForCapabilities(
-            lease.task.requiredCapabilities,
+            lease.task,
             timeout: timeout
         )
         lock.withLock {
-            waitingLeases.remove(lease.task.id)
-            parkedWaiters.removeValue(forKey: lease.task.id)
+            if var row = lifecycle[lease.task.id], row.lease === lease {
+                row.waiting = false
+                row.waiter = nil
+                lifecycle[lease.task.id] = row
+            }
         }
 
         guard !lease.isTerminal else { return }
@@ -437,18 +467,19 @@ public final class TaskScheduler: @unchecked Sendable {
         await executeLease(lease, timeout: timeout)
     }
 
-    /// Single capability waiter owned by Tasks: one timeout shared by the
+    /// Single capability wait owned by Tasks: one timeout shared by the
     /// whole set. Serves immediate (run-when-available) and queued
     /// (schedule/schedule-and-wait) execution alike, preserved across retry.
-    private func waitForCapabilities(_ capabilities: Set<Capability>, timeout: TimeInterval) async -> Bool {
-        await capabilityGate.wait(for: capabilities, timeout: timeout)
+    private func waitForCapabilities(_ task: TaskDescriptor, timeout: TimeInterval) async -> Bool {
+        await waiter.wait(for: task, timeout: timeout)
     }
 
     /// Sole production activator: every prod path to `active` goes through here
-    /// (wait via the shared waiter, terminal via `terminalize`).
-    /// Tests may still call `Lease.activate()` directly.
+    /// (wait via the shared waiter, terminal via the single row transition).
+    /// ObjC live-view tests may still call `Lease.activate()` directly to
+    /// exercise the ObjcLease reflection.
     private func executeLease(_ lease: Lease, timeout: TimeInterval) async {
-        guard capabilityGate.recheck(for: lease.task) else {
+        guard waiter.recheck(for: lease.task) else {
             settle(lease, as: .failed)
             return
         }
@@ -458,22 +489,25 @@ public final class TaskScheduler: @unchecked Sendable {
         }
     }
 
-    /// Scoped hold owned by the controller; scope exit shares the one idempotent release.
+    /// Scoped hold owned by the controller; scope exit shares the one release with Settlement.
+    /// The defer carries this Lease's owner token, so displacing this row while
+    /// active no-ops here and the new holder keeps its slot.
     private func withSlot(for lease: Lease, operation: @escaping () async -> Void) async {
-        await concurrencyController.acquire(keys: lease.task.requiredCapabilities, taskId: lease.task.id)
-        defer { concurrencyController.release(taskId: lease.task.id) }
+        await concurrencyController.acquire(keys: lease.task.requiredCapabilities, taskId: lease.task.id, owner: ObjectIdentifier(lease))
+        defer { releaseSlot(taskId: lease.task.id, owner: ObjectIdentifier(lease)) }
 
         guard !lease.isTerminal else { return }
-        guard capabilityGate.recheck(for: lease.task) else {
+        guard waiter.recheck(for: lease.task) else {
             settle(lease, as: .failed)
             return
         }
 
         let activated: Bool = lock.withLock {
             guard !lease.isTerminal else { return false }
+            guard var row = lifecycle[lease.task.id], row.lease === lease else { return false }
             lease.activate()
-            parkedLeases.removeValue(forKey: lease.task.id)
-            activeLeases[lease.task.id] = lease
+            row.place = .active
+            lifecycle[lease.task.id] = row
             return true
         }
         guard activated else { return }
@@ -483,11 +517,12 @@ public final class TaskScheduler: @unchecked Sendable {
 
     private func runActivatedLease(_ lease: Lease, timeout: TimeInterval) async {
         let taskExecution: (@Sendable () async -> Any?)? = lock.withLock {
-            taskExecutions[lease.task.id]
+            guard let row = lifecycle[lease.task.id], row.lease === lease else { return nil }
+            return row.execution
         }
 
         let box = OneShot<Any?>()
-        let executedFirst = await raceAgainstTimeout(timeout: timeout) {
+        let executedFirst = await waiter.race(timeout: timeout) {
             let value = await taskExecution?()
             box.store(value)
             return true

@@ -107,6 +107,55 @@ struct ObjcTaskDescriptorTests {
         #expect(explicitDefault.hasExplicitTimeout)
     }
 
+    @Test func omittedPinnedVsNegativeFollowsNonDefaultConfig() {
+        let store = DynamicStore()
+        let scheduler = TaskScheduler(
+            store: store,
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+        )
+
+        let swiftNil = TaskDescriptor(
+            requiredCapabilities: [.custom("ForkSwiftNil_\(UUID().uuidString)")]
+        )
+        #expect(swiftNil.timeout == nil)
+        let swiftLease = scheduler.schedule(swiftNil, taskExecution: {})
+        #expect(swiftLease.task.timeout == 0.3)
+        scheduler.cancel(taskId: swiftNil.id)
+
+        let omitted = ObjcTaskDescriptor(capabilities: ["heavyTask"])
+        #expect(omitted.underlying.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(omitted.underlying.timeout != 0.3)
+        let omittedLease = scheduler.schedule(omitted.underlying, taskExecution: {})
+        #expect(omittedLease.task.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        scheduler.cancel(taskId: omitted.id)
+
+        let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
+        #expect(negative.underlying.timeout == nil)
+        let negativeLease = scheduler.schedule(negative.underlying, taskExecution: {})
+        #expect(negativeLease.task.timeout == 0.3)
+        scheduler.cancel(taskId: negative.id)
+    }
+
+    @Test func descriptorConstructionIsOneSharedPath() {
+        let auto = ObjcMapper.makeDescriptor(
+            capabilities: ["heavyTask"], priority: 4, timeout: 60.0,
+            maxRetries: 2, metadata: ["source": "test"]
+        )
+        let explicit = ObjcMapper.makeDescriptor(
+            id: "fixed-id",
+            capabilities: ["heavyTask"], priority: 4, timeout: 60.0,
+            maxRetries: 2, metadata: ["source": "test"]
+        )
+
+        #expect(!auto.id.isEmpty)
+        #expect(explicit.id == "fixed-id")
+        #expect(auto.requiredCapabilities == explicit.requiredCapabilities)
+        #expect(auto.priority == explicit.priority)
+        #expect(auto.timeout == explicit.timeout)
+        #expect(auto.maxRetries == explicit.maxRetries)
+        #expect(auto.metadata == explicit.metadata)
+    }
+
     @Test func clientIdInitPreservesIdentity() {
         let descriptor = ObjcTaskDescriptor(clientId: "client-123", capabilities: ["heavyTask"])
 

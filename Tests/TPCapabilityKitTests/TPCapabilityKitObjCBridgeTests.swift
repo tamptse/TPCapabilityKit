@@ -199,6 +199,23 @@ struct TPCapabilityKitObjCBridgeTests {
         #expect(bridge.queryCapability("heavyTask") == false)
     }
 
+    @Test func objcRunTaskWhenAvailableNegativeTimeoutMeansDefault() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcNegTimeout_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        await withCheckedContinuation { continuation in
+            bridge.runTaskWhenAvailable(capability: "heavyTask", timeout: -1, queue: nil, task: {
+                return NSString(string: "NegativeMeansDefault")
+            }, completion: { result in
+                #expect((result as? String) == "NegativeMeansDefault")
+                continuation.resume()
+            })
+        }
+    }
+
     @Test func syncAndAsyncAvailabilityAgreeWhenAvailable() async {
         let store = DynamicStore()
         let bridge = ObjcStoreBridge(store: store)

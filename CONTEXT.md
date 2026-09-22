@@ -54,6 +54,8 @@ Owns the retry budget check, the void-completion policy, and the retry
 re-queue; `enqueue` is the only queue writer conceptually, retry re-uses the
 same Lease identity through a shared re-queue path. Owns the single expiry
 clock: race outcome authoritative, timeout resolved once at enqueue.
+Owns the lease lifecycle row (place, execution, waiters) and the single
+release shared by terminal, retry, and scope-exit paths.
 
 ## Tasks (Scheduler)
 
@@ -61,12 +63,15 @@ Deep module behind `schedule/cancel/pending/active`. Hides priority queues,
 capability matching, timeout, retry, concurrency limits, and fire-and-forget
 tracking. Variation is via `Configuration` values, not a protocol seam.
 `autoProcess` is an internal detail, not part of the seam.
-Owns the single capability waiter (one deadline per set), the Settlement path
+Owns one lifecycle table keyed by task id (place is pending, parked, or
+active; order stays in the queue), the single capability waiter (one deadline per set), the Settlement path
 (exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
 across retry), and scoped slot acquisition with re-check inside.
-`executeLease` is the only prod activator. Serves every wait through one
-result rendezvous keyed by Lease identity; holders tracked by the controller
-by task identity with idempotent release.
+ `executeLease` is the only prod activator. Serves every wait through one
+ result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
+ by task identity with owner-guarded release.
+Availability wait crosses one `wait(descriptor, timeout)` seam with an
+injectable clock, so waiter and executor share one expiry.
 
 ## Bridge (ObjC adapter)
 
@@ -74,4 +79,8 @@ Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
 live view. `ObjcLease` is a live view
 of the underlying Lease. Capability/priority/state/timeout/descriptor mapping lives in one internal
 mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
-Completion delivery defaults to the main queue unless a queue is given.
+ Completion delivery defaults to the main queue unless a queue is given.
+Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
+default applies at enqueue); an omitted ObjC timeout is instead the pinned
+construction-time default carried as an explicit value for compat.
+Immediate sync and wait-then-run agree through the one Tasks waiter.

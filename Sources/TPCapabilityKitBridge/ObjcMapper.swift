@@ -39,25 +39,11 @@ enum ObjcMapper {
         maxRetries: Int,
         metadata: [String: String]
     ) -> TaskDescriptor {
-        let caps = capabilities.map { capability(from: $0) }
-        let fields = (
+        TaskDescriptor(
+            id: id ?? UUID().uuidString,
+            requiredCapabilities: Set(capabilities.map { capability(from: $0) }),
             priority: taskPriority(from: priority),
-            timeout: taskTimeout(from: timeout)
-        )
-        if let id {
-            return TaskDescriptor(
-                id: id,
-                requiredCapabilities: Set(caps),
-                priority: fields.priority,
-                timeout: fields.timeout,
-                maxRetries: maxRetries,
-                metadata: metadata
-            )
-        }
-        return TaskDescriptor(
-            requiredCapabilities: Set(caps),
-            priority: fields.priority,
-            timeout: fields.timeout,
+            timeout: taskTimeout(from: timeout),
             maxRetries: maxRetries,
             metadata: metadata
         )

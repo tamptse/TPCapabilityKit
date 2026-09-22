@@ -2,28 +2,47 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
+private final class RecordedTimeouts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [TimeInterval] = []
+
+    func record(_ timeout: TimeInterval) {
+        lock.withLock { values.append(timeout) }
+    }
+
+    var all: [TimeInterval] {
+        lock.withLock { values }
+    }
+}
+
+private func immediateClock(recording: RecordedTimeouts? = nil) -> TaskScheduler.ExpiryClock {
+    TaskScheduler.ExpiryClock(
+        sleep: { timeout in
+            recording?.record(timeout)
+        }
+    )
+}
+
 @Suite("Timeout Pins Tests")
 struct TimeoutPinsTests {
     @Test("waiter expiry honours task timeout")
     func waiterExpiryHonoursTimeout() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
+        let recorded = RecordedTimeouts()
+        let scheduler = TaskScheduler(store: store, clock: immediateClock(recording: recorded))
 
         let task = TaskDescriptor(
             requiredCapabilities: [.custom("WaiterPin_\(UUID().uuidString)")],
             timeout: 0.3
         )
         let done = AsyncStream<Void>.makeStream()
-        let start = Date()
         let lease = scheduler.schedule(task, taskExecution: {}, completion: { _ in
             done.continuation.yield()
         })
         for await _ in done.stream { break }
-        let elapsed = Date().timeIntervalSince(start)
 
         #expect(lease.state == .expired)
-        #expect(elapsed >= 0.15)
-        #expect(elapsed < 2.0)
+        #expect(recorded.all == [0.3])
     }
 
     @Test("execution expiry honours task timeout")
@@ -32,30 +51,30 @@ struct TimeoutPinsTests {
         let pluginId = "ExecPin_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let recorded = RecordedTimeouts()
+        let scheduler = TaskScheduler(store: store, clock: immediateClock(recording: recorded))
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2)
         let done = AsyncStream<Void>.makeStream()
-        let start = Date()
         let lease = scheduler.schedule(task, taskExecution: {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }, completion: { _ in
             done.continuation.yield()
         })
         for await _ in done.stream { break }
-        let elapsed = Date().timeIntervalSince(start)
 
         #expect(lease.state == .expired)
-        #expect(elapsed >= 0.1)
-        #expect(elapsed < 1.0)
+        #expect(recorded.all == [0.2])
     }
 
     @Test("configured default applies to waiter when task timeout is nil")
     func defaultTimeoutAppliesToWaiter() async {
         let store = DynamicStore()
+        let recorded = RecordedTimeouts()
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
+            clock: immediateClock(recording: recorded)
         )
 
         let task = TaskDescriptor(
@@ -63,15 +82,12 @@ struct TimeoutPinsTests {
         )
         #expect(task.timeout == nil)
 
-        let start = Date()
         let result: String? = await scheduler.scheduleAndWait(task) {
             return "should-not-run"
         }
-        let elapsed = Date().timeIntervalSince(start)
 
         #expect(result == nil)
-        #expect(elapsed >= 0.15)
-        #expect(elapsed < 2.0)
+        #expect(recorded.all == [0.3])
     }
 
     @Test("nil timeout resolves to configured default once at enqueue")
@@ -79,7 +95,8 @@ struct TimeoutPinsTests {
         let store = DynamicStore()
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
+            clock: immediateClock()
         )
 
         let task = TaskDescriptor(

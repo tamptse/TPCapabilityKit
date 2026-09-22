@@ -220,4 +220,108 @@ struct SettlementTests {
         #expect(scheduler.pendingCount == 0)
         #expect(scheduler.activeCount == 0)
     }
+
+    @Test("same-id sequential reuse delivers both completions")
+    func sameIdSequentialReuse() async {
+        let store = DynamicStore()
+        let pluginId = "SameIdReuse_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let id = "reuse_\(UUID().uuidString)"
+        actor Counter {
+            var completions = 0
+            func inc() { completions += 1 }
+        }
+        let counter = Counter()
+
+        func runOnce() async -> Lease {
+            await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
+                store.scheduleTask(
+                    TaskDescriptor(id: id, requiredCapabilities: [.heavyTask], timeout: 5.0),
+                    task: {},
+                    completion: { finished in
+                        Task {
+                            await counter.inc()
+                            done.resume(returning: finished)
+                        }
+                    }
+                )
+            }
+        }
+
+        let first = await runOnce()
+        #expect(first.isTerminal)
+        #expect(first.state == .completed)
+        #expect(await counter.completions == 1)
+
+        let second = await runOnce()
+        #expect(second.isTerminal)
+        #expect(second.state == .completed)
+        #expect(await counter.completions == 2)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
+
+    @Test("same-id overwrite expires the old row once and the new row completes")
+    func sameIdOverwriteSettlesOldRow() async {
+        let store = DynamicStore()
+        let pluginId = "SameIdOverwrite_\(UUID().uuidString)"
+        let cap = Capability.custom("overwrite_\(UUID().uuidString)")
+
+        let id = "overwrite_\(UUID().uuidString)"
+        actor State {
+            var oldCalls = 0
+            var oldState: Lease.State?
+            var newCalls = 0
+            var newState: Lease.State?
+            func recordOld(_ lease: Lease) {
+                oldCalls += 1
+                oldState = lease.state
+            }
+            func recordNew(_ lease: Lease) {
+                newCalls += 1
+                newState = lease.state
+            }
+        }
+        let state = State()
+        let done = AsyncStream<Void>.makeStream()
+
+        store.scheduleTask(
+            TaskDescriptor(id: id, requiredCapabilities: [cap], timeout: 10.0),
+            task: {},
+            completion: { finished in
+                Task {
+                    await state.recordOld(finished)
+                    done.continuation.yield()
+                }
+            }
+        )
+        store.scheduleTask(
+            TaskDescriptor(id: id, requiredCapabilities: [cap], timeout: 10.0),
+            task: {},
+            completion: { finished in
+                Task {
+                    await state.recordNew(finished)
+                    done.continuation.yield()
+                }
+            }
+        )
+
+        store.registerCapability(for: pluginId, capabilities: [cap])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        for await _ in done.stream {
+            let oldCalls = await state.oldCalls
+            let newCalls = await state.newCalls
+            if oldCalls == 1 && newCalls == 1 { break }
+        }
+
+        #expect(await state.oldCalls == 1)
+        #expect(await state.oldState == .expired)
+        #expect(await state.newCalls == 1)
+        #expect(await state.newState == .completed)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
 }

@@ -26,6 +26,11 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     public let underlying: TaskDescriptor
 
     /// Creates a new task descriptor.
+    /// Timeout compat fork: an omitted ObjC timeout pins the
+    /// construction-time default as an explicit value, so existing callers
+    /// omitting timeout keep their behavior even under a non-default
+    /// scheduler Configuration. Pass a negative timeout for truly
+    /// unspecified (nil), letting the scheduler default resolve at enqueue.
     /// - Parameters:
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).

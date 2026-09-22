@@ -4,45 +4,43 @@ import Foundation
 
 @Suite("PendingQueue Tests")
 struct PendingQueueTests {
-    private func makeLease(id: String = UUID().uuidString, priority: TaskPriority) -> Lease {
-        Lease(task: TaskDescriptor(id: id, requiredCapabilities: [], priority: priority))
-    }
+    private func makeId() -> String { UUID().uuidString }
 
     @Test("dequeue returns highest priority first regardless of enqueue order")
     func dequeuePriorityOrder() {
         var queue = PendingQueue()
-        let background = makeLease(priority: .background)
-        let low = makeLease(priority: .low)
-        let normal = makeLease(priority: .normal)
-        let high = makeLease(priority: .high)
-        let critical = makeLease(priority: .critical)
-        queue.enqueue(background)
-        queue.enqueue(normal)
-        queue.enqueue(critical)
-        queue.enqueue(low)
-        queue.enqueue(high)
+        let background = makeId()
+        let low = makeId()
+        let normal = makeId()
+        let high = makeId()
+        let critical = makeId()
+        queue.enqueue(id: background, priority: .background)
+        queue.enqueue(id: normal, priority: .normal)
+        queue.enqueue(id: critical, priority: .critical)
+        queue.enqueue(id: low, priority: .low)
+        queue.enqueue(id: high, priority: .high)
 
-        #expect(queue.dequeue() === critical)
-        #expect(queue.dequeue() === high)
-        #expect(queue.dequeue() === normal)
-        #expect(queue.dequeue() === low)
-        #expect(queue.dequeue() === background)
+        #expect(queue.dequeue() == critical)
+        #expect(queue.dequeue() == high)
+        #expect(queue.dequeue() == normal)
+        #expect(queue.dequeue() == low)
+        #expect(queue.dequeue() == background)
         #expect(queue.dequeue() == nil)
     }
 
     @Test("dequeue is FIFO within the same priority")
     func dequeueFIFOWithinPriority() {
         var queue = PendingQueue()
-        let first = makeLease(priority: .normal)
-        let second = makeLease(priority: .normal)
-        let third = makeLease(priority: .normal)
-        queue.enqueue(first)
-        queue.enqueue(second)
-        queue.enqueue(third)
+        let first = makeId()
+        let second = makeId()
+        let third = makeId()
+        queue.enqueue(id: first, priority: .normal)
+        queue.enqueue(id: second, priority: .normal)
+        queue.enqueue(id: third, priority: .normal)
 
-        #expect(queue.dequeue() === first)
-        #expect(queue.dequeue() === second)
-        #expect(queue.dequeue() === third)
+        #expect(queue.dequeue() == first)
+        #expect(queue.dequeue() == second)
+        #expect(queue.dequeue() == third)
     }
 
     @Test("count tracks enqueue, dequeue and remove")
@@ -50,98 +48,92 @@ struct PendingQueueTests {
         var queue = PendingQueue()
         #expect(queue.count == 0)
 
-        let first = makeLease(priority: .high)
-        let second = makeLease(priority: .low)
-        queue.enqueue(first)
+        let first = makeId()
+        let second = makeId()
+        queue.enqueue(id: first, priority: .high)
         #expect(queue.count == 1)
-        queue.enqueue(second)
+        queue.enqueue(id: second, priority: .low)
         #expect(queue.count == 2)
 
         _ = queue.dequeue()
         #expect(queue.count == 1)
 
-        _ = queue.remove(taskId: second.task.id)
+        #expect(queue.remove(taskId: second) == true)
         #expect(queue.count == 0)
     }
 
-    @Test("remove returns nil for unknown id and dequeue on empty returns nil")
+    @Test("remove returns false for unknown id and dequeue on empty returns nil")
     func unknownRemoveAndEmptyDequeue() {
         var queue = PendingQueue()
         #expect(queue.dequeue() == nil)
-        #expect(queue.remove(taskId: "unknown-id") == nil)
+        #expect(queue.remove(taskId: "unknown-id") == false)
 
-        let lease = makeLease(priority: .normal)
-        queue.enqueue(lease)
-        #expect(queue.remove(taskId: "unknown-id") == nil)
+        let id = makeId()
+        queue.enqueue(id: id, priority: .normal)
+        #expect(queue.remove(taskId: "unknown-id") == false)
         #expect(queue.count == 1)
     }
 
-    @Test("dequeued lease is no longer resolvable by lookup")
+    @Test("dequeued id is gone from the queue")
     func lookupAfterDequeue() {
         var queue = PendingQueue()
-        let lease = makeLease(priority: .high)
-        queue.enqueue(lease)
+        let id = makeId()
+        queue.enqueue(id: id, priority: .high)
 
-        let dequeued = queue.dequeue()
-        #expect(dequeued === lease)
-        #expect(queue.lease(taskId: lease.task.id) == nil)
+        #expect(queue.dequeue() == id)
         #expect(queue.count == 0)
-        #expect(queue.remove(taskId: lease.task.id) == nil)
+        #expect(queue.remove(taskId: id) == false)
     }
 
-    @Test("remove after dequeue returns nil and count stays derived")
+    @Test("remove after dequeue returns false and count stays derived")
     func removeAfterDequeueStaysDerived() {
         var queue = PendingQueue()
-        let first = makeLease(priority: .normal)
-        let second = makeLease(priority: .normal)
-        queue.enqueue(first)
-        queue.enqueue(second)
+        let first = makeId()
+        let second = makeId()
+        queue.enqueue(id: first, priority: .normal)
+        queue.enqueue(id: second, priority: .normal)
 
         _ = queue.dequeue()
         #expect(queue.count == 1)
-        #expect(queue.remove(taskId: first.task.id) == nil)
+        #expect(queue.remove(taskId: first) == false)
         #expect(queue.count == 1)
 
-        #expect(queue.remove(taskId: second.task.id) === second)
+        #expect(queue.remove(taskId: second) == true)
         #expect(queue.count == 0)
         #expect(queue.dequeue() == nil)
     }
 
-    @Test("requeued lease dequeues again with the same identity")
+    @Test("requeued id dequeues again")
     func requeueSameIdentity() {
         var queue = PendingQueue()
-        let lease = makeLease(priority: .normal)
-        queue.enqueue(lease)
+        let id = makeId()
+        queue.enqueue(id: id, priority: .normal)
 
-        let dequeued = queue.dequeue()
-        #expect(dequeued === lease)
+        #expect(queue.dequeue() == id)
         #expect(queue.count == 0)
 
-        queue.requeue(lease)
+        queue.requeue(id: id, priority: .normal)
         #expect(queue.count == 1)
-        #expect(queue.lease(taskId: lease.task.id) === lease)
-        #expect(queue.dequeue() === lease)
+        #expect(queue.dequeue() == id)
         #expect(queue.count == 0)
     }
 
-    @Test("cancel removes pending lease, clears lookup, preserves order of remainder")
+    @Test("cancel removes pending id, preserves order of remainder")
     func cancelClearsLookupAndPreservesOrder() {
         var queue = PendingQueue()
-        let first = makeLease(priority: .normal)
-        let cancelled = makeLease(priority: .normal)
-        let last = makeLease(priority: .normal)
-        queue.enqueue(first)
-        queue.enqueue(cancelled)
-        queue.enqueue(last)
+        let first = makeId()
+        let cancelled = makeId()
+        let last = makeId()
+        queue.enqueue(id: first, priority: .normal)
+        queue.enqueue(id: cancelled, priority: .normal)
+        queue.enqueue(id: last, priority: .normal)
 
-        let removed = queue.remove(taskId: cancelled.task.id)
-        #expect(removed === cancelled)
-        #expect(queue.lease(taskId: cancelled.task.id) == nil)
+        #expect(queue.remove(taskId: cancelled) == true)
         #expect(queue.count == 2)
-        #expect(queue.remove(taskId: cancelled.task.id) == nil)
+        #expect(queue.remove(taskId: cancelled) == false)
 
-        #expect(queue.dequeue() === first)
-        #expect(queue.dequeue() === last)
+        #expect(queue.dequeue() == first)
+        #expect(queue.dequeue() == last)
         #expect(queue.dequeue() == nil)
         #expect(queue.count == 0)
     }
@@ -149,50 +141,64 @@ struct PendingQueueTests {
     @Test("cancel of highest priority promotes next priority")
     func cancelPromotesNextPriority() {
         var queue = PendingQueue()
-        let critical = makeLease(priority: .critical)
-        let high = makeLease(priority: .high)
-        queue.enqueue(high)
-        queue.enqueue(critical)
+        let critical = makeId()
+        let high = makeId()
+        queue.enqueue(id: high, priority: .high)
+        queue.enqueue(id: critical, priority: .critical)
 
-        #expect(queue.remove(taskId: critical.task.id) === critical)
+        #expect(queue.remove(taskId: critical) == true)
         #expect(queue.count == 1)
-        #expect(queue.dequeue() === high)
+        #expect(queue.dequeue() == high)
     }
 
     @Test("middle removal preserves FIFO order of remainder")
     func middleRemovalPreservesFIFO() {
         var queue = PendingQueue()
-        let a = makeLease(priority: .normal)
-        let b = makeLease(priority: .normal)
-        let c = makeLease(priority: .normal)
-        let d = makeLease(priority: .normal)
-        queue.enqueue(a)
-        queue.enqueue(b)
-        queue.enqueue(c)
-        queue.enqueue(d)
+        let a = makeId()
+        let b = makeId()
+        let c = makeId()
+        let d = makeId()
+        queue.enqueue(id: a, priority: .normal)
+        queue.enqueue(id: b, priority: .normal)
+        queue.enqueue(id: c, priority: .normal)
+        queue.enqueue(id: d, priority: .normal)
 
-        #expect(queue.remove(taskId: b.task.id) === b)
+        #expect(queue.remove(taskId: b) == true)
         #expect(queue.count == 3)
-        #expect(queue.dequeue() === a)
-        #expect(queue.dequeue() === c)
-        #expect(queue.dequeue() === d)
+        #expect(queue.dequeue() == a)
+        #expect(queue.dequeue() == c)
+        #expect(queue.dequeue() == d)
         #expect(queue.dequeue() == nil)
     }
 
-    @Test("requeue appends to tail behind waiting leases")
+    @Test("requeue appends to tail behind waiting ids")
     func requeueAppendsToTail() {
         var queue = PendingQueue()
-        let first = makeLease(priority: .normal)
-        let second = makeLease(priority: .normal)
-        queue.enqueue(first)
-        queue.enqueue(second)
+        let first = makeId()
+        let second = makeId()
+        queue.enqueue(id: first, priority: .normal)
+        queue.enqueue(id: second, priority: .normal)
 
-        let dequeued = queue.dequeue()
-        #expect(dequeued === first)
-        queue.requeue(first)
+        #expect(queue.dequeue() == first)
+        queue.requeue(id: first, priority: .normal)
 
-        #expect(queue.dequeue() === second)
-        #expect(queue.dequeue() === first)
+        #expect(queue.dequeue() == second)
+        #expect(queue.dequeue() == first)
+        #expect(queue.dequeue() == nil)
+    }
+
+    @Test("enqueue of the same id moves it to the tail")
+    func duplicateEnqueueMovesToTail() {
+        var queue = PendingQueue()
+        let first = makeId()
+        let second = makeId()
+        queue.enqueue(id: first, priority: .normal)
+        queue.enqueue(id: second, priority: .normal)
+        queue.enqueue(id: first, priority: .normal)
+
+        #expect(queue.count == 2)
+        #expect(queue.dequeue() == second)
+        #expect(queue.dequeue() == first)
         #expect(queue.dequeue() == nil)
     }
 }

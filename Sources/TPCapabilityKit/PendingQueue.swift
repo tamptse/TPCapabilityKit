@@ -1,14 +1,15 @@
 import Foundation
 
-/// Queue indexes for pending leases, owned by the Tasks module.
+/// Order index for pending task ids, owned by the Tasks module.
 ///
-/// Module with a small Interface behind the Tasks Seam: enqueue/dequeue/
-/// requeue/remove/lookup/count. Called under the Tasks lock, so it holds
-/// no lock of its own.
+/// Order only: stores (id, priority) for dequeue ordering, no Lease objects,
+/// no cancel lookup. Cancel lookup and waiter state live in the Tasks
+/// lifecycle table; this queue answers dequeue order and removal only.
+/// Called under the Tasks lock, so it holds no lock of its own.
 struct PendingQueue: Sendable {
     private static let dequeueOrder = TaskPriority.allCases.sorted(by: >)
 
-    private var leasesById: [String: Lease] = [:]
+    private var prioritiesById: [String: TaskPriority] = [:]
     private var heads: [TaskPriority: String] = [:]
     private var tails: [TaskPriority: String] = [:]
     private var nextById: [String: String] = [:]
@@ -16,48 +17,43 @@ struct PendingQueue: Sendable {
 
     init() {}
 
-    var count: Int { leasesById.count }
+    var count: Int { prioritiesById.count }
 
-    mutating func enqueue(_ lease: Lease) {
-        insertAtTail(lease)
+    mutating func enqueue(id: String, priority: TaskPriority) {
+        insertAtTail(id: id, priority: priority)
     }
 
-    mutating func dequeue() -> Lease? {
+    mutating func dequeue() -> String? {
         for priority in Self.dequeueOrder {
             guard let headId = heads[priority] else { continue }
-            guard let lease = leasesById[headId] else {
+            guard prioritiesById[headId] != nil else {
                 repairDanglingHead(headId, priority: priority)
                 continue
             }
             unlink(taskId: headId, priority: priority)
-            leasesById.removeValue(forKey: headId)
-            return lease
+            prioritiesById.removeValue(forKey: headId)
+            return headId
         }
         return nil
     }
 
-    mutating func requeue(_ lease: Lease) {
-        insertAtTail(lease)
+    mutating func requeue(id: String, priority: TaskPriority) {
+        insertAtTail(id: id, priority: priority)
     }
 
-    mutating func remove(taskId: String) -> Lease? {
-        guard let lease = leasesById[taskId] else { return nil }
-        unlink(taskId: taskId, priority: lease.task.priority)
-        leasesById.removeValue(forKey: taskId)
-        return lease
+    @discardableResult
+    mutating func remove(taskId: String) -> Bool {
+        guard let priority = prioritiesById[taskId] else { return false }
+        unlink(taskId: taskId, priority: priority)
+        prioritiesById.removeValue(forKey: taskId)
+        return true
     }
 
-    func lease(taskId: String) -> Lease? {
-        leasesById[taskId]
-    }
-
-    private mutating func insertAtTail(_ lease: Lease) {
-        let id = lease.task.id
-        if let existing = leasesById[id] {
-            unlink(taskId: id, priority: existing.task.priority)
+    private mutating func insertAtTail(id: String, priority: TaskPriority) {
+        if let existing = prioritiesById[id] {
+            unlink(taskId: id, priority: existing)
         }
-        leasesById[id] = lease
-        let priority = lease.task.priority
+        prioritiesById[id] = priority
         if let tailId = tails[priority] {
             nextById[tailId] = id
             prevById[id] = tailId

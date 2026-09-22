@@ -9,7 +9,7 @@ import Foundation
 ///   states reject `activate`/`complete`/`fail`/`expire` as no-ops.
 /// - `beginRetry()` resets to pending with cleared result and `retryCount + 1`.
 /// Only `expire()` accepts pending: cancel-of-pending settles through the same
-/// expired path (`TaskScheduler.settle(_:as:)` → `terminalize`), so
+/// expired path (`TaskScheduler.settle(_:as:)` row transition), so
 /// `complete`/`fail` staying active-only is intentional, not a missing case.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
 ///   (`activate`, `complete`, `fail`, `expire`, `beginRetry`) are `internal`

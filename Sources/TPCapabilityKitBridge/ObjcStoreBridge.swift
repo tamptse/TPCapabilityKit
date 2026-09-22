@@ -92,18 +92,12 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     // MARK: - Task Execution APIs
 
-    /// Single availability predicate for immediate-run; wait-then-run delegates
-    /// to the store waiter built on the same query, so both agree.
-    private func isAvailable(_ capability: Capability) -> Bool {
-        store.queryCapability(capability)
-    }
-
     /// Runs a task immediately if the required capability is available.
-    /// Mirrors `DynamicStore.runTask(requiring:)` semantics synchronously:
-    /// query the capability, run the closure inline, otherwise return nil.
-    /// True async delegation is impossible here — `@objc` cannot await the
-    /// store's async `runTask`, and blocking the calling thread on a semaphore
-    /// would risk deadlock. For wait-then-run use `runTaskWhenAvailable`.
+    /// Sync fast-path over the same registry state the Tasks waiter resolves,
+    /// so sync and wait-then-run agree by construction (pinned by interface
+    /// tests, not by this comment). Stays synchronous because `@objc` cannot
+    /// await; blocking the calling thread on a semaphore would risk deadlock.
+    /// For wait-then-run use `runTaskWhenAvailable`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -112,16 +106,20 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        guard isAvailable(ObjcMapper.capability(from: capability)) else { return nil }
+        guard store.queryCapability(ObjcMapper.capability(from: capability)) else { return nil }
         return task()
     }
 
     /// Runs a task when the required capability becomes available, with a timeout.
     /// Delivers the result on the specified queue.
-    /// Availability matches `runTask` — same query behind both, so sync and async agree.
+    /// Delegates to the one Tasks waiter (`scheduleTaskAndWait`) via the shared
+    /// descriptor path, so a wire-negative timeout means unspecified (nil) and
+    /// the scheduler default applies exactly once at enqueue. (An omitted ObjC
+    /// timeout is instead the pinned construction-time default, not nil.)
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
-    ///   - timeout: Maximum seconds to wait for the capability.
+    ///   - timeout: Maximum seconds to wait for the capability. Negative means
+    ///     unspecified, so the scheduler Configuration default applies.
     ///   - queue: Queue for callback delivery. Pass `nil` for main queue.
     ///   - task: The task closure to execute. Must return an NSObject.
     ///   - completion: Called on specified queue with the result, or nil if timeout.
@@ -133,11 +131,17 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         completion: @escaping (NSObject?) -> Void
     ) {
         let targetQueue = queue ?? .main
-        let cap = ObjcMapper.capability(from: capability)
+        let descriptor = ObjcMapper.makeDescriptor(
+            capabilities: [capability],
+            priority: TaskPriority.normal.rawValue,
+            timeout: timeout,
+            maxRetries: 0,
+            metadata: [:]
+        )
         let taskBox = ObjcCallbackBox(task)
         let completionBox = ObjcCallbackBox(completion)
         Task {
-            let result: NSObject? = await store.runTaskWhenAvailable(capability: cap, timeout: timeout) {
+            let result: NSObject? = await store.scheduleTaskAndWait(descriptor) {
                 taskBox.value()
             }
             targetQueue.async {
