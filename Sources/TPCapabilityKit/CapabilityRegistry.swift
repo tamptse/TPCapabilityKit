@@ -94,4 +94,11 @@ final class CapabilityRegistry: @unchecked Sendable {
     func publish(snapshot: [String: Set<Capability>]) {
         snapshotSubject.send(snapshot)
     }
+
+    func emit(_ mutation: MutationResult) {
+        for (subject, value) in mutation.notifications {
+            subject.send(value)
+        }
+        publish(snapshot: mutation.snapshot)
+    }
 }

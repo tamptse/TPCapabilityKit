@@ -1,19 +1,14 @@
 import Foundation
 
-/// Concurrency limiter keyed by Capability sets with scoped Slot tokens.
-/// Synchronous release on scope exit; idempotent via held-slot tracking.
+/// Concurrency limiter keyed by Capability sets, holders owned by task identity.
+/// Single release shared by terminal, retry, and scope-exit; idempotent by task id.
 final class ConcurrencyController: @unchecked Sendable {
-    struct Slot: Sendable, Hashable {
-        let id: UUID
-        let keys: Set<Capability>
-    }
-
     private let maxPerCapability: Int?
     private let maxGlobal: Int?
     private let lock = NSLock()
     private var capabilitySlots: [Capability: Int] = [:]
     private var globalSlots: Int = 0
-    private var heldSlots: [UUID: Set<Capability>] = [:]
+    private var heldKeys: [String: Set<Capability>] = [:]
     private var waitingContinuations: [CheckedContinuation<Void, Never>] = []
 
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
@@ -21,10 +16,10 @@ final class ConcurrencyController: @unchecked Sendable {
         self.maxGlobal = maxGlobal
     }
 
-    internal func acquire(keys: Set<Capability>) async -> Slot {
+    internal func acquire(keys: Set<Capability>, taskId: String) async {
         while true {
-            if let slot = lock.withLock({ tryAcquire(keys: keys) }) {
-                return slot
+            if lock.withLock({ tryHold(keys: keys, taskId: taskId) }) {
+                return
             }
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 var resumeNow = false
@@ -40,12 +35,12 @@ final class ConcurrencyController: @unchecked Sendable {
         }
     }
 
-    internal func release(_ slot: Slot) {
+    internal func release(taskId: String) {
         var toResume: CheckedContinuation<Void, Never>?
         lock.withLock {
-            guard heldSlots.removeValue(forKey: slot.id) != nil else { return }
+            guard let keys = heldKeys.removeValue(forKey: taskId) else { return }
             globalSlots = max(0, globalSlots - 1)
-            for cap in slot.keys {
+            for cap in keys {
                 capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
             }
             if !waitingContinuations.isEmpty {
@@ -80,19 +75,15 @@ final class ConcurrencyController: @unchecked Sendable {
         return true
     }
 
-    private func makeSlot(keys: Set<Capability>) -> Slot {
+    private func tryHold(keys: Set<Capability>, taskId: String) -> Bool {
+        if heldKeys[taskId] != nil { return true }
+        guard canAcquire(keys: keys) else { return false }
         globalSlots += 1
         for cap in keys {
             capabilitySlots[cap, default: 0] += 1
         }
-        let slot = Slot(id: UUID(), keys: keys)
-        heldSlots[slot.id] = keys
-        return slot
-    }
-
-    private func tryAcquire(keys: Set<Capability>) -> Slot? {
-        guard canAcquire(keys: keys) else { return nil }
-        return makeSlot(keys: keys)
+        heldKeys[taskId] = keys
+        return true
     }
 
     /// Statistics about current concurrency utilization.

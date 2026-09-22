@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import TPCapabilityKit
+@testable import TPCapabilityKitBridge
 
 @Suite("Configuration Tests")
 struct ConfigurationTests {
@@ -134,5 +135,49 @@ struct ConfigurationTests {
 
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
+    }
+
+    @Test("bridge unspecified timeout follows scheduler default")
+    func bridgeUnspecifiedFollowsDefault() async {
+        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
+        let pluginId = "ConfigBridgeUnspec_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+        let bridge = ObjcStoreBridge(store: store)
+
+        let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
+        #expect(!descriptor.hasExplicitTimeout)
+
+        await withCheckedContinuation { continuation in
+            bridge.taskScheduler.scheduleAndWait(descriptor, task: {
+                Thread.sleep(forTimeInterval: 1.0)
+                return NSString(string: "should-expire")
+            }, completion: { result in
+                #expect(result == nil)
+                continuation.resume()
+            })
+        }
+        #expect(store.pendingTaskCount == 0)
+    }
+
+    @Test("bridge explicit timeout honored over scheduler default")
+    func bridgeExplicitHonored() async {
+        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
+        let pluginId = "ConfigBridgeExplicit_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+        let bridge = ObjcStoreBridge(store: store)
+
+        let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: 30.0)
+        #expect(descriptor.hasExplicitTimeout)
+
+        await withCheckedContinuation { continuation in
+            bridge.taskScheduler.scheduleAndWait(descriptor, task: {
+                NSString(string: "ok")
+            }, completion: { result in
+                #expect((result as? String) == "ok")
+                continuation.resume()
+            })
+        }
     }
 }

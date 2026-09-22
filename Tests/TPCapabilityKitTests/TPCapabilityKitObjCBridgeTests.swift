@@ -198,4 +198,45 @@ struct TPCapabilityKitObjCBridgeTests {
         #expect(store.queryCapabilities(for: pluginId).isEmpty)
         #expect(bridge.queryCapability("heavyTask") == false)
     }
+
+    @Test func syncAndAsyncAvailabilityAgreeWhenAvailable() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcAvailCap_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let syncResult = bridge.runTask(capability: "heavyTask") {
+            NSString(string: "SyncResult")
+        }
+        #expect((syncResult as? String) == "SyncResult")
+
+        await withCheckedContinuation { continuation in
+            bridge.runTaskWhenAvailable(capability: "heavyTask", timeout: 1.0, queue: nil, task: {
+                NSString(string: "AsyncResult")
+            }, completion: { result in
+                #expect((result as? String) == "AsyncResult")
+                continuation.resume()
+            })
+        }
+    }
+
+    @Test func syncAndAsyncAvailabilityAgreeWhenUnavailable() async {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let uniqueCap = "unavailCap_\(UUID().uuidString)"
+
+        let syncResult = bridge.runTask(capability: uniqueCap) {
+            NSString(string: "ShouldNotRun")
+        }
+        #expect(syncResult == nil)
+
+        await withCheckedContinuation { continuation in
+            bridge.runTaskWhenAvailable(capability: uniqueCap, timeout: 0.1, queue: nil, task: {
+                NSString(string: "ShouldNotRun")
+            }, completion: { result in
+                #expect(result == nil)
+                continuation.resume()
+            })
+        }
+    }
 }

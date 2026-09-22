@@ -12,6 +12,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         underlying.timeout ?? TaskScheduler.Configuration.default.defaultTimeout
     }
 
+    @objc public var hasExplicitTimeout: Bool { underlying.timeout != nil }
+
     @objc public var maxRetries: Int { underlying.maxRetries }
 
     @objc public var capabilities: [String] {
@@ -28,7 +30,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
     ///     Out-of-range values coerce to normal (see `ObjcMapper.taskPriority`).
-    ///   - timeout: Maximum execution time in seconds. Defaults to the scheduler Configuration default.
+    ///   - timeout: Maximum execution time in seconds. Negative means unspecified,
+    ///     so the scheduler Configuration default applies at execution.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
     @objc public init(
@@ -42,7 +45,38 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         self.underlying = TaskDescriptor(
             requiredCapabilities: Set(caps),
             priority: ObjcMapper.taskPriority(from: priority),
-            timeout: timeout,
+            timeout: timeout < 0 ? nil : timeout,
+            maxRetries: maxRetries,
+            metadata: metadata
+        )
+        super.init()
+    }
+
+    /// Creates a new task descriptor with a client-chosen identifier.
+    /// The identifier survives the Bridge round-trip, so cancel-by-id works from ObjC.
+    /// - Parameters:
+    ///   - clientId: Client-chosen task identifier, preserved as the descriptor id.
+    ///   - capabilities: Array of capability strings required.
+    ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
+    ///     Out-of-range values coerce to normal (see `ObjcMapper.taskPriority`).
+    ///   - timeout: Maximum execution time in seconds. Negative means unspecified,
+    ///     so the scheduler Configuration default applies at execution.
+    ///   - maxRetries: Maximum retry attempts. Default is 0.
+    ///   - metadata: Optional metadata dictionary.
+    @objc public init(
+        clientId: String,
+        capabilities: [String],
+        priority: Int = 2,
+        timeout: TimeInterval = TaskScheduler.Configuration.default.defaultTimeout,
+        maxRetries: Int = 0,
+        metadata: [String: String] = [:]
+    ) {
+        let caps = capabilities.map { ObjcMapper.capability(from: $0) }
+        self.underlying = TaskDescriptor(
+            id: clientId,
+            requiredCapabilities: Set(caps),
+            priority: ObjcMapper.taskPriority(from: priority),
+            timeout: timeout < 0 ? nil : timeout,
             maxRetries: maxRetries,
             metadata: metadata
         )

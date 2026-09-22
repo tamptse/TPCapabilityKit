@@ -185,6 +185,77 @@ struct TPCapabilityKitCoreTests {
         newCancellables.removeAll()
     }
 
+    @Test func stateRemovalIsInvisibleToTypedObservers() {
+        let store = DynamicStore()
+        let pluginId = "RemovalContract_\(UUID().uuidString)"
+        var received: [String] = []
+        var cancellables = Set<AnyCancellable>()
+
+        store.observeState(pluginId: pluginId, type: String.self)
+            .sink { value in
+                received.append(value)
+            }
+            .store(in: &cancellables)
+
+        store.updateState(pluginId: pluginId, newState: "Before")
+        #expect(received.last == "Before")
+        let delivered = received.count
+
+        store.removeState(for: pluginId)
+
+        #expect(received.count == delivered)
+        #expect(store.getState(pluginId: pluginId, type: String.self) == nil)
+
+        cancellables.removeAll()
+    }
+
+    @Test func registrationOrderingGuarantee() {
+        final class OrderingPlugin: AppPlugin {
+            let id: String
+            var sawCapabilityDuringStart: Bool?
+            init(id: String) { self.id = id }
+            var capabilities: Set<Capability> { [.heavyTask] }
+            func start(with store: DynamicStore) {
+                sawCapabilityDuringStart = store.queryCapability(.heavyTask)
+            }
+        }
+
+        let store = DynamicStore()
+        let plugin = OrderingPlugin(id: "Ordering_\(UUID().uuidString)")
+        store.register(plugin: plugin)
+
+        #expect(plugin.sawCapabilityDuringStart == true)
+        #expect(store.queryCapability(.heavyTask))
+    }
+
+    @Test func runVsScheduleEquivalence() async {
+        struct CapPlugin: AppPlugin {
+            let id: String
+            var capabilities: Set<Capability> { [.heavyTask] }
+            func start(with store: DynamicStore) {}
+        }
+
+        let store = DynamicStore()
+        store.register(plugin: CapPlugin(id: "Equiv_\(UUID().uuidString)"))
+
+        let immediate = await store.runTask(requiring: .heavyTask) { "ok" }
+        let waiting = await store.runTaskWhenAvailable(capability: .heavyTask, timeout: 1.0) { "ok" }
+        let scheduled = await store.scheduleTaskAndWait(
+            TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 1.0)
+        ) { "ok" }
+        #expect(immediate == "ok")
+        #expect(waiting == "ok")
+        #expect(scheduled == "ok")
+
+        let missing = Capability.custom("Missing_\(UUID().uuidString)")
+        let immediateMiss = await store.runTask(requiring: missing) { "ok" }
+        #expect(immediateMiss == nil)
+        let scheduledMiss = await store.scheduleTaskAndWait(
+            TaskDescriptor(requiredCapabilities: [missing], timeout: 0.2)
+        ) { "ok" }
+        #expect(scheduledMiss == nil)
+    }
+
     @Test func sampleUsageRunsCleanly() {
         TPCapabilityKitSample.runExample()
     }

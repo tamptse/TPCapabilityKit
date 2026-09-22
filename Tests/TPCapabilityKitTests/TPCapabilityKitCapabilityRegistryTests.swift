@@ -134,4 +134,60 @@ struct TPCapabilityKitCapabilityRegistryTests {
 
         cancellables.removeAll()
     }
+
+    @Test("emit helper sends notifications before snapshot")
+    func emitNotificationsBeforeSnapshot() {
+        let registry = CapabilityRegistry()
+        let pluginId = "RegEmitOrder_\(UUID().uuidString)"
+        let cap = Capability.custom("regEmitOrder_\(UUID().uuidString)")
+        var order: [String] = []
+        var cancellables = Set<AnyCancellable>()
+
+        registry.observe(cap)
+            .sink { _ in order.append("notify") }
+            .store(in: &cancellables)
+        registry.observeAll()
+            .sink { snapshot in
+                if !snapshot.isEmpty { order.append("snapshot") }
+            }
+            .store(in: &cancellables)
+        order.removeAll()
+
+        let mutation = registry.register(for: pluginId, capabilities: [cap])
+        registry.emit(mutation)
+        #expect(order == ["notify", "snapshot"])
+        #expect(registry.query(cap) == true)
+        #expect(registry.queryAll()[pluginId] == [cap])
+
+        cancellables.removeAll()
+    }
+
+    @Test("replacement registration emits false for removed and true for added")
+    func replacementEmitsFalseThenTrue() {
+        let registry = CapabilityRegistry()
+        let pluginId = "RegReplaceEmit_\(UUID().uuidString)"
+        var cancellables = Set<AnyCancellable>()
+        var heavyReceived: [Bool] = []
+        var networkReceived: [Bool] = []
+
+        registry.observe(.heavyTask)
+            .sink { heavyReceived.append($0) }
+            .store(in: &cancellables)
+        registry.observe(.networkAccess)
+            .sink { networkReceived.append($0) }
+            .store(in: &cancellables)
+
+        let first = registry.register(for: pluginId, capabilities: [.heavyTask])
+        registry.emit(first)
+        #expect(heavyReceived.last == true)
+
+        let second = registry.register(for: pluginId, capabilities: [.networkAccess])
+        registry.emit(second)
+        #expect(heavyReceived.last == false)
+        #expect(networkReceived.last == true)
+        #expect(registry.query(.heavyTask) == false)
+        #expect(registry.query(.networkAccess) == true)
+
+        cancellables.removeAll()
+    }
 }

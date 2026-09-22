@@ -103,4 +103,39 @@ struct PendingQueueTests {
         #expect(queue.dequeue() === lease)
         #expect(queue.count == 0)
     }
+
+    @Test("cancel removes pending lease, clears lookup, preserves order of remainder")
+    func cancelClearsLookupAndPreservesOrder() {
+        var queue = PendingQueue()
+        let first = makeLease(priority: .normal)
+        let cancelled = makeLease(priority: .normal)
+        let last = makeLease(priority: .normal)
+        queue.enqueue(first)
+        queue.enqueue(cancelled)
+        queue.enqueue(last)
+
+        let removed = queue.remove(taskId: cancelled.task.id)
+        #expect(removed === cancelled)
+        #expect(queue.lease(taskId: cancelled.task.id) == nil)
+        #expect(queue.count == 2)
+        #expect(queue.remove(taskId: cancelled.task.id) == nil)
+
+        #expect(queue.dequeue() === first)
+        #expect(queue.dequeue() === last)
+        #expect(queue.dequeue() == nil)
+        #expect(queue.count == 0)
+    }
+
+    @Test("cancel of highest priority promotes next priority")
+    func cancelPromotesNextPriority() {
+        var queue = PendingQueue()
+        let critical = makeLease(priority: .critical)
+        let high = makeLease(priority: .high)
+        queue.enqueue(high)
+        queue.enqueue(critical)
+
+        #expect(queue.remove(taskId: critical.task.id) === critical)
+        #expect(queue.count == 1)
+        #expect(queue.dequeue() === high)
+    }
 }

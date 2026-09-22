@@ -84,6 +84,52 @@ struct ObjcTaskDescriptorTests {
         #expect(descriptor.id == descriptor.underlying.id)
         #expect(descriptor.priority == descriptor.underlying.priority.rawValue)
     }
+
+    @Test func negativeTimeoutMeansUnspecified() {
+        let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
+
+        #expect(descriptor.underlying.timeout == nil)
+        #expect(!descriptor.hasExplicitTimeout)
+        #expect(descriptor.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+    }
+
+    @Test func explicitTimeoutPreserved() {
+        let explicit = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: 60.0)
+        #expect(explicit.underlying.timeout == 60.0)
+        #expect(explicit.hasExplicitTimeout)
+        #expect(explicit.timeout == 60.0)
+
+        let explicitDefault = ObjcTaskDescriptor(
+            capabilities: ["heavyTask"],
+            timeout: TaskScheduler.Configuration.default.defaultTimeout
+        )
+        #expect(explicitDefault.underlying.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(explicitDefault.hasExplicitTimeout)
+    }
+
+    @Test func clientIdInitPreservesIdentity() {
+        let descriptor = ObjcTaskDescriptor(clientId: "client-123", capabilities: ["heavyTask"])
+
+        #expect(descriptor.id == "client-123")
+        #expect(descriptor.underlying.id == "client-123")
+    }
+
+    @Test func clientIdInitWithNegativeTimeoutIsUnspecified() {
+        let descriptor = ObjcTaskDescriptor(clientId: "client-456", capabilities: ["heavyTask"], timeout: -1)
+
+        #expect(descriptor.id == "client-456")
+        #expect(descriptor.underlying.timeout == nil)
+        #expect(!descriptor.hasExplicitTimeout)
+    }
+
+    @Test func liveViewInitPreservesIdentity() {
+        let swift = TaskDescriptor(id: "swift-id-789", requiredCapabilities: [.heavyTask], timeout: nil)
+        let wrapped = ObjcTaskDescriptor(underlying: swift)
+
+        #expect(wrapped.id == "swift-id-789")
+        #expect(wrapped.underlying.id == "swift-id-789")
+        #expect(!wrapped.hasExplicitTimeout)
+    }
 }
 
 struct ObjcLeaseTests {
@@ -249,5 +295,27 @@ struct ObjcStoreBridgeSchedulingTests {
         #expect(lease.underlying.isTerminal)
         #expect(bridge.taskScheduler.pendingCount == store.pendingTaskCount)
         #expect(bridge.taskScheduler.activeCount == store.activeTaskCount)
+    }
+
+    @Test func cancelByClientIdWorks() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "clientIdCancelCap_\(UUID().uuidString)"
+        let clientId = "client-cancel-\(UUID().uuidString)"
+
+        let descriptor = ObjcTaskDescriptor(clientId: clientId, capabilities: [uniqueCap], timeout: 5.0)
+        #expect(descriptor.id == clientId)
+
+        let done = AsyncStream<Void>.makeStream()
+        let lease = bridge.taskScheduler.schedule(descriptor, task: {
+        }, completion: { _ in
+            done.continuation.yield()
+        })
+
+        bridge.taskScheduler.cancel(taskId: clientId)
+
+        for await _ in done.stream { break }
+        #expect(lease.underlying.isTerminal)
+        #expect(lease.taskId == clientId)
     }
 }

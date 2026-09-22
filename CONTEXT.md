@@ -45,7 +45,8 @@ Single terminal decision for one Lease: timeout vs result vs retry vs
 cancel, with completion delivery and waiter preservation. Owned by Tasks.
 Owns the retry budget check, the void-completion policy, and the retry
 re-queue; `enqueue` is the only queue writer conceptually, retry re-uses the
-same Lease identity through a shared re-queue path.
+same Lease identity through a shared re-queue path. Owns the single expiry
+clock: race outcome authoritative, timeout resolved once at enqueue.
 
 ## Tasks (Scheduler)
 
@@ -56,7 +57,9 @@ tracking. Variation is via `Configuration` values, not a protocol seam.
 Owns the single capability waiter (one deadline per set), the Settlement path
 (exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
 across retry), and scoped slot acquisition with re-check inside.
-`executeLease` is the only prod activator.
+`executeLease` is the only prod activator. Serves every wait through one
+result rendezvous keyed by Lease identity; holders tracked by the controller
+by task identity with idempotent release.
 
 ## Bridge (ObjC adapter)
 

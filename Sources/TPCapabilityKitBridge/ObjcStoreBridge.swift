@@ -20,6 +20,9 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// Registers an Objective-C plugin into the store via an internal adapter.
     /// - Parameter plugin: Objective-C plugin conforming to `ObjcAppPlugin`.
     @objc public func register(plugin: ObjcAppPlugin) {
+        #if DEBUG
+        print("[ObjcStoreBridge] Registered ObjC plugin '\(plugin.id)' as consumer-only; it provides no capabilities.")
+        #endif
         let adapter = PluginObjcAdapter(objcPlugin: plugin, bridge: self)
         store.register(plugin: adapter)
     }
@@ -89,6 +92,12 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     // MARK: - Task Execution APIs
 
+    /// Single availability predicate for immediate-run; wait-then-run delegates
+    /// to the store waiter built on the same query, so both agree.
+    private func isAvailable(_ capability: Capability) -> Bool {
+        store.queryCapability(capability)
+    }
+
     /// Runs a task immediately if the required capability is available.
     /// Mirrors `DynamicStore.runTask(requiring:)` semantics synchronously:
     /// query the capability, run the closure inline, otherwise return nil.
@@ -103,12 +112,13 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        guard store.queryCapability(ObjcMapper.capability(from: capability)) else { return nil }
+        guard isAvailable(ObjcMapper.capability(from: capability)) else { return nil }
         return task()
     }
 
     /// Runs a task when the required capability becomes available, with a timeout.
     /// Delivers the result on the specified queue.
+    /// Availability matches `runTask` — same query behind both, so sync and async agree.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability.

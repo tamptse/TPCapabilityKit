@@ -59,6 +59,7 @@ public final class DynamicStore: @unchecked Sendable {
 
     /// Registers a plugin and starts it with the current store instance.
     /// Non-empty `capabilities` are automatically registered in the capability registry.
+    /// Capabilities register before `start` runs, so `start` can query them synchronously.
     /// - Parameter plugin: The plugin conforming to `AppPlugin`.
     public func register(plugin: AppPlugin) {
         // Register capabilities BEFORE starting plugin to avoid TOCTOU race
@@ -104,8 +105,10 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Removes the state subject for a plugin identifier.
-    /// Subscribers will receive `nil` before the subject is removed,
-    /// allowing them to detect state removal.
+    /// Removal is invisible to typed observers: the detached subject is sent
+    /// `nil`, which `observeState` filters via `compactMap`, so existing
+    /// subscribers receive nothing further. The next `updateState` creates a
+    /// fresh subject for new subscribers.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     public func removeState(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
@@ -113,8 +116,8 @@ public final class DynamicStore: @unchecked Sendable {
         lock.withLock {
             subject = stateSubjects.removeValue(forKey: pluginId)
         }
-        
-        // Notify subscribers before removal so they can detect state removal
+
+        // Complete the detached subject's lifecycle; typed observers filter the nil.
         subject?.send(nil)
     }
 
@@ -132,6 +135,8 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: A publisher emitting values matching type `T`. Subscribers must handle thread scheduling.
     /// - Note: If the plugin doesn't exist, a subject will be created automatically.
     ///   Use `removeState(for:)` to clean up unused subjects.
+    /// - Note: `nil` (including the removal send) is filtered, so removal
+    ///   produces no event; pre-removal subscribers stay on the detached subject.
     /// - Note: Values are delivered synchronously on the writer's thread with no
     ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeState<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
@@ -152,10 +157,7 @@ public final class DynamicStore: @unchecked Sendable {
         let mutation: CapabilityRegistry.MutationResult = lock.withLock {
             registry.register(for: pluginId, capabilities: capabilities)
         }
-        for (subject, value) in mutation.notifications {
-            subject.send(value)
-        }
-        registry.publish(snapshot: mutation.snapshot)
+        emit(mutation)
     }
 
     /// Unregisters all capabilities for a plugin identifier.
@@ -165,10 +167,11 @@ public final class DynamicStore: @unchecked Sendable {
         let mutation: CapabilityRegistry.MutationResult = lock.withLock {
             registry.unregister(for: pluginId)
         }
-        for (subject, value) in mutation.notifications {
-            subject.send(value)
-        }
-        registry.publish(snapshot: mutation.snapshot)
+        emit(mutation)
+    }
+
+    private func emit(_ mutation: CapabilityRegistry.MutationResult) {
+        registry.emit(mutation)
     }
 
     /// Queries whether any registered plugin provides the specified capability.
@@ -199,7 +202,8 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Reactively observes whether any plugin provides the specified capability.
-    /// For UI-style subscribers; the Tasks waiter uses whole-registry observation.
+    /// Per-Capability grain for UI-style subscribers; the Tasks waiter uses
+    /// whole-snapshot observation to re-evaluate multi-capability descriptors.
     /// - Parameter capability: The capability to observe.
     /// - Returns: A publisher emitting `true` when the capability becomes available, `false` otherwise.
     /// - Note: Values are delivered synchronously on the writer's thread with no
@@ -211,7 +215,8 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Reactively observes capabilities changes across all plugins.
-    /// For the Tasks waiter; UI-style subscribers prefer per-Capability observation.
+    /// Whole-snapshot grain for the Tasks waiter; UI-style subscribers prefer
+    /// per-Capability observation of a single `Bool`.
     /// - Returns: A publisher emitting the full capabilities dictionary on each change.
     func observeAllCapabilities() -> AnyPublisher<[String: Set<Capability>], Never> {
         registry.observeAll()
@@ -220,7 +225,9 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Task Execution
 
     /// Runs a task only if the required capability is currently available.
-    /// Immediate fire; for queued work use scheduleTask.
+    /// Immediate fire without waiting; for queued work use scheduleTask.
+    /// `runTaskWhenAvailable` is the waiting counterpart and shares the one
+    /// Tasks waiter with `scheduleTaskAndWait`.
     /// - Parameters:
     ///   - capability: The capability required to run the task.
     ///   - task: The async closure to execute.
@@ -234,8 +241,8 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Runs a task when the required capability becomes available, with a timeout.
-    /// Shares the Tasks waiter with queued scheduling, so immediate and queued
-    /// styles behave identically.
+    /// Immediate-style entry to the one shared Tasks waiter; delegates to
+    /// `scheduleTaskAndWait`, so immediate and queued styles behave identically.
     /// - Parameters:
     ///   - capability: The capability required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Default is 5.0.
@@ -289,6 +296,8 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Schedules a task and waits for its result.
+    /// Queued-style entry to the one shared Tasks waiter; `runTaskWhenAvailable`
+    /// delegates here, so both styles behave identically.
     /// - Parameters:
     ///   - descriptor: The task descriptor.
     ///   - task: The async closure to execute.

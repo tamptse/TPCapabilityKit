@@ -113,26 +113,39 @@ struct ConcurrencyControllerTests {
     @Test func acquireAndRelease() async {
         let controller = ConcurrencyController(maxPerCapability: 2, maxGlobal: 5)
 
-        let slot = await controller.acquire(keys: [.heavyTask])
+        await controller.acquire(keys: [.heavyTask], taskId: "t1")
         let stats = controller.stats()
         #expect(stats.globalActive == 1)
 
-        controller.release(slot)
+        controller.release(taskId: "t1")
         let statsAfter = controller.stats()
         #expect(statsAfter.globalActive == 0)
+    }
+
+    @Test func doubleReleaseIsSafe() async {
+        let controller = ConcurrencyController(maxPerCapability: 2, maxGlobal: 5)
+
+        await controller.acquire(keys: [.heavyTask], taskId: "t1")
+        controller.release(taskId: "t1")
+        controller.release(taskId: "t1")
+        controller.release(taskId: "unknown")
+
+        let stats = controller.stats()
+        #expect(stats.globalActive == 0)
+        #expect(stats.waitingCount == 0)
     }
 
     @Test func respectsGlobalLimit() async {
         let controller = ConcurrencyController(maxGlobal: 2)
 
-        let slot1 = await controller.acquire(keys: [.heavyTask])
-        let slot2 = await controller.acquire(keys: [.lightTask])
+        await controller.acquire(keys: [.heavyTask], taskId: "t1")
+        await controller.acquire(keys: [.lightTask], taskId: "t2")
 
         // Third acquire should suspend
         let task3Task = Task {
-            let slot3 = await controller.acquire(keys: [.networkAccess])
+            await controller.acquire(keys: [.networkAccess], taskId: "t3")
             let stats = controller.stats()
-            controller.release(slot3)
+            controller.release(taskId: "t3")
             return stats.globalActive
         }
 
@@ -142,21 +155,21 @@ struct ConcurrencyControllerTests {
         #expect(parked)
 
         // Release one slot
-        controller.release(slot1)
-        _ = slot2
+        controller.release(taskId: "t1")
 
         let result = await task3Task.value
         #expect(result == 2)
+        controller.release(taskId: "t2")
     }
 
     @Test func respectsPerCapabilityLimit() async {
         let controller = ConcurrencyController(maxPerCapability: 1)
 
-        let slot1 = await controller.acquire(keys: [.heavyTask])
+        await controller.acquire(keys: [.heavyTask], taskId: "t1")
 
         let task2Task = Task {
-            let slot2 = await controller.acquire(keys: [.heavyTask])
-            controller.release(slot2)
+            await controller.acquire(keys: [.heavyTask], taskId: "t2")
+            controller.release(taskId: "t2")
             return true
         }
 
@@ -165,7 +178,7 @@ struct ConcurrencyControllerTests {
         }
         #expect(parked)
 
-        controller.release(slot1)
+        controller.release(taskId: "t1")
         let result = await task2Task.value
         #expect(result == true)
     }
