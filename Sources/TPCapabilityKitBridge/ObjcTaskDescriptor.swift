@@ -9,8 +9,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     @objc public var priority: Int { underlying.priority.rawValue }
 
     /// Collapsed timeout reading: the stored value when explicit, otherwise
-    /// the pinned construction-time default for compat. `hasExplicitTimeout`
-    /// tells the two apart; the fork itself is stated once in
+    /// the pinned compat default. `hasExplicitTimeout` tells the two apart;
+    /// the fork itself is stated once in
     /// `ObjcMapper.resolveTimeout`/`displayTimeout`.
     @objc public var timeout: TimeInterval {
         ObjcMapper.displayTimeout(for: underlying)
@@ -42,7 +42,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     @objc public convenience init(
         capabilities: [String],
         priority: Int = 2,
-        timeout: TimeInterval = TaskScheduler.Configuration.default.defaultTimeout,
+        timeout: TimeInterval = 30.0,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
@@ -72,7 +72,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         clientId: String,
         capabilities: [String],
         priority: Int = 2,
-        timeout: TimeInterval = TaskScheduler.Configuration.default.defaultTimeout,
+        timeout: TimeInterval = 30.0,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {

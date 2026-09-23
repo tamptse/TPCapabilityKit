@@ -4,9 +4,10 @@ import Foundation
 @testable import TPCapabilityKitBridge
 
 struct ObjcMapperTimeoutResolverTests {
-    @Test func omittedPinsConstructionDefaultAsExplicit() {
+    @Test func omittedPinsCompatDefaultAsExplicit() {
         let resolved = ObjcMapper.resolveTimeout(wire: nil)
-        #expect(resolved == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(resolved == 30.0)
+        #expect(resolved == ObjcMapper.omittedTimeout)
     }
 
     @Test func wireNegativeMeansUnspecified() {
@@ -17,7 +18,7 @@ struct ObjcMapperTimeoutResolverTests {
     @Test func explicitWirePreserved() {
         #expect(ObjcMapper.resolveTimeout(wire: 60.0) == 60.0)
         #expect(ObjcMapper.resolveTimeout(wire: 0) == 0)
-        #expect(ObjcMapper.resolveTimeout(wire: TaskScheduler.Configuration.default.defaultTimeout) == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(ObjcMapper.resolveTimeout(wire: 30.0) == 30.0)
     }
 
     @Test func bothDescriptorPathsShareResolver() {
@@ -62,7 +63,7 @@ struct ObjcMapperTimeoutResolverTests {
 
     @Test func displayFallsBackToPinnedDefault() {
         let swiftNil = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: nil)
-        #expect(ObjcMapper.displayTimeout(for: swiftNil) == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(ObjcMapper.displayTimeout(for: swiftNil) == 30.0)
         let wrapped = ObjcTaskDescriptor(underlying: swiftNil)
         #expect(wrapped.timeout == ObjcMapper.displayTimeout(for: swiftNil))
         #expect(!wrapped.hasExplicitTimeout)

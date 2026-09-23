@@ -23,8 +23,16 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
     @objc public let taskId: String
 
     /// Current state of the lease, read live from the underlying lease.
+    /// Mapping stays an exhaustive switch co-located with this view, so new
+    /// lease states fail visibly here.
     @objc public var state: State {
-        ObjcMapper.leaseState(from: underlying.state)
+        switch underlying.state {
+        case .pending: return .pending
+        case .active: return .active
+        case .completed: return .completed
+        case .failed: return .failed
+        case .expired: return .expired
+        }
     }
 
     /// The result of the task execution, if completed successfully.

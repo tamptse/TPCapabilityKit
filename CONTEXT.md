@@ -63,7 +63,8 @@ same Lease identity through a shared re-queue path. Owns the lease lifecycle row
 release shared by terminal, retry, and scope-exit paths.
 _Deadline_ (expiry detail): timeout resolves once at Deadline construction
 from the task plus the configured default; one Deadline module owns the
-single race for both the capability wait and the execution path.
+single race for both the capability wait and the execution path, plus the
+virtual clock and the advance policy — no separate expiry-clock module.
 
 ## Tasks (Scheduler)
 
@@ -73,17 +74,19 @@ tracking. Variation is via `Configuration` values, not a protocol seam.
 `autoProcess` is an internal detail, not part of the seam.
 Owns one lifecycle table keyed by task id (place is pending, parked, or
 active; the order index is an internal detail of the table, counts served
-from one snapshot), the single capability waiter (one deadline per set), the Settlement path
+from one immutable snapshot), the capability wait folded inside Tasks
+(one deadline per set, no standalone waiter module), the Settlement path
 (exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
 across retry), and scoped slot acquisition with re-check inside.
 Park is one waiter per dequeued row: the pending → parked → active move
 crosses one park-and-wait seam, so double-park and waiter-cancel rules live
 in the table, not in callers.
  `executeLease` is the only prod activator. Serves every wait through one
- result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
- by task identity with owner-guarded release. Slot hold is scoped: one
- scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
- scope-exit release.
+  result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
+  by task identity with the identity guard derived inside from the Lease —
+  the scoped-hold interface is Lease-keyed, no caller mints tokens. Slot hold is scoped: one
+  scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
+  scope-exit release.
 Availability wait crosses one `wait(for:deadline:)` seam with an
 injectable clock, so waiter and executor share one expiry.
 
@@ -92,10 +95,12 @@ injectable clock, so waiter and executor share one expiry.
 Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
 live view. `ObjcLease` is a live view
 of the underlying Lease. Capability/priority/state/timeout/descriptor mapping lives in one internal
-mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
- Completion delivery defaults to the main queue unless a queue is given.
- Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
- default applies at Deadline construction); an omitted ObjC timeout is instead the pinned
- construction-time default carried as an explicit value for compat. One
- mapper-owned resolver states the fork once.
+ mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
+  Completion delivery lives in one delivery module defaulting to the main
+  queue unless a queue is given.
+  Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
+  default applies at Deadline construction); an omitted ObjC timeout is instead the pinned
+  compat literal carried as an explicit value, independent of reconfigured
+  defaults. One
+  mapper-owned resolver states the fork once.
 Immediate sync and wait-then-run agree through the one Tasks waiter.

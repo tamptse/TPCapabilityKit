@@ -17,19 +17,8 @@ private final class ResumeLog: @unchecked Sendable {
     }
 }
 
-private final class Token: @unchecked Sendable {}
-
-/// Owner tokens must stay alive for the whole test: a bare
-/// `ObjectIdentifier(Token())` dangles and later temporaries reuse its address.
-private struct Owners: Sendable {
-    private let tokens: [Token]
-    let ids: [ObjectIdentifier]
-
-    init(_ count: Int) {
-        let made = (0..<count).map { _ in Token() }
-        self.tokens = made
-        self.ids = made.map(ObjectIdentifier.init)
-    }
+private func makeHoldLease(id: String) -> Lease {
+    Lease(task: TaskDescriptor(id: id, requiredCapabilities: [.heavyTask]))
 }
 
 private func holdController() -> ConcurrencyController {
@@ -42,33 +31,35 @@ struct SlotHoldTests {
     func admitAndRelease() {
         let controller = holdController()
         let log = ResumeLog()
-        let first = Owners(1)
-        let second = Owners(1)
+        let first = makeHoldLease(id: "a")
+        let second = makeHoldLease(id: "b")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: first.ids[0], resume: log.recorder(for: "a")) == .admitted)
+        #expect(controller.park(first, resume: log.recorder(for: "a")) == .admitted)
         #expect(log.all.isEmpty)
 
-        controller.release(taskId: "a", owner: first.ids[0])
+        controller.release(first)
         #expect(log.all.isEmpty)
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: second.ids[0], resume: log.recorder(for: "b")) == .admitted)
+        #expect(controller.park(second, resume: log.recorder(for: "b")) == .admitted)
     }
 
     @Test("wakes parked waiters in FIFO order")
     func fifoWakeOrder() {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(3)
+        let leaseA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
+        let leaseC = makeHoldLease(id: "c")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: owners.ids[1], resume: log.recorder(for: "b")) == .parked)
-        #expect(controller.park(keys: [.heavyTask], taskId: "c", owner: owners.ids[2], resume: log.recorder(for: "c")) == .parked)
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
+        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
+        #expect(controller.park(leaseC, resume: log.recorder(for: "c")) == .parked)
 
-        controller.release(taskId: "a", owner: owners.ids[0])
+        controller.release(leaseA)
         #expect(log.all.map { $0.0 } == ["b"])
         #expect(log.all.map { $0.1 } == [true])
 
-        controller.release(taskId: "b", owner: owners.ids[1])
+        controller.release(leaseB)
         #expect(log.all.map { $0.0 } == ["b", "c"])
     }
 
@@ -76,17 +67,19 @@ struct SlotHoldTests {
     func cancelSkipsWaiter() {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(3)
+        let leaseA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
+        let leaseC = makeHoldLease(id: "c")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: owners.ids[1], resume: log.recorder(for: "b")) == .parked)
-        #expect(controller.park(keys: [.heavyTask], taskId: "c", owner: owners.ids[2], resume: log.recorder(for: "c")) == .parked)
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
+        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
+        #expect(controller.park(leaseC, resume: log.recorder(for: "c")) == .parked)
 
-        controller.cancel(taskId: "b", owner: owners.ids[1])
+        controller.cancel(leaseB)
         #expect(log.all.map { $0.0 } == ["b"])
         #expect(log.all.map { $0.1 } == [false])
 
-        controller.release(taskId: "a", owner: owners.ids[0])
+        controller.release(leaseA)
         #expect(log.all.map { $0.0 } == ["b", "c"])
         #expect(log.all.last?.1 == true)
     }
@@ -95,16 +88,19 @@ struct SlotHoldTests {
     func cancelMismatchNoops() {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(3)
+        let leaseA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
+        let missing = makeHoldLease(id: "missing")
+        let impostorB = makeHoldLease(id: "b")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: owners.ids[1], resume: log.recorder(for: "b")) == .parked)
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
+        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
 
-        controller.cancel(taskId: "missing", owner: owners.ids[1])
-        controller.cancel(taskId: "b", owner: owners.ids[2])
+        controller.cancel(missing)
+        controller.cancel(impostorB)
         #expect(log.all.isEmpty)
 
-        controller.release(taskId: "a", owner: owners.ids[0])
+        controller.release(leaseA)
         #expect(log.all.map { $0.0 } == ["b"])
         #expect(log.all.map { $0.1 } == [true])
     }
@@ -113,33 +109,36 @@ struct SlotHoldTests {
     func doubleAcquireRejected() {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(3)
+        let leaseA = makeHoldLease(id: "a")
+        let impostorA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a2")) == .duplicate)
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a2")) == .duplicate)
         #expect(log.all.isEmpty)
 
-        controller.release(taskId: "a", owner: owners.ids[1])
+        controller.release(impostorA)
         #expect(log.all.isEmpty)
 
-        controller.release(taskId: "a", owner: owners.ids[0])
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: owners.ids[2], resume: log.recorder(for: "b")) == .admitted)
+        controller.release(leaseA)
+        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .admitted)
     }
 
     @Test("double release wakes at most once")
     func doubleReleaseWakesOnce() {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(2)
+        let leaseA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: owners.ids[1], resume: log.recorder(for: "b")) == .parked)
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
+        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
 
-        controller.release(taskId: "a", owner: owners.ids[0])
-        controller.release(taskId: "a", owner: owners.ids[0])
+        controller.release(leaseA)
+        controller.release(leaseA)
         #expect(log.all.map { $0.0 } == ["b"])
 
-        controller.release(taskId: "b", owner: owners.ids[1])
+        controller.release(leaseB)
         #expect(log.all.map { $0.0 } == ["b"])
     }
 
@@ -147,15 +146,17 @@ struct SlotHoldTests {
     func sameIdDisplacementRetiresOldWaiter() {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(3)
+        let holder = makeHoldLease(id: "h")
+        let old = makeHoldLease(id: "x")
+        let new = makeHoldLease(id: "x")
 
-        #expect(controller.park(keys: [.heavyTask], taskId: "h", owner: owners.ids[0], resume: log.recorder(for: "h")) == .admitted)
-        #expect(controller.park(keys: [.heavyTask], taskId: "x", owner: owners.ids[1], resume: log.recorder(for: "old")) == .parked)
-        #expect(controller.park(keys: [.heavyTask], taskId: "x", owner: owners.ids[2], resume: log.recorder(for: "new")) == .parked)
+        #expect(controller.park(holder, resume: log.recorder(for: "h")) == .admitted)
+        #expect(controller.park(old, resume: log.recorder(for: "old")) == .parked)
+        #expect(controller.park(new, resume: log.recorder(for: "new")) == .parked)
         #expect(log.all.map { $0.0 } == ["old"])
         #expect(log.all.map { $0.1 } == [false])
 
-        controller.release(taskId: "h", owner: owners.ids[0])
+        controller.release(holder)
         #expect(log.all.map { $0.0 } == ["old", "new"])
         #expect(log.all.last?.1 == true)
     }
@@ -163,11 +164,12 @@ struct SlotHoldTests {
     @Test("acquire releases on scope exit through the shared release")
     func acquireScopedRelease() async {
         let controller = holdController()
-        let owners = Owners(2)
+        let leaseA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
 
         func scoped() async -> Int {
-            guard await controller.acquire(keys: [.heavyTask], taskId: "a", owner: owners.ids[0]) else { return -1 }
-            defer { controller.release(taskId: "a", owner: owners.ids[0]) }
+            guard await controller.acquire(leaseA) else { return -1 }
+            defer { controller.release(leaseA) }
             return 42
         }
 
@@ -175,24 +177,25 @@ struct SlotHoldTests {
         #expect(value == 42)
 
         let log = ResumeLog()
-        #expect(controller.park(keys: [.heavyTask], taskId: "b", owner: owners.ids[1], resume: log.recorder(for: "b")) == .admitted)
+        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .admitted)
     }
 
     @Test("cancelled acquire never admits")
     func cancelledAcquireNeverAdmits() async {
         let controller = holdController()
         let log = ResumeLog()
-        let owners = Owners(2)
-        #expect(controller.park(keys: [.heavyTask], taskId: "a", owner: owners.ids[0], resume: log.recorder(for: "a")) == .admitted)
+        let leaseA = makeHoldLease(id: "a")
+        let leaseB = makeHoldLease(id: "b")
+        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
 
         let waiter = Task {
-            await controller.acquire(keys: [.heavyTask], taskId: "b", owner: owners.ids[1])
+            await controller.acquire(leaseB)
         }
         waiter.cancel()
         #expect(await waiter.value == false)
         #expect(log.all.isEmpty)
 
-        controller.release(taskId: "a", owner: owners.ids[0])
+        controller.release(leaseA)
         #expect(log.all.isEmpty)
     }
 }

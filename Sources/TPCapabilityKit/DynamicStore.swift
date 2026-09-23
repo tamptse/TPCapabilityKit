@@ -22,14 +22,16 @@ public final class DynamicStore: @unchecked Sendable {
     /// Shared singleton instance.
     public static let shared = DynamicStore()
 
-    // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns its generations + clock)
+    // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns generations; Deadline owns expiry + virtual time)
     private let state = StoreState()
     private let registry = CapabilityRegistry()
     private let scheduling: StoreSchedulingGenerations
+    private let deadlineClock: TaskScheduler.Deadline.Clock
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
     internal init(configuration: TaskScheduler.Configuration = .init()) {
+        self.deadlineClock = .live
         self.scheduling = StoreSchedulingGenerations(configuration: configuration)
     }
 
@@ -185,26 +187,27 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Task Scheduling (facade over StoreSchedulingGenerations)
 
     private var scheduler: TaskScheduler {
-        scheduling.current(owner: self)
+        scheduling.current(owner: self, clock: deadlineClock)
     }
 
     internal func enableDeterministicTime() {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        scheduling.enableDeterministicTime()
+        precondition(scheduling.generationCount == 0, "enableDeterministicTime must precede first schedule")
+        deadlineClock.enableDeterministic()
     }
 
     internal func advanceTime(by delta: TimeInterval) async {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        await scheduling.advanceTime(by: delta)
+        await deadlineClock.advance(by: delta)
     }
 
     internal func waitForDeterministicWaiters(count expected: Int) async {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        await scheduling.waitForWaiters(count: expected)
+        await deadlineClock.waitForWaiters(count: expected)
     }
 
     internal var deterministicWaiterCount: Int {
-        scheduling.waiterCount
+        deadlineClock.waiterCount
     }
 
     internal var generationCount: Int {
@@ -216,7 +219,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// and pending/active counts aggregate across live generations until the
     /// drained ones release.
     public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
-        scheduling.reconfigure(configuration, owner: self)
+        scheduling.reconfigure(configuration, owner: self, clock: deadlineClock)
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
@@ -366,26 +369,24 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     private let lock = NSLock()
     private var generations: [TaskScheduler] = []
     private var configuration: TaskScheduler.Configuration
-    private var virtualClock: StoreVirtualClock?
-    private var storedExpiryClock: TaskScheduler.ExpiryClock = .live
 
     init(configuration: TaskScheduler.Configuration) {
         self.configuration = configuration
     }
 
-    func current(owner: DynamicStore) -> TaskScheduler {
+    func current(owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) -> TaskScheduler {
         lock.withLock {
             if let current = generations.last { return current }
-            let new = TaskScheduler(store: owner, configuration: configuration, clock: storedExpiryClock)
+            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock)
             generations.append(new)
             return new
         }
     }
 
-    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore) {
+    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) {
         lock.withLock {
             configuration = newConfiguration
-            let new = TaskScheduler(store: owner, configuration: configuration, clock: storedExpiryClock)
+            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock)
             generations.append(new)
         }
         pruneDrainedGenerations()
@@ -410,45 +411,6 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
 
     var generationCount: Int {
         lock.withLock { generations.count }
-    }
-
-    var waiterCount: Int {
-        lock.withLock { virtualClock?.waiterCount ?? 0 }
-    }
-
-    func enableDeterministicTime() {
-        lock.withLock {
-            precondition(virtualClock == nil, "deterministic time already enabled")
-            precondition(generations.isEmpty, "enableDeterministicTime must precede first schedule")
-            let virtual = StoreVirtualClock()
-            virtualClock = virtual
-            storedExpiryClock = TaskScheduler.ExpiryClock(sleep: { timeout in
-                await virtual.sleep(timeout)
-            })
-        }
-    }
-
-    func advanceTime(by delta: TimeInterval) async {
-        let clock: StoreVirtualClock = lock.withLock {
-            guard let virtual = virtualClock else {
-                preconditionFailure("deterministic time not enabled; call enableDeterministicTime() first")
-            }
-            return virtual
-        }
-        await clock.waitForWaiters(count: 1)
-        clock.advance(by: delta)
-        await Task.yield()
-        await Task.yield()
-    }
-
-    func waitForWaiters(count expected: Int) async {
-        let clock: StoreVirtualClock = lock.withLock {
-            guard let virtual = virtualClock else {
-                preconditionFailure("deterministic time not enabled")
-            }
-            return virtual
-        }
-        await clock.waitForWaiters(count: expected)
     }
 
     private func countsWithoutPruning() -> (pending: Int, active: Int) {

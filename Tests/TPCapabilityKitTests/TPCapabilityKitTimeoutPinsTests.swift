@@ -15,8 +15,8 @@ private final class RecordedTimeouts: @unchecked Sendable {
     }
 }
 
-private func immediateClock(recording: RecordedTimeouts? = nil) -> TaskScheduler.ExpiryClock {
-    TaskScheduler.ExpiryClock(
+private func immediateClock(recording: RecordedTimeouts? = nil) -> TaskScheduler.Deadline.Clock {
+    TaskScheduler.Deadline.Clock(
         sleep: { timeout in
             recording?.record(timeout)
         }

@@ -57,14 +57,14 @@ struct ObjcTaskDescriptorTests {
         #expect(negative.priority == negative.underlying.priority.rawValue)
     }
 
-    @Test func defaultTimeoutTracksConfiguration() {
+    @Test func omittedTimeoutPinnedRegardlessOfDefault() {
         let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"])
-        #expect(descriptor.timeout == TaskScheduler.Configuration.default.defaultTimeout)
-        #expect(descriptor.timeout == (descriptor.underlying.timeout ?? TaskScheduler.Configuration.default.defaultTimeout))
+        #expect(descriptor.timeout == 30.0)
+        #expect(descriptor.timeout == (descriptor.underlying.timeout ?? 30.0))
 
         let nilTimeout = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: nil)
         let wrapped = ObjcTaskDescriptor(underlying: nilTimeout)
-        #expect(wrapped.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(wrapped.timeout == 30.0)
     }
 
     @Test func explicitValuesRoundTrip() {
@@ -90,7 +90,7 @@ struct ObjcTaskDescriptorTests {
 
         #expect(descriptor.underlying.timeout == nil)
         #expect(!descriptor.hasExplicitTimeout)
-        #expect(descriptor.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(descriptor.timeout == 30.0)
     }
 
     @Test func explicitTimeoutPreserved() {
@@ -101,9 +101,9 @@ struct ObjcTaskDescriptorTests {
 
         let explicitDefault = ObjcTaskDescriptor(
             capabilities: ["heavyTask"],
-            timeout: TaskScheduler.Configuration.default.defaultTimeout
+            timeout: 30.0
         )
-        #expect(explicitDefault.underlying.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(explicitDefault.underlying.timeout == 30.0)
         #expect(explicitDefault.hasExplicitTimeout)
     }
 
@@ -123,10 +123,10 @@ struct ObjcTaskDescriptorTests {
         scheduler.cancel(taskId: swiftNil.id)
 
         let omitted = ObjcTaskDescriptor(capabilities: ["heavyTask"])
-        #expect(omitted.underlying.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(omitted.underlying.timeout == 30.0)
         #expect(omitted.underlying.timeout != 0.3)
         let omittedLease = scheduler.schedule(omitted.underlying, taskExecution: {})
-        #expect(omittedLease.task.timeout == TaskScheduler.Configuration.default.defaultTimeout)
+        #expect(omittedLease.task.timeout == 30.0)
         scheduler.cancel(taskId: omitted.id)
 
         let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)

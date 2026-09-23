@@ -2,17 +2,17 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
-private func neverClock() -> TaskScheduler.ExpiryClock {
+private func neverClock() -> TaskScheduler.Deadline.Clock {
     let gate = AsyncStream<Void>.makeStream()
-    return TaskScheduler.ExpiryClock(
+    return TaskScheduler.Deadline.Clock(
         sleep: { _ in
             for await _ in gate.stream { break }
         }
     )
 }
 
-private func immediateClock() -> TaskScheduler.ExpiryClock {
-    TaskScheduler.ExpiryClock(sleep: { _ in })
+private func immediateClock() -> TaskScheduler.Deadline.Clock {
+    TaskScheduler.Deadline.Clock(sleep: { _ in })
 }
 
 @Suite("Expiry Tests")

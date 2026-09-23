@@ -3,14 +3,14 @@ import TPCapabilityKit
 
 /// Single mapping point between Objective-C primitives and Swift domain types.
 enum ObjcMapper {
-    /// Pinned construction-time default carried as explicit for compat.
-    static var omittedTimeout: TimeInterval {
-        TaskScheduler.Configuration.default.defaultTimeout
-    }
+    /// Pinned compat default carried as explicit for omitted wire. Literal on
+    /// purpose: it must never follow a reconfigured Swift default. Deadline
+    /// construction stays the sole Swift resolver for nil timeouts.
+    static let omittedTimeout: TimeInterval = 30.0
 
     /// Single statement of ObjC timeout compat, shared by both descriptor
     /// initializers and the wait-then-run entry: omitted (nil wire) pins the
-    /// construction-time default as explicit; wire-negative means unspecified
+    /// compat default as explicit; wire-negative means unspecified
     /// (nil, scheduler default applies at Deadline construction); explicit non-negative
     /// travels as explicit. Swift nil (wrapped descriptors) resolves at
     /// Deadline construction and never crosses this resolver.
@@ -21,11 +21,6 @@ enum ObjcMapper {
 
     static func displayTimeout(for descriptor: TaskDescriptor) -> TimeInterval {
         descriptor.timeout ?? omittedTimeout
-    }
-
-    /// Queue choice is explicit in exactly one place for every Bridge hop.
-    static func deliveryQueue(from queue: DispatchQueue?) -> DispatchQueue {
-        queue ?? .main
     }
 
     static func capability(from string: String) -> Capability {
@@ -43,16 +38,6 @@ enum ObjcMapper {
     /// Maps an ObjC timeout to the Swift domain spelling via the single resolver.
     static func taskTimeout(from rawValue: TimeInterval) -> TimeInterval? {
         resolveTimeout(wire: rawValue)
-    }
-
-    static func leaseState(from state: Lease.State) -> ObjcLease.State {
-        switch state {
-        case .pending: return .pending
-        case .active: return .active
-        case .completed: return .completed
-        case .failed: return .failed
-        case .expired: return .expired
-        }
     }
 
     static func makeDescriptor(
