@@ -37,6 +37,8 @@ public final class DynamicStore: @unchecked Sendable {
 
     // MARK: - Private Helpers
 
+    // Single facade guard for capability paths; state paths delegate to
+    // StoreState's own guard with identical no-op semantics.
     private func validatePluginId(_ pluginId: String) -> Bool {
         guard !pluginId.isEmpty else {
             #if DEBUG
@@ -279,6 +281,7 @@ final class StoreState: @unchecked Sendable {
     private var creationSequence: UInt64 = 0
     private let creationClock = CurrentValueSubject<UInt64, Never>(0)
 
+    // Module's own guard (no facade access); mirrors the facade with identical no-op semantics.
     private func validate(pluginId: String) -> Bool {
         guard !pluginId.isEmpty else {
             #if DEBUG
@@ -369,15 +372,17 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     private let lock = NSLock()
     private var generations: [TaskScheduler] = []
     private var configuration: TaskScheduler.Configuration
+    private let slots: ConcurrencyController
 
     init(configuration: TaskScheduler.Configuration) {
         self.configuration = configuration
+        self.slots = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
     func current(owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) -> TaskScheduler {
         lock.withLock {
             if let current = generations.last { return current }
-            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock)
+            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
             return new
         }
@@ -386,7 +391,8 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) {
         lock.withLock {
             configuration = newConfiguration
-            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock)
+            slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)
+            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
         }
         pruneDrainedGenerations()

@@ -40,17 +40,12 @@ public final class TaskScheduler: @unchecked Sendable {
     /// Deadline construction from the task plus the configured default, the
     /// single race serves both the capability wait and the execution path,
     /// and virtual sleep plus the advance policy live here for deterministic
-    /// tests. Waiter and executor cross `race(_:operation:)`; Store
+    /// tests. Waiter and executor cross `race(operation:)`; Store
     /// deterministic helpers delegate to `Clock` below; neither computes
     /// timeouts nor builds task groups directly. The execution result box
     /// lives here too, so the race outcome plus the winning value cross one
     /// seam. Expiry reads from lease state plus completion delivery alone.
     struct Deadline: Sendable {
-        enum Race: Sendable, Equatable {
-            case wait
-            case execution
-        }
-
         /// Shared expiry clock behind the Deadline seam: live sleep by
         /// default, virtual sleep plus advance policy once deterministic time
         /// is enabled, custom sleep only for pinned timeout tests.
@@ -187,7 +182,7 @@ public final class TaskScheduler: @unchecked Sendable {
             self.clock = clock
         }
 
-        func race(_ kind: Race, operation: @Sendable @escaping () async -> Bool) async -> Bool {
+        func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
             let timeout = self.timeout
             let clock = self.clock
             return await withTaskGroup(of: Bool.self) { group in
@@ -209,7 +204,7 @@ public final class TaskScheduler: @unchecked Sendable {
             _ operation: @Sendable @escaping () async -> Any?
         ) async -> (won: Bool, value: Any?) {
             let box = OneShot<Any?>()
-            let won = await race(.execution) {
+            let won = await race {
                 let value = await operation()
                 box.store(value)
                 return true
@@ -236,6 +231,9 @@ public final class TaskScheduler: @unchecked Sendable {
     }
 
     struct LifecycleStore {
+        // Single owner: rows owns place and counts; order is a derived index
+        // mutated only via insert/dequeueNext/takeTerminal/applyRetry, so the
+        // two cannot disagree and no dangling-head repair is needed.
         struct Counts: Sendable, Equatable {
             let pending: Int
             let queued: Int
@@ -305,7 +303,7 @@ public final class TaskScheduler: @unchecked Sendable {
             return nil
         }
 
-        fileprivate mutating func beginPark(for lease: Lease) -> Bool {
+        mutating func beginPark(for lease: Lease) -> Bool {
             mutateParkRow(for: lease) { row in
                 guard !row.waiting else { return false }
                 row.waiting = true
@@ -313,12 +311,12 @@ public final class TaskScheduler: @unchecked Sendable {
             } ?? false
         }
 
-        fileprivate mutating func setParkWaiter(for lease: Lease, waiter: Task<Void, Never>) -> Bool {
+        mutating func setParkWaiter(for lease: Lease, waiter: Task<Void, Never>) -> Bool {
             mutateParkRow(for: lease) { $0.waiter = waiter }
             return lease.isTerminal
         }
 
-        fileprivate mutating func clearParkWait(for lease: Lease) {
+        mutating func clearParkWait(for lease: Lease) {
             mutateParkRow(for: lease) {
                 $0.waiting = false
                 $0.waiter = nil
@@ -407,10 +405,6 @@ public final class TaskScheduler: @unchecked Sendable {
             mutating func dequeue() -> String? {
                 for priority in Self.dequeueOrder {
                     guard let headId = heads[priority] else { continue }
-                    guard prioritiesById[headId] != nil else {
-                        repairDanglingHead(headId, priority: priority)
-                        continue
-                    }
                     unlink(taskId: headId, priority: priority)
                     prioritiesById.removeValue(forKey: headId)
                     return headId
@@ -424,18 +418,6 @@ public final class TaskScheduler: @unchecked Sendable {
                 unlink(taskId: taskId, priority: priority)
                 prioritiesById.removeValue(forKey: taskId)
                 return true
-            }
-
-            private mutating func repairDanglingHead(_ headId: String, priority: TaskPriority) {
-                if let nextId = nextById[headId] {
-                    heads[priority] = nextId
-                    prevById.removeValue(forKey: nextId)
-                } else {
-                    heads.removeValue(forKey: priority)
-                    tails.removeValue(forKey: priority)
-                }
-                nextById.removeValue(forKey: headId)
-                prevById.removeValue(forKey: headId)
             }
 
             private mutating func unlink(taskId: String, priority: TaskPriority) {
@@ -464,12 +446,11 @@ public final class TaskScheduler: @unchecked Sendable {
 
     private var lifecycleStore = LifecycleStore()
 
-    init(store: DynamicStore = .shared, configuration: Configuration = .init(), clock: Deadline.Clock = .live) {
+    init(store: DynamicStore = .shared, configuration: Configuration = .init(), clock: Deadline.Clock = .live, concurrencyController: ConcurrencyController? = nil) {
         self.store = store
         self.configuration = configuration
         self.clock = clock
-        let controller = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
-        self.concurrencyController = controller
+        self.concurrencyController = concurrencyController ?? ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
     /// Schedules a task for execution with a closure.
@@ -577,12 +558,14 @@ public final class TaskScheduler: @unchecked Sendable {
         lock.withLock { lifecycleStore.counts.pending }
     }
 
-    /// Queued portion of pending: rows still in order waiting for dequeue.
+    /// Queued portion of pending, internal-only: Tasks tests read the split,
+    /// Store facade exposes pending/active only.
     var queuedCount: Int {
         lock.withLock { lifecycleStore.counts.queued }
     }
 
-    /// Parked portion of pending: rows dequeued and waiting for capabilities or slots.
+    /// Parked portion of pending, internal-only: Tasks tests read the split,
+    /// Store facade exposes pending/active only.
     var parkedCount: Int {
         lock.withLock { lifecycleStore.counts.parked }
     }
@@ -623,6 +606,13 @@ public final class TaskScheduler: @unchecked Sendable {
             case expire
         }
         func decide(lease: Lease, outcome: Settlement) -> Decision {
+            // Single terminal decision per ADR-0001/0004: Settlement owns retry
+            // budget, void policy, and waiter preservation, evaluating Lease
+            // state together so reviewers read one table. Lease writers stay as
+            // safety no-ops; row transition below is terminal for every
+            // non-terminal combo, matching the pre-existing settlement shape —
+            // including pending re-check failures, which deliver instead of
+            // stalling the row.
             switch outcome {
             case .completed(let result):
                 if result == nil, lease.canRetry { return .retry }
@@ -669,22 +659,16 @@ public final class TaskScheduler: @unchecked Sendable {
             }
         }
         if didRetry {
-            releaseSlot(for: lease)
+            concurrencyController.release(lease)
             Task { await self.processPendingTasks() }
             return
         }
         guard settled else { return }
         waiterToCancel?.cancel()
-        releaseSlot(for: lease)
+        concurrencyController.release(lease)
         for waiter in waiters {
             waiter(lease)
         }
-    }
-
-    /// Single controller release shared by terminal, retry, and scope exit;
-    /// guarded inside the scoped hold by Lease identity so a stale scope-exit defer no-ops.
-    private func releaseSlot(for lease: Lease) {
-        concurrencyController.release(lease)
     }
 
     private func processPendingTasks() async {
@@ -701,7 +685,7 @@ public final class TaskScheduler: @unchecked Sendable {
             }
 
             // Execute the task
-            await executeLease(nextLease, deadline: deadline)
+            await activate(nextLease, deadline: deadline)
         }
     }
 
@@ -739,7 +723,7 @@ public final class TaskScheduler: @unchecked Sendable {
             return
         }
 
-        await executeLease(lease, deadline: deadline)
+        await activate(lease, deadline: deadline)
     }
 
     /// Single capability wait owned by Tasks: one timeout shared by the
@@ -758,7 +742,7 @@ public final class TaskScheduler: @unchecked Sendable {
         if isAvailable(for: task) { return true }
         let store = self.store
         let required = task.requiredCapabilities
-        return await deadline.race(.wait) {
+        return await deadline.race {
             guard let publisher = store?.observeAllCapabilities() else { return false }
             for await _ in publisher.values {
                 if required.allSatisfy({ store?.queryCapability($0) ?? false }) { return true }
@@ -771,37 +755,23 @@ public final class TaskScheduler: @unchecked Sendable {
     /// (wait via the shared waiter, terminal via the single row transition).
     /// ObjC live-view tests may still call `Lease.activate()` directly to
     /// exercise the ObjcLease reflection.
-    private func executeLease(_ lease: Lease, deadline: Deadline) async {
+    private func activate(_ lease: Lease, deadline: Deadline) async {
         guard isAvailable(for: lease.task) else {
             settle(lease, as: .failed)
             return
         }
-
-        await withSlot(for: lease) {
-            await self.runActivatedLease(lease, deadline: deadline)
-        }
-    }
-
-    /// Scoped hold owned by the controller: one call per hold, admission,
-    /// FIFO wake, cancellable wait, and scope-exit release through the single
-    /// Settlement release guarded inside by Lease identity. A rejected
-    /// hold (cancelled or duplicate) means Settlement already settled this
-    /// row, so there is nothing to run.
-    private func withSlot(for lease: Lease, operation: @Sendable @escaping () async -> Void) async {
         guard await concurrencyController.acquire(lease) else { return }
-        defer { releaseSlot(for: lease) }
+        defer { concurrencyController.release(lease) }
         guard !lease.isTerminal else { return }
         guard self.isAvailable(for: lease.task) else {
             self.settle(lease, as: .failed)
             return
         }
-
         let activated: Bool = self.lock.withLock {
             lifecycleStore.tryActivate(for: lease)
         }
         guard activated else { return }
-
-        await operation()
+        await runActivatedLease(lease, deadline: deadline)
     }
 
     private func runActivatedLease(_ lease: Lease, deadline: Deadline) async {

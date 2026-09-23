@@ -13,7 +13,6 @@ import Foundation
 /// instead of leaving two subjects diverging.
 final class CapabilityRegistry: @unchecked Sendable {
     typealias PendingNotification = (subject: CurrentValueSubject<Bool, Never>, value: Bool)
-    typealias MutationResult = (snapshot: [String: Set<Capability>], notifications: [PendingNotification])
 
     private let lock = NSLock()
     private var capabilities: [String: Set<Capability>] = [:]
@@ -44,8 +43,8 @@ final class CapabilityRegistry: @unchecked Sendable {
         }
     }
 
-    func register(for pluginId: String, capabilities caps: Set<Capability>) -> MutationResult {
-        let mutation: MutationResult = lock.withLock {
+    func register(for pluginId: String, capabilities caps: Set<Capability>) {
+        let (snapshot, notifications): ([String: Set<Capability>], [PendingNotification]) = lock.withLock {
             var pending: [PendingNotification] = []
             removeCapabilities(for: pluginId, pending: &pending)
 
@@ -59,20 +58,18 @@ final class CapabilityRegistry: @unchecked Sendable {
 
             return (capabilities, pending)
         }
-        emit(mutation)
-        return mutation
+        emit(notifications: notifications, snapshot: snapshot)
     }
 
-    func unregister(for pluginId: String) -> MutationResult {
-        let mutation: MutationResult = lock.withLock {
+    func unregister(for pluginId: String) {
+        let (snapshot, notifications): ([String: Set<Capability>], [PendingNotification]) = lock.withLock {
             var pending: [PendingNotification] = []
             removeCapabilities(for: pluginId, pending: &pending)
 
             capabilities.removeValue(forKey: pluginId)
             return (capabilities, pending)
         }
-        emit(mutation)
-        return mutation
+        emit(notifications: notifications, snapshot: snapshot)
     }
 
     func query(_ capability: Capability) -> Bool {
@@ -111,10 +108,10 @@ final class CapabilityRegistry: @unchecked Sendable {
         snapshotSubject.send(snapshot)
     }
 
-    private func emit(_ mutation: MutationResult) {
-        for (subject, value) in mutation.notifications {
+    private func emit(notifications: [PendingNotification], snapshot: [String: Set<Capability>]) {
+        for (subject, value) in notifications {
             subject.send(value)
         }
-        publish(snapshot: mutation.snapshot)
+        publish(snapshot: snapshot)
     }
 }

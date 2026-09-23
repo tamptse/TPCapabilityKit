@@ -14,8 +14,8 @@ final class ConcurrencyController: @unchecked Sendable {
         case duplicate
     }
 
-    private let maxPerCapability: Int?
-    private let maxGlobal: Int?
+    private var maxPerCapability: Int?
+    private var maxGlobal: Int?
     private let lock = NSLock()
     private var capabilitySlots: [Capability: Int] = [:]
     private var globalSlots: Int = 0
@@ -32,6 +32,13 @@ final class ConcurrencyController: @unchecked Sendable {
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
         self.maxPerCapability = maxPerCapability
         self.maxGlobal = maxGlobal
+    }
+
+    internal func updateLimits(maxPerCapability: Int?, maxGlobal: Int?) {
+        lock.withLock {
+            self.maxPerCapability = maxPerCapability
+            self.maxGlobal = maxGlobal
+        }
     }
 
     internal func acquire(_ lease: Lease) async -> Bool {

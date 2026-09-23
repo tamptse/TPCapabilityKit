@@ -91,6 +91,15 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
+        syncCheckAndRun(capability: capability, task: task)
+    }
+
+    /// The single sync-check seam behind the Bridge: every sync entry consults
+    /// the Store registry state here, so sync and wait-then-run cannot drift.
+    private func syncCheckAndRun(
+        capability: String,
+        task: () -> NSObject
+    ) -> NSObject? {
         guard store.queryCapability(ObjcMapper.capability(from: capability)) else { return nil }
         return task()
     }

@@ -21,6 +21,9 @@ The scheduler instance itself is private; all scheduling crosses the facade.
 Reconfigure preserves in-flight generations: the old scheduler drains
 naturally while new work enters the new one, and pending/active counts
 aggregate across live generations.
+Slot admission aggregates too: one slot domain shared across live
+generations, owned by the Store, so reconfigure never doubles the
+configured limit during drain.
 Two observation granularities: per-Capability observation serves UI-style
 subscribers; whole-registry observation serves the Tasks waiter only.
 
@@ -82,13 +85,16 @@ Park is one waiter per dequeued row: the pending → parked → active move
 crosses one park-and-wait seam, so double-park and waiter-cancel rules live
 in the table, not in callers.
  `executeLease` is the only prod activator. Serves every wait through one
-  result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
-  by task identity with the identity guard derived inside from the Lease —
-  the scoped-hold interface is Lease-keyed, no caller mints tokens. Slot hold is scoped: one
-  scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
-  scope-exit release.
-Availability wait crosses one `wait(for:deadline:)` seam with an
-injectable clock, so waiter and executor share one expiry.
+   result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
+   by task identity with the identity guard derived inside from the Lease —
+   the scoped-hold interface is Lease-keyed, no caller mints tokens. Slot hold is scoped: one
+   scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
+   scope-exit release. Activation crosses one seam: park, capability wait,
+   admission, re-check, and row activation read as one path with one
+   release shared by terminal, retry, and scope-exit.
+Availability wait crosses one `race(operation:)` seam with an
+injectable clock, so waiter and executor share one expiry with no
+wait-vs-execution kind distinction.
 
 ## Bridge (ObjC adapter)
 
