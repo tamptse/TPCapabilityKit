@@ -72,7 +72,8 @@ capability matching, timeout, retry, concurrency limits, and fire-and-forget
 tracking. Variation is via `Configuration` values, not a protocol seam.
 `autoProcess` is an internal detail, not part of the seam.
 Owns one lifecycle table keyed by task id (place is pending, parked, or
-active; order stays in the queue), the single capability waiter (one deadline per set), the Settlement path
+active; the order index is an internal detail of the table, counts served
+from one snapshot), the single capability waiter (one deadline per set), the Settlement path
 (exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
 across retry), and scoped slot acquisition with re-check inside.
  `executeLease` is the only prod activator. Serves every wait through one

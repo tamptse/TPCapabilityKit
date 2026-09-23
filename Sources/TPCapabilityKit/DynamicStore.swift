@@ -5,9 +5,8 @@ import Foundation
 /// Provides both state management and capability registry functionality.
 ///
 /// ## Thread Safety
-/// - `lock` protects State subjects and scheduler generations; the registry
-///   owns its own lock behind one mutate-and-notify seam (no caller holds
-///   the Store lock across a registry call)
+/// - State owns its own lock, the registry owns its own lock, scheduling owns
+///   its generations + clock; no caller holds a Store lock across a submodule call
 /// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
 /// ## Debug Logging
@@ -15,26 +14,23 @@ import Foundation
 /// - Logs use `[DynamicStore]` prefix for easy filtering
 /// - Error logs indicate invalid API usage (e.g., empty plugin ID)
 /// - Warning logs indicate unexpected but non-fatal conditions (e.g., type mismatch)
-/// Thread-safe store using NSLock for all mutable state access.
+/// Thread-safe store with submodule-owned locks for all mutable state access.
 /// - Important: `@unchecked Sendable` is intentional — all mutations are
-///   protected by `lock`. This has been verified through code review and
+///   protected by submodule locks (state, registry, scheduling own theirs). This has been verified through code review and
 ///   concurrency testing. Do not add unsynchronized mutable state.
 public final class DynamicStore: @unchecked Sendable {
     /// Shared singleton instance.
     public static let shared = DynamicStore()
 
-    // MARK: - Mutable State (subjects + generations protected by `lock`; registry owns its lock)
-    private var subjects: [String: CurrentValueSubject<Any?, Never>] = [:]
+    // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns its generations + clock)
+    private let state = StoreState()
     private let registry = CapabilityRegistry()
-    private let lock = NSLock()
-
-    private var stateCreationSequence: UInt64 = 0
-    private let stateCreationClock = CurrentValueSubject<UInt64, Never>(0)
+    private let scheduling: StoreSchedulingGenerations
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
     internal init(configuration: TaskScheduler.Configuration = .init()) {
-        self.schedulerConfiguration = configuration
+        self.scheduling = StoreSchedulingGenerations(configuration: configuration)
     }
 
     // MARK: - Private Helpers
@@ -71,19 +67,7 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - newState: The new state value to update or broadcast.
     public func updateState<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let (subject, sequence): (CurrentValueSubject<Any?, Never>, UInt64?) = lock.withLock {
-            if let existing = subjects[pluginId] {
-                return (existing, nil)
-            }
-            let created = CurrentValueSubject<Any?, Never>(nil)
-            subjects[pluginId] = created
-            stateCreationSequence &+= 1
-            return (created, stateCreationSequence)
-        }
-        if let sequence {
-            stateCreationClock.send(sequence)
-        }
-        subject.send(newState)
+        state.update(pluginId: pluginId, newState: newState)
     }
 
     /// Synchronously retrieves the current state for a plugin identifier.
@@ -93,21 +77,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: The state cast to `T`, or `nil` if not set or type mismatch.
     public func getState<T>(pluginId: String, type: T.Type) -> T? {
         guard validatePluginId(pluginId) else { return nil }
-        return lock.withLock {
-            guard let subject = subjects[pluginId] else {
-                #if DEBUG
-                print("[DynamicStore] Warning: getState called for non-existent plugin '\(pluginId)'")
-                #endif
-                return nil
-            }
-            guard let value = subject.value as? T else {
-                #if DEBUG
-                print("[DynamicStore] Warning: Type mismatch for plugin '\(pluginId)': expected \(T.self)")
-                #endif
-                return nil
-            }
-            return value
-        }
+        return state.get(pluginId: pluginId, type: type)
     }
 
     /// Removes the state subject for a plugin identifier.
@@ -116,10 +86,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Parameter pluginId: Unique identifier of the target plugin.
     public func removeState(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
-        let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
-            subjects.removeValue(forKey: pluginId)
-        }
-        subject?.send(completion: .finished)
+        state.remove(pluginId: pluginId)
     }
 
     /// Unregisters a plugin and cleans up its state and capabilities.
@@ -144,31 +111,7 @@ public final class DynamicStore: @unchecked Sendable {
         guard validatePluginId(pluginId) else {
             return Empty(completeImmediately: true).eraseToAnyPublisher()
         }
-        return Deferred { [weak self] () -> AnyPublisher<T, Never> in
-            guard let self else {
-                return Empty(completeImmediately: true).eraseToAnyPublisher()
-            }
-            let (subject, sequence): (CurrentValueSubject<Any?, Never>?, UInt64) = self.lock.withLock {
-                (self.subjects[pluginId], self.stateCreationSequence)
-            }
-            if let subject {
-                return subject
-                    .compactMap { $0 as? T }
-                    .eraseToAnyPublisher()
-            }
-            return self.stateCreationClock
-                .filter { $0 > sequence }
-                .map { [weak self] _ -> CurrentValueSubject<Any?, Never>? in
-                    guard let self else { return nil }
-                    return self.lock.withLock { self.subjects[pluginId] }
-                }
-                .compactMap { $0 }
-                .first()
-                .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
-                .switchToLatest()
-                .eraseToAnyPublisher()
-        }
-        .eraseToAnyPublisher()
+        return state.observe(pluginId: pluginId, type: type)
     }
 
     // MARK: - Capability Registry
@@ -266,85 +209,33 @@ public final class DynamicStore: @unchecked Sendable {
         )
     }
 
-    // MARK: - Task Scheduling
+    // MARK: - Task Scheduling (facade over StoreSchedulingGenerations)
 
     private var scheduler: TaskScheduler {
-        lock.withLock {
-            if let current = schedulerGenerations.last { return current }
-            let new = TaskScheduler(store: self, configuration: schedulerConfiguration, clock: storedExpiryClock)
-            schedulerGenerations.append(new)
-            return new
-        }
+        scheduling.current(owner: self)
     }
-    private var schedulerGenerations: [TaskScheduler] = []
-    private var schedulerConfiguration: TaskScheduler.Configuration
-    private var virtualClock: StoreVirtualClock?
-    private var storedExpiryClock: TaskScheduler.ExpiryClock = .live
 
     internal func enableDeterministicTime() {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        lock.withLock {
-            precondition(virtualClock == nil, "deterministic time already enabled")
-            precondition(schedulerGenerations.isEmpty, "enableDeterministicTime must precede first schedule")
-            let virtual = StoreVirtualClock()
-            virtualClock = virtual
-            storedExpiryClock = TaskScheduler.ExpiryClock(sleep: { timeout in
-                await virtual.sleep(timeout)
-            })
-        }
+        scheduling.enableDeterministicTime()
     }
 
     internal func advanceTime(by delta: TimeInterval) async {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        let clock: StoreVirtualClock = lock.withLock {
-            guard let virtual = virtualClock else {
-                preconditionFailure("deterministic time not enabled; call enableDeterministicTime() first")
-            }
-            return virtual
-        }
-        await clock.waitForWaiters(count: 1)
-        clock.advance(by: delta)
-        await Task.yield()
-        await Task.yield()
+        await scheduling.advanceTime(by: delta)
     }
 
     internal func waitForDeterministicWaiters(count expected: Int) async {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        let clock: StoreVirtualClock = lock.withLock {
-            guard let virtual = virtualClock else {
-                preconditionFailure("deterministic time not enabled")
-            }
-            return virtual
-        }
-        await clock.waitForWaiters(count: expected)
+        await scheduling.waitForWaiters(count: expected)
     }
 
     internal var deterministicWaiterCount: Int {
-        lock.withLock { virtualClock?.waiterCount ?? 0 }
+        scheduling.waiterCount
     }
 
     internal var generationCount: Int {
-        lock.withLock { schedulerGenerations.count }
-    }
-
-    private func pruneDrainedGenerations() {
-        let snapshot = lock.withLock { schedulerGenerations }
-        guard snapshot.count > 1 else { return }
-        var drainedIDs = Set<ObjectIdentifier>()
-        for generation in snapshot.dropLast() {
-            if generation.pendingCount == 0 && generation.activeCount == 0 {
-                drainedIDs.insert(ObjectIdentifier(generation))
-            }
-        }
-        guard !drainedIDs.isEmpty else { return }
-        lock.withLock {
-            guard schedulerGenerations.count > 1 else { return }
-            let currentID = ObjectIdentifier(schedulerGenerations.last!)
-            schedulerGenerations.removeAll { generation in
-                let id = ObjectIdentifier(generation)
-                return id != currentID && drainedIDs.contains(id)
-            }
-        }
+        scheduling.generationCount
     }
 
     /// Reconfigures the scheduler without orphaning in-flight work: the live
@@ -352,12 +243,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// and pending/active counts aggregate across live generations until the
     /// drained ones release.
     public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
-        lock.withLock {
-            schedulerConfiguration = configuration
-            let new = TaskScheduler(store: self, configuration: schedulerConfiguration, clock: storedExpiryClock)
-            schedulerGenerations.append(new)
-        }
-        pruneDrainedGenerations()
+        scheduling.reconfigure(configuration, owner: self)
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
@@ -392,24 +278,205 @@ public final class DynamicStore: @unchecked Sendable {
 
     /// Cancels a pending task by its identifier.
     public func cancelTask(taskId: String) {
-        let generations = lock.withLock { schedulerGenerations }
-        for generation in generations {
-            generation.cancel(taskId: taskId)
-        }
+        scheduling.cancel(taskId: taskId)
     }
 
     /// Number of pending tasks, aggregated across live generations.
     public var pendingTaskCount: Int {
-        pruneDrainedGenerations()
-        let generations = lock.withLock { schedulerGenerations }
-        return generations.reduce(0) { $0 + $1.pendingCount }
+        scheduling.pendingCount
     }
 
     /// Number of active tasks, aggregated across live generations.
     public var activeTaskCount: Int {
+        scheduling.activeCount
+    }
+}
+
+final class StoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var subjects: [String: CurrentValueSubject<Any?, Never>] = [:]
+    private var creationSequence: UInt64 = 0
+    private let creationClock = CurrentValueSubject<UInt64, Never>(0)
+
+    func update<T>(pluginId: String, newState: T) {
+        let (subject, sequence): (CurrentValueSubject<Any?, Never>, UInt64?) = lock.withLock {
+            if let existing = subjects[pluginId] {
+                return (existing, nil)
+            }
+            let created = CurrentValueSubject<Any?, Never>(nil)
+            subjects[pluginId] = created
+            creationSequence &+= 1
+            return (created, creationSequence)
+        }
+        if let sequence {
+            creationClock.send(sequence)
+        }
+        subject.send(newState)
+    }
+
+    func get<T>(pluginId: String, type: T.Type) -> T? {
+        lock.withLock {
+            guard let subject = subjects[pluginId] else {
+                #if DEBUG
+                print("[DynamicStore] Warning: getState called for non-existent plugin '\(pluginId)'")
+                #endif
+                return nil
+            }
+            guard let value = subject.value as? T else {
+                #if DEBUG
+                print("[DynamicStore] Warning: Type mismatch for plugin '\(pluginId)': expected \(T.self)")
+                #endif
+                return nil
+            }
+            return value
+        }
+    }
+
+    func remove(pluginId: String) {
+        let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
+            subjects.removeValue(forKey: pluginId)
+        }
+        subject?.send(completion: .finished)
+    }
+
+    func observe<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
+        Deferred { [weak self] () -> AnyPublisher<T, Never> in
+            guard let self else {
+                return Empty(completeImmediately: true).eraseToAnyPublisher()
+            }
+            let (subject, sequence): (CurrentValueSubject<Any?, Never>?, UInt64) = self.lock.withLock {
+                (self.subjects[pluginId], self.creationSequence)
+            }
+            if let subject {
+                return subject
+                    .compactMap { $0 as? T }
+                    .eraseToAnyPublisher()
+            }
+            return self.creationClock
+                .filter { $0 > sequence }
+                .map { [weak self] _ -> CurrentValueSubject<Any?, Never>? in
+                    guard let self else { return nil }
+                    return self.lock.withLock { self.subjects[pluginId] }
+                }
+                .compactMap { $0 }
+                .first()
+                .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
+                .switchToLatest()
+                .eraseToAnyPublisher()
+        }
+        .eraseToAnyPublisher()
+    }
+}
+
+final class StoreSchedulingGenerations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generations: [TaskScheduler] = []
+    private var configuration: TaskScheduler.Configuration
+    private var virtualClock: StoreVirtualClock?
+    private var storedExpiryClock: TaskScheduler.ExpiryClock = .live
+
+    init(configuration: TaskScheduler.Configuration) {
+        self.configuration = configuration
+    }
+
+    func current(owner: DynamicStore) -> TaskScheduler {
+        lock.withLock {
+            if let current = generations.last { return current }
+            let new = TaskScheduler(store: owner, configuration: configuration, clock: storedExpiryClock)
+            generations.append(new)
+            return new
+        }
+    }
+
+    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore) {
+        lock.withLock {
+            configuration = newConfiguration
+            let new = TaskScheduler(store: owner, configuration: configuration, clock: storedExpiryClock)
+            generations.append(new)
+        }
         pruneDrainedGenerations()
-        let generations = lock.withLock { schedulerGenerations }
-        return generations.reduce(0) { $0 + $1.activeCount }
+    }
+
+    func cancel(taskId: String) {
+        let snapshot = lock.withLock { generations }
+        for generation in snapshot {
+            generation.cancel(taskId: taskId)
+        }
+    }
+
+    var pendingCount: Int {
+        pruneDrainedGenerations()
+        let snapshot = lock.withLock { generations }
+        return snapshot.reduce(0) { $0 + $1.pendingCount }
+    }
+
+    var activeCount: Int {
+        pruneDrainedGenerations()
+        let snapshot = lock.withLock { generations }
+        return snapshot.reduce(0) { $0 + $1.activeCount }
+    }
+
+    var generationCount: Int {
+        lock.withLock { generations.count }
+    }
+
+    var waiterCount: Int {
+        lock.withLock { virtualClock?.waiterCount ?? 0 }
+    }
+
+    func enableDeterministicTime() {
+        lock.withLock {
+            precondition(virtualClock == nil, "deterministic time already enabled")
+            precondition(generations.isEmpty, "enableDeterministicTime must precede first schedule")
+            let virtual = StoreVirtualClock()
+            virtualClock = virtual
+            storedExpiryClock = TaskScheduler.ExpiryClock(sleep: { timeout in
+                await virtual.sleep(timeout)
+            })
+        }
+    }
+
+    func advanceTime(by delta: TimeInterval) async {
+        let clock: StoreVirtualClock = lock.withLock {
+            guard let virtual = virtualClock else {
+                preconditionFailure("deterministic time not enabled; call enableDeterministicTime() first")
+            }
+            return virtual
+        }
+        await clock.waitForWaiters(count: 1)
+        clock.advance(by: delta)
+        await Task.yield()
+        await Task.yield()
+    }
+
+    func waitForWaiters(count expected: Int) async {
+        let clock: StoreVirtualClock = lock.withLock {
+            guard let virtual = virtualClock else {
+                preconditionFailure("deterministic time not enabled")
+            }
+            return virtual
+        }
+        await clock.waitForWaiters(count: expected)
+    }
+
+    private func pruneDrainedGenerations() {
+        let snapshot = lock.withLock { generations }
+        guard snapshot.count > 1 else { return }
+        var drainedIDs = Set<ObjectIdentifier>()
+        for generation in snapshot.dropLast() {
+            if generation.pendingCount == 0 && generation.activeCount == 0 {
+                drainedIDs.insert(ObjectIdentifier(generation))
+            }
+        }
+        guard !drainedIDs.isEmpty else { return }
+        lock.withLock {
+            guard generations.count > 1 else { return }
+            let currentID = ObjectIdentifier(generations.last!)
+            generations.removeAll { generation in
+                let id = ObjectIdentifier(generation)
+                return id != currentID && drainedIDs.contains(id)
+            }
+        }
     }
 }
 

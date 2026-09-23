@@ -169,7 +169,6 @@ public final class TaskScheduler: @unchecked Sendable {
 
     private let waiter: CapabilityWaiter
     private let clock: ExpiryClock
-    private let settlement: SettlementDecider
 
     private enum Place: Sendable {
         case pending
@@ -187,23 +186,47 @@ public final class TaskScheduler: @unchecked Sendable {
     }
 
     struct LifecycleStore {
+        struct Counts: Sendable, Equatable {
+            var pending: Int
+            var queued: Int
+            var parked: Int
+            var active: Int
+        }
+
         private var rows: [String: LifecycleRow] = [:]
-        private var queue = PendingQueue()
+        private var order = OrderIndex()
+
+        var counts: Counts {
+            var queued = 0
+            var parked = 0
+            var active = 0
+            for row in rows.values {
+                switch row.place {
+                case .pending:
+                    queued += 1
+                case .parked:
+                    parked += 1
+                case .active:
+                    active += 1
+                }
+            }
+            return Counts(pending: queued + parked, queued: queued, parked: parked, active: active)
+        }
 
         var pendingTotal: Int {
-            rows.values.filter { $0.place == .pending || $0.place == .parked }.count
+            counts.pending
         }
 
         var queued: Int {
-            rows.values.filter { $0.place == .pending }.count
+            counts.queued
         }
 
         var parked: Int {
-            rows.values.filter { $0.place == .parked }.count
+            counts.parked
         }
 
         var active: Int {
-            rows.values.filter { $0.place == .active }.count
+            counts.active
         }
 
         mutating func insert(
@@ -219,7 +242,7 @@ public final class TaskScheduler: @unchecked Sendable {
                 waiter: nil,
                 waiting: false
             )
-            queue.enqueue(id: lease.task.id, priority: lease.task.priority)
+            order.enqueue(id: lease.task.id, priority: lease.task.priority)
         }
 
         func nonTerminalLease(for id: String) -> Lease? {
@@ -273,7 +296,7 @@ public final class TaskScheduler: @unchecked Sendable {
         }
 
         mutating func dequeueNext() -> Lease? {
-            while let id = queue.dequeue() {
+            while let id = order.dequeue() {
                 if var row = rows[id] {
                     row.place = .parked
                     rows[id] = row
@@ -307,46 +330,98 @@ public final class TaskScheduler: @unchecked Sendable {
                 row.execution = execution
             }
             rows[lease.task.id] = row
-            queue.enqueue(id: lease.task.id, priority: lease.task.priority)
+            order.enqueue(id: lease.task.id, priority: lease.task.priority)
         }
 
         mutating func takeTerminal(for lease: Lease) -> (waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)? {
             guard let row = rows[lease.task.id], row.lease === lease else { return nil }
             rows.removeValue(forKey: lease.task.id)
-            queue.remove(taskId: lease.task.id)
+            order.remove(taskId: lease.task.id)
             return (row.waiters, row.waiter)
         }
-    }
 
-    struct SettlementDecider: Sendable {
-        enum Decision {
-            case retry
-            case complete(Any?)
-            case fail
-            case expire
-        }
+        private struct OrderIndex: Sendable {
+            private static let dequeueOrder = TaskPriority.allCases.sorted(by: >)
 
-        static func decide(lease: Lease, outcome: Settlement) -> Decision {
-            switch outcome {
-            case .completed(let result):
-                if result == nil, lease.canRetry { return .retry }
-                if result != nil { return .complete(result) }
-                return .fail
-            case .failed:
-                return .fail
-            case .expired, .cancelled:
-                return .expire
+            private var prioritiesById: [String: TaskPriority] = [:]
+            private var heads: [TaskPriority: String] = [:]
+            private var tails: [TaskPriority: String] = [:]
+            private var nextById: [String: String] = [:]
+            private var prevById: [String: String] = [:]
+
+            mutating func enqueue(id: String, priority: TaskPriority) {
+                if let existing = prioritiesById[id] {
+                    unlink(taskId: id, priority: existing)
+                }
+                prioritiesById[id] = priority
+                if let tailId = tails[priority] {
+                    nextById[tailId] = id
+                    prevById[id] = tailId
+                    tails[priority] = id
+                    nextById.removeValue(forKey: id)
+                } else {
+                    heads[priority] = id
+                    tails[priority] = id
+                    prevById.removeValue(forKey: id)
+                    nextById.removeValue(forKey: id)
+                }
             }
-        }
 
-        private let controller: ConcurrencyController
+            mutating func dequeue() -> String? {
+                for priority in Self.dequeueOrder {
+                    guard let headId = heads[priority] else { continue }
+                    guard prioritiesById[headId] != nil else {
+                        repairDanglingHead(headId, priority: priority)
+                        continue
+                    }
+                    unlink(taskId: headId, priority: priority)
+                    prioritiesById.removeValue(forKey: headId)
+                    return headId
+                }
+                return nil
+            }
 
-        init(controller: ConcurrencyController) {
-            self.controller = controller
-        }
+            @discardableResult
+            mutating func remove(taskId: String) -> Bool {
+                guard let priority = prioritiesById[taskId] else { return false }
+                unlink(taskId: taskId, priority: priority)
+                prioritiesById.removeValue(forKey: taskId)
+                return true
+            }
 
-        func release(taskId: String, owner: ObjectIdentifier) {
-            controller.release(taskId: taskId, owner: owner)
+            private mutating func repairDanglingHead(_ headId: String, priority: TaskPriority) {
+                if let nextId = nextById[headId] {
+                    heads[priority] = nextId
+                    prevById.removeValue(forKey: nextId)
+                } else {
+                    heads.removeValue(forKey: priority)
+                    tails.removeValue(forKey: priority)
+                }
+                nextById.removeValue(forKey: headId)
+                prevById.removeValue(forKey: headId)
+            }
+
+            private mutating func unlink(taskId: String, priority: TaskPriority) {
+                let prevId = prevById[taskId]
+                let nextId = nextById[taskId]
+                if let prevId {
+                    if let nextId {
+                        nextById[prevId] = nextId
+                        prevById[nextId] = prevId
+                    } else {
+                        nextById.removeValue(forKey: prevId)
+                        tails[priority] = prevId
+                    }
+                } else if let nextId {
+                    heads[priority] = nextId
+                    prevById.removeValue(forKey: nextId)
+                } else {
+                    heads.removeValue(forKey: priority)
+                    tails.removeValue(forKey: priority)
+                }
+                prevById.removeValue(forKey: taskId)
+                nextById.removeValue(forKey: taskId)
+            }
         }
     }
 
@@ -359,7 +434,6 @@ public final class TaskScheduler: @unchecked Sendable {
         self.waiter = CapabilityWaiter(store: store)
         let controller = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
         self.concurrencyController = controller
-        self.settlement = SettlementDecider(controller: controller)
     }
 
     /// Schedules a task for execution with a closure.
@@ -476,27 +550,27 @@ public final class TaskScheduler: @unchecked Sendable {
 
     /// Returns the number of pending tasks (queued plus parked; parked-in-pending stays).
     var pendingCount: Int {
-        lock.withLock { lifecycleStore.pendingTotal }
+        lock.withLock { lifecycleStore.counts.pending }
     }
 
     /// Queued portion of pending: rows still in order waiting for dequeue.
     var queuedCount: Int {
-        lock.withLock { lifecycleStore.queued }
+        lock.withLock { lifecycleStore.counts.queued }
     }
 
     /// Parked portion of pending: rows dequeued and waiting for capabilities or slots.
     var parkedCount: Int {
-        lock.withLock { lifecycleStore.parked }
+        lock.withLock { lifecycleStore.counts.parked }
     }
 
     /// Returns the number of active tasks.
     var activeCount: Int {
-        lock.withLock { lifecycleStore.active }
+        lock.withLock { lifecycleStore.counts.active }
     }
 
-    // MARK: - Private Methods
+    // MARK: - Settlement
 
-    enum Settlement {
+    private enum Settlement {
         case completed(Any?)
         case failed
         case expired
@@ -513,13 +587,30 @@ public final class TaskScheduler: @unchecked Sendable {
         settle(lease, as: .completed(result), execution: execution)
     }
 
-    /// The single row-transition path. SettlementDecider owns the retry
-    /// budget check, the void-completion policy, and the retry re-queue;
-    /// LifecycleStore owns the place plus waiter lists; this path adds the
-    /// exactly-once guard, rendezvous delivery, waiter cancellation, and the
-    /// shared release. Cancel settles via the expired path with no Lease
-    /// state-shape change.
+    /// The single row-transition path behind one internal seam: budget check,
+    /// row transition (retry re-queue vs terminal removal), single slot
+    /// release, waiter delivery/cancellation, and retry re-pump. Cancel
+    /// settles via the expired path with no Lease state-shape change.
     private func settle(_ lease: Lease, as outcome: Settlement, execution: (@Sendable () async -> Any?)? = nil) {
+        enum Decision {
+            case retry
+            case complete(Any?)
+            case fail
+            case expire
+        }
+        func decide(lease: Lease, outcome: Settlement) -> Decision {
+            switch outcome {
+            case .completed(let result):
+                if result == nil, lease.canRetry { return .retry }
+                if result != nil { return .complete(result) }
+                return .fail
+            case .failed:
+                return .fail
+            case .expired, .cancelled:
+                return .expire
+            }
+        }
+
         var waiters: [(Lease) -> Void] = []
         var waiterToCancel: Task<Void, Never>?
         var settled = false
@@ -527,7 +618,7 @@ public final class TaskScheduler: @unchecked Sendable {
         lock.withLock {
             guard !lease.isTerminal else { return }
             guard lifecycleStore.isLive(lease) else { return }
-            switch SettlementDecider.decide(lease: lease, outcome: outcome) {
+            switch decide(lease: lease, outcome: outcome) {
             case .retry:
                 lease.beginRetry()
                 lifecycleStore.applyRetry(for: lease, execution: execution)
@@ -554,13 +645,13 @@ public final class TaskScheduler: @unchecked Sendable {
             }
         }
         if didRetry {
-            settlement.release(taskId: lease.task.id, owner: ObjectIdentifier(lease))
+            releaseSlot(taskId: lease.task.id, owner: ObjectIdentifier(lease))
             Task { await self.processPendingTasks() }
             return
         }
         guard settled else { return }
         waiterToCancel?.cancel()
-        settlement.release(taskId: lease.task.id, owner: ObjectIdentifier(lease))
+        releaseSlot(taskId: lease.task.id, owner: ObjectIdentifier(lease))
         for waiter in waiters {
             waiter(lease)
         }
@@ -569,7 +660,7 @@ public final class TaskScheduler: @unchecked Sendable {
     /// Single controller release shared by terminal, retry, and scope exit;
     /// guarded by the Lease owner token so a stale scope-exit defer no-ops.
     private func releaseSlot(taskId: String, owner: ObjectIdentifier) {
-        settlement.release(taskId: taskId, owner: owner)
+        concurrencyController.release(taskId: taskId, owner: owner)
     }
 
     private func processPendingTasks() async {
@@ -654,28 +745,30 @@ public final class TaskScheduler: @unchecked Sendable {
     }
 
     /// Scoped hold owned by the controller: one call per hold, admission,
-    /// FIFO wake, cancellable wait, and scope-exit release guarded by this
-    /// Lease's owner token. A nil hold (cancelled or duplicate) means
-    /// Settlement already settled this row, so there is nothing to run.
+    /// FIFO wake, cancellable wait, and scope-exit release through the single
+    /// Settlement release guarded by this Lease's owner token. A rejected
+    /// hold (cancelled or duplicate) means Settlement already settled this
+    /// row, so there is nothing to run.
     private func withSlot(for lease: Lease, operation: @Sendable @escaping () async -> Void) async {
-        await concurrencyController.withHold(
+        let owner = ObjectIdentifier(lease)
+        guard await concurrencyController.acquire(
             keys: lease.task.requiredCapabilities,
             taskId: lease.task.id,
-            owner: ObjectIdentifier(lease)
-        ) {
-            guard !lease.isTerminal else { return }
-            guard self.waiter.isAvailable(for: lease.task) else {
-                self.settle(lease, as: .failed)
-                return
-            }
-
-            let activated: Bool = self.lock.withLock {
-                lifecycleStore.tryActivate(for: lease)
-            }
-            guard activated else { return }
-
-            await operation()
+            owner: owner
+        ) else { return }
+        defer { releaseSlot(taskId: lease.task.id, owner: owner) }
+        guard !lease.isTerminal else { return }
+        guard self.waiter.isAvailable(for: lease.task) else {
+            self.settle(lease, as: .failed)
+            return
         }
+
+        let activated: Bool = self.lock.withLock {
+            lifecycleStore.tryActivate(for: lease)
+        }
+        guard activated else { return }
+
+        await operation()
     }
 
     private func runActivatedLease(_ lease: Lease, deadline: Deadline) async {
