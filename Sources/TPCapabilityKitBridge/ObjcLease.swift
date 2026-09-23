@@ -3,7 +3,11 @@ import TPCapabilityKit
 
 /// Objective-C wrapper for Lease.
 ///
-/// Reads live state from the underlying lease; no manual sync needed.
+/// A live view over the underlying lease: `state` and `result` read through
+/// on every access, so there is no snapshot to refresh and no sync call.
+/// `taskId` is pinned at construction because task identity never changes.
+/// Freshness: state reflects the latest transition at read time; terminal
+/// reads (`completed`/`failed`/`expired`) are stable once observed.
 @objc(TPLease)
 public final class ObjcLease: NSObject, @unchecked Sendable {
     /// Lease state for ObjC consumers.

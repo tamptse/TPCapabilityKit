@@ -5,7 +5,9 @@ import Foundation
 /// Provides both state management and capability registry functionality.
 ///
 /// ## Thread Safety
-/// - Single `lock` protects all mutable state (subjects, registry)
+/// - `lock` protects State subjects and scheduler generations; the registry
+///   owns its own lock behind one mutate-and-notify seam (no caller holds
+///   the Store lock across a registry call)
 /// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
 /// ## Debug Logging
@@ -21,10 +23,13 @@ public final class DynamicStore: @unchecked Sendable {
     /// Shared singleton instance.
     public static let shared = DynamicStore()
 
-    // MARK: - Mutable State (all protected by single `lock`)
+    // MARK: - Mutable State (subjects + generations protected by `lock`; registry owns its lock)
     private var subjects: [String: CurrentValueSubject<Any?, Never>] = [:]
     private let registry = CapabilityRegistry()
     private let lock = NSLock()
+
+    private var stateCreationSequence: UInt64 = 0
+    private let stateCreationClock = CurrentValueSubject<UInt64, Never>(0)
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
@@ -44,15 +49,6 @@ public final class DynamicStore: @unchecked Sendable {
         return true
     }
 
-    private func ensureSubjectLocked(for pluginId: String) -> CurrentValueSubject<Any?, Never> {
-        if let existing = subjects[pluginId] {
-            return existing
-        }
-        let created = CurrentValueSubject<Any?, Never>(nil)
-        subjects[pluginId] = created
-        return created
-    }
-
     // MARK: - Plugin Registration
 
     /// Registers a plugin and starts it with the current store instance.
@@ -69,13 +65,23 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Updates the state associated with a plugin identifier.
+    /// Writers get-or-create: the subject is created on first write.
     /// - Parameters:
     ///   - pluginId: Unique identifier of the target plugin.
     ///   - newState: The new state value to update or broadcast.
     public func updateState<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let subject = lock.withLock { () -> CurrentValueSubject<Any?, Never> in
-            ensureSubjectLocked(for: pluginId)
+        let (subject, sequence): (CurrentValueSubject<Any?, Never>, UInt64?) = lock.withLock {
+            if let existing = subjects[pluginId] {
+                return (existing, nil)
+            }
+            let created = CurrentValueSubject<Any?, Never>(nil)
+            subjects[pluginId] = created
+            stateCreationSequence &+= 1
+            return (created, stateCreationSequence)
+        }
+        if let sequence {
+            stateCreationClock.send(sequence)
         }
         subject.send(newState)
     }
@@ -105,19 +111,15 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Removes the state subject for a plugin identifier.
-    /// Removal is invisible to typed observers: the detached subject is sent
-    /// `nil`, which `observeState` filters via `compactMap`, so existing
-    /// subscribers receive nothing further. The next `updateState` creates a
-    /// fresh subject for new subscribers.
+    /// Removal completes detached subscribers with `.finished`; the next
+    /// `updateState` creates a fresh subject for new subscribers.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     public func removeState(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
         let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
             subjects.removeValue(forKey: pluginId)
         }
-
-        // Complete the detached subject's lifecycle; typed observers filter the nil.
-        subject?.send(nil)
+        subject?.send(completion: .finished)
     }
 
     /// Unregisters a plugin and cleans up its state and capabilities.
@@ -128,23 +130,45 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Subscribes reactively to state changes for a plugin identifier.
+    /// Observation alone never creates: writers get-or-create via `updateState`.
+    /// An observer that subscribes before the first write waits for creation
+    /// and then receives values from the fresh subject, without storing
+    /// per-id state for probes. Removal completes observers with `.finished`.
     /// - Parameters:
     ///   - pluginId: Unique identifier of the target plugin.
     ///   - type: Expected type of the state.
     /// - Returns: A publisher emitting values matching type `T`. Subscribers must handle thread scheduling.
-    /// - Note: If the plugin doesn't exist, a subject will be created automatically.
-    ///   Use `removeState(for:)` to clean up unused subjects.
-    /// - Note: `nil` (including the removal send) is filtered, so removal
-    ///   produces no event; pre-removal subscribers stay on the detached subject.
     /// - Note: Values are delivered synchronously on the writer's thread with no
     ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeState<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
-        let subject = lock.withLock { () -> CurrentValueSubject<Any?, Never> in
-            ensureSubjectLocked(for: pluginId)
+        guard validatePluginId(pluginId) else {
+            return Empty(completeImmediately: true).eraseToAnyPublisher()
         }
-        return subject
-            .compactMap { $0 as? T }
-            .eraseToAnyPublisher()
+        return Deferred { [weak self] () -> AnyPublisher<T, Never> in
+            guard let self else {
+                return Empty(completeImmediately: true).eraseToAnyPublisher()
+            }
+            let (subject, sequence): (CurrentValueSubject<Any?, Never>?, UInt64) = self.lock.withLock {
+                (self.subjects[pluginId], self.stateCreationSequence)
+            }
+            if let subject {
+                return subject
+                    .compactMap { $0 as? T }
+                    .eraseToAnyPublisher()
+            }
+            return self.stateCreationClock
+                .filter { $0 > sequence }
+                .map { [weak self] _ -> CurrentValueSubject<Any?, Never>? in
+                    guard let self else { return nil }
+                    return self.lock.withLock { self.subjects[pluginId] }
+                }
+                .compactMap { $0 }
+                .first()
+                .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
+                .switchToLatest()
+                .eraseToAnyPublisher()
+        }
+        .eraseToAnyPublisher()
     }
 
     // MARK: - Capability Registry
@@ -155,33 +179,21 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - capabilities: Set of capabilities the plugin provides.
     func registerCapability(for pluginId: String, capabilities: Set<Capability>) {
         guard validatePluginId(pluginId) else { return }
-        let mutation: CapabilityRegistry.MutationResult = lock.withLock {
-            registry.register(for: pluginId, capabilities: capabilities)
-        }
-        emit(mutation)
+        registry.register(for: pluginId, capabilities: capabilities)
     }
 
     /// Unregisters all capabilities for a plugin identifier.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     func unregisterCapability(for pluginId: String) {
         guard validatePluginId(pluginId) else { return }
-        let mutation: CapabilityRegistry.MutationResult = lock.withLock {
-            registry.unregister(for: pluginId)
-        }
-        emit(mutation)
-    }
-
-    private func emit(_ mutation: CapabilityRegistry.MutationResult) {
-        registry.emit(mutation)
+        registry.unregister(for: pluginId)
     }
 
     /// Queries whether any registered plugin provides the specified capability.
     /// - Parameter capability: The capability to query.
     /// - Returns: `true` if at least one plugin provides the capability.
     public func queryCapability(_ capability: Capability) -> Bool {
-        lock.withLock {
-            registry.query(capability)
-        }
+        registry.query(capability)
     }
 
     /// Returns the capabilities registered by a specific plugin.
@@ -189,17 +201,13 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Returns: Set of capabilities, or empty if plugin has none registered.
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
         guard validatePluginId(pluginId) else { return [] }
-        return lock.withLock {
-            registry.queryCapabilities(for: pluginId)
-        }
+        return registry.queryCapabilities(for: pluginId)
     }
 
     /// Returns all registered capabilities across all plugins.
     /// - Returns: Dictionary mapping plugin IDs to their capabilities.
     func queryAllCapabilities() -> [String: Set<Capability>] {
-        lock.withLock {
-            registry.queryAll()
-        }
+        registry.queryAll()
     }
 
     /// Reactively observes whether any plugin provides the specified capability.
@@ -210,9 +218,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Note: Values are delivered synchronously on the writer's thread with no
     ///   lock held, so calling back into `query` APIs from a sink is safe.
     public func observeCapability(_ capability: Capability) -> AnyPublisher<Bool, Never> {
-        lock.withLock {
-            registry.observe(capability)
-        }
+        registry.observe(capability)
     }
 
     /// Reactively observes capabilities changes across all plugins.
@@ -264,20 +270,94 @@ public final class DynamicStore: @unchecked Sendable {
 
     private var scheduler: TaskScheduler {
         lock.withLock {
-            if let existing = _scheduler { return existing }
-            let new = TaskScheduler(store: self, configuration: schedulerConfiguration)
-            _scheduler = new
+            if let current = schedulerGenerations.last { return current }
+            let new = TaskScheduler(store: self, configuration: schedulerConfiguration, clock: storedExpiryClock)
+            schedulerGenerations.append(new)
             return new
         }
     }
-    private var _scheduler: TaskScheduler?
+    private var schedulerGenerations: [TaskScheduler] = []
     private var schedulerConfiguration: TaskScheduler.Configuration
+    private var virtualClock: StoreVirtualClock?
+    private var storedExpiryClock: TaskScheduler.ExpiryClock = .live
 
+    internal func enableDeterministicTime() {
+        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
+        lock.withLock {
+            precondition(virtualClock == nil, "deterministic time already enabled")
+            precondition(schedulerGenerations.isEmpty, "enableDeterministicTime must precede first schedule")
+            let virtual = StoreVirtualClock()
+            virtualClock = virtual
+            storedExpiryClock = TaskScheduler.ExpiryClock(sleep: { timeout in
+                await virtual.sleep(timeout)
+            })
+        }
+    }
+
+    internal func advanceTime(by delta: TimeInterval) async {
+        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
+        let clock: StoreVirtualClock = lock.withLock {
+            guard let virtual = virtualClock else {
+                preconditionFailure("deterministic time not enabled; call enableDeterministicTime() first")
+            }
+            return virtual
+        }
+        await clock.waitForWaiters(count: 1)
+        clock.advance(by: delta)
+        await Task.yield()
+        await Task.yield()
+    }
+
+    internal func waitForDeterministicWaiters(count expected: Int) async {
+        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
+        let clock: StoreVirtualClock = lock.withLock {
+            guard let virtual = virtualClock else {
+                preconditionFailure("deterministic time not enabled")
+            }
+            return virtual
+        }
+        await clock.waitForWaiters(count: expected)
+    }
+
+    internal var deterministicWaiterCount: Int {
+        lock.withLock { virtualClock?.waiterCount ?? 0 }
+    }
+
+    internal var generationCount: Int {
+        lock.withLock { schedulerGenerations.count }
+    }
+
+    private func pruneDrainedGenerations() {
+        let snapshot = lock.withLock { schedulerGenerations }
+        guard snapshot.count > 1 else { return }
+        var drainedIDs = Set<ObjectIdentifier>()
+        for generation in snapshot.dropLast() {
+            if generation.pendingCount == 0 && generation.activeCount == 0 {
+                drainedIDs.insert(ObjectIdentifier(generation))
+            }
+        }
+        guard !drainedIDs.isEmpty else { return }
+        lock.withLock {
+            guard schedulerGenerations.count > 1 else { return }
+            let currentID = ObjectIdentifier(schedulerGenerations.last!)
+            schedulerGenerations.removeAll { generation in
+                let id = ObjectIdentifier(generation)
+                return id != currentID && drainedIDs.contains(id)
+            }
+        }
+    }
+
+    /// Reconfigures the scheduler without orphaning in-flight work: the live
+    /// generations keep draining naturally, new work enters a fresh generation,
+    /// and pending/active counts aggregate across live generations until the
+    /// drained ones release.
     public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
         lock.withLock {
             schedulerConfiguration = configuration
-            _scheduler = nil
+            let new = TaskScheduler(store: self, configuration: schedulerConfiguration, clock: storedExpiryClock)
+            schedulerGenerations.append(new)
         }
+        pruneDrainedGenerations()
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
@@ -312,12 +392,93 @@ public final class DynamicStore: @unchecked Sendable {
 
     /// Cancels a pending task by its identifier.
     public func cancelTask(taskId: String) {
-        scheduler.cancel(taskId: taskId)
+        let generations = lock.withLock { schedulerGenerations }
+        for generation in generations {
+            generation.cancel(taskId: taskId)
+        }
     }
 
-    /// Number of pending tasks.
-    public var pendingTaskCount: Int { scheduler.pendingCount }
+    /// Number of pending tasks, aggregated across live generations.
+    public var pendingTaskCount: Int {
+        pruneDrainedGenerations()
+        let generations = lock.withLock { schedulerGenerations }
+        return generations.reduce(0) { $0 + $1.pendingCount }
+    }
 
-    /// Number of active tasks.
-    public var activeTaskCount: Int { scheduler.activeCount }
+    /// Number of active tasks, aggregated across live generations.
+    public var activeTaskCount: Int {
+        pruneDrainedGenerations()
+        let generations = lock.withLock { schedulerGenerations }
+        return generations.reduce(0) { $0 + $1.activeCount }
+    }
+}
+
+private final class StoreVirtualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var now: TimeInterval = 0
+    private var nextID: UInt64 = 0
+    private var waiters: [UInt64: (deadline: TimeInterval, continuation: CheckedContinuation<Void, Never>)] = [:]
+
+    var waiterCount: Int {
+        lock.withLock { waiters.count }
+    }
+
+    func sleep(_ timeout: TimeInterval) async {
+        if timeout <= 0 { return }
+        if Task.isCancelled { return }
+        let id: UInt64 = lock.withLock {
+            nextID &+= 1
+            return nextID
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                var immediate: CheckedContinuation<Void, Never>?
+                lock.withLock {
+                    let deadline = now + timeout
+                    if deadline <= now {
+                        immediate = cont
+                    } else {
+                        waiters[id] = (deadline, cont)
+                    }
+                }
+                immediate?.resume()
+            }
+        } onCancel: {
+            var cont: CheckedContinuation<Void, Never>?
+            lock.withLock { cont = waiters.removeValue(forKey: id)?.continuation }
+            cont?.resume()
+        }
+    }
+
+    func advance(by delta: TimeInterval) {
+        precondition(delta >= 0)
+        var expired: [CheckedContinuation<Void, Never>] = []
+        lock.withLock {
+            now += delta
+            let current = now
+            var remaining: [UInt64: (deadline: TimeInterval, continuation: CheckedContinuation<Void, Never>)] = [:]
+            remaining.reserveCapacity(waiters.count)
+            for (id, waiter) in waiters {
+                if waiter.deadline <= current {
+                    expired.append(waiter.continuation)
+                } else {
+                    remaining[id] = waiter
+                }
+            }
+            waiters = remaining
+        }
+        for cont in expired {
+            cont.resume()
+        }
+    }
+
+    func waitForWaiters(count expected: Int) async {
+        let deadline = Date().addingTimeInterval(5.0)
+        while Date() < deadline {
+            if lock.withLock({ waiters.count }) >= expected { return }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        preconditionFailure("StoreVirtualClock: no waiter registered within 5s (expected \(expected))")
+    }
 }

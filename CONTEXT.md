@@ -9,20 +9,27 @@ the `CapabilityProvider` legacy alias is removed.
 ## Store
 
 The in-memory state database + capability registry (`DynamicStore`).
-Owns state subjects and the capability index. Single lock protects mutable state.
+Owns state subjects and the capability index. The registry owns its own
+lock with one mutate-and-notify seam: per-Capability notices deliver
+before the whole-snapshot publish, and no caller holds the Store lock
+across a registry call.
 Changes are collected under lock and emitted after unlock; waiting is delegated
 to Tasks. Public seam: register/update/get/observe state, query/observe capability,
 plus the scheduling facade (schedule/schedule-and-wait/cancel/pending/active/configure,
 immediate run styles).
 The scheduler instance itself is private; all scheduling crosses the facade.
+Reconfigure preserves in-flight generations: the old scheduler drains
+naturally while new work enters the new one, and pending/active counts
+aggregate across live generations.
 Two observation granularities: per-Capability observation serves UI-style
 subscribers; whole-registry observation serves the Tasks waiter only.
 
 ## State
 
 A per-Plugin value keyed by Plugin id, held by the Store and observed typed.
-Removal detaches the subject: typed observers see nothing further, the next
-update creates a fresh subject.
+Creation and subscription are separate: writers get-or-create, observation
+alone never creates. Removal completes detached subscribers and the next
+update creates a fresh subject for new subscribers.
 _Avoid_: cache, snapshot
 
 ## Capability

@@ -53,7 +53,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         queue: DispatchQueue? = nil,
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
-        let targetQueue = queue ?? .main
+        let targetQueue = ObjcMapper.deliveryQueue(from: queue)
         let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
             .receive(on: targetQueue)
             .sink { state in
@@ -82,7 +82,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         queue: DispatchQueue? = nil,
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
-        let targetQueue = queue ?? .main
+        let targetQueue = ObjcMapper.deliveryQueue(from: queue)
         let cap = ObjcMapper.capability(from: capability)
         let cancellable = store.observeCapability(cap)
             .receive(on: targetQueue)
@@ -93,11 +93,13 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     // MARK: - Task Execution APIs
 
     /// Runs a task immediately if the required capability is available.
-    /// Sync fast-path over the same registry state the Tasks waiter resolves,
-    /// so sync and wait-then-run agree by construction (pinned by interface
-    /// tests, not by this comment). Stays synchronous because `@objc` cannot
-    /// await; blocking the calling thread on a semaphore would risk deadlock.
-    /// For wait-then-run use `runTaskWhenAvailable`.
+    /// Convenience over the single scheduling door: delegates to the
+    /// `taskScheduler` view's sync fast-path, which consults the same registry
+    /// state the Tasks waiter resolves, so sync and wait-then-run agree by
+    /// construction (pinned by interface tests, not by this comment). Stays
+    /// synchronous because `@objc` cannot await; blocking the calling thread
+    /// on a semaphore would risk deadlock. For wait-then-run use
+    /// `runTaskWhenAvailable`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -106,12 +108,14 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        guard store.queryCapability(ObjcMapper.capability(from: capability)) else { return nil }
-        return task()
+        taskScheduler.runIfAvailable(capability: capability, task: task)
     }
 
     /// Runs a task when the required capability becomes available, with a timeout.
-    /// Delivers the result on the specified queue.
+    /// Convenience over the single scheduling door: delegates to the
+    /// `taskScheduler` view, which owns descriptor building, timeout compat,
+    /// queue hopping, and defaults with one delivery story. Delivers the
+    /// result on the specified queue, or the main queue when omitted.
     /// Timeout compat follows the single mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
@@ -127,24 +131,13 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         task: @escaping () -> NSObject,
         completion: @escaping (NSObject?) -> Void
     ) {
-        let targetQueue = queue ?? .main
-        let descriptor = ObjcMapper.makeDescriptor(
-            capabilities: [capability],
-            priority: TaskPriority.normal.rawValue,
+        taskScheduler.runWhenAvailable(
+            capability: capability,
             timeout: timeout,
-            maxRetries: 0,
-            metadata: [:]
+            queue: queue,
+            task: task,
+            completion: completion
         )
-        let taskBox = ObjcCallbackBox(task)
-        let completionBox = ObjcCallbackBox(completion)
-        Task {
-            let result: NSObject? = await store.scheduleTaskAndWait(descriptor) {
-                taskBox.value()
-            }
-            targetQueue.async {
-                completionBox.value(result)
-            }
-        }
     }
 
     // MARK: - Task Scheduling APIs

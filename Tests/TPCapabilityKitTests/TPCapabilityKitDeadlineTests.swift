@@ -15,76 +15,51 @@ private func immediateClock() -> TaskScheduler.ExpiryClock {
     TaskScheduler.ExpiryClock(sleep: { _ in })
 }
 
-@Suite("Deadline Tests")
+@Suite("Expiry Tests")
 struct DeadlineTests {
-    @Test("resolve pins nil timeout to the configured default")
-    func resolvePinsNilToDefault() {
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
-        #expect(task.timeout == nil)
-        #expect(TaskScheduler.Deadline.resolve(task: task, default: 0.3) == 0.3)
-    }
-
-    @Test("resolve carries an explicit timeout unchanged")
-    func resolveCarriesExplicitTimeout() {
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 7.5)
-        #expect(TaskScheduler.Deadline.resolve(task: task, default: 0.3) == 7.5)
-    }
-
-    @Test("race favours the operation when the clock never fires")
-    func raceFavoursOperation() async {
-        let recording = TaskScheduler.DeadlineRecording()
-        let deadline = TaskScheduler.Deadline(timeout: 0.5, clock: neverClock(), recording: recording)
-
-        let won = await deadline.race(.execution) { true }
-
-        #expect(won == true)
-        #expect(recording.all == [.init(race: .execution, outcome: .satisfied, timeout: 0.5)])
-    }
-
-    @Test("race expires when the operation never finishes")
-    func raceExpiresWhenOperationPends() async {
-        let recording = TaskScheduler.DeadlineRecording()
-        let gate = AsyncStream<Void>.makeStream()
-        let deadline = TaskScheduler.Deadline(timeout: 0.5, clock: immediateClock(), recording: recording)
-
-        let won = await deadline.race(.wait) {
-            for await _ in gate.stream { break }
-            return true
-        }
-
-        #expect(won == false)
-        #expect(recording.all == [.init(race: .wait, outcome: .expired, timeout: 0.5)])
-        gate.continuation.finish()
-    }
-
-    @Test("wait expiry records the wait race through the scheduler")
-    func waitExpiryRecordsWaitRace() async {
+    @Test("resolve once at enqueue shares one expiry through lease state")
+    func resolveOnceAtEnqueue() async {
         let store = DynamicStore()
-        let recording = TaskScheduler.DeadlineRecording()
-        let scheduler = TaskScheduler(store: store, clock: immediateClock(), recording: recording)
-
-        let task = TaskDescriptor(
-            requiredCapabilities: [.custom("DeadlineWait_\(UUID().uuidString)")],
-            timeout: 0.3
+        let scheduler = TaskScheduler(
+            store: store,
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
+            clock: immediateClock()
         )
-        let done = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(task, taskExecution: {}, completion: { _ in
-            done.continuation.yield()
-        })
-        for await _ in done.stream { break }
 
-        #expect(lease.state == .expired)
-        #expect(recording.all == [.init(race: .wait, outcome: .expired, timeout: 0.3)])
+        let implicit = TaskDescriptor(
+            requiredCapabilities: [.custom("ExpiryImplicit_\(UUID().uuidString)")]
+        )
+        #expect(implicit.timeout == nil)
+        let implicitDone = AsyncStream<Void>.makeStream()
+        let implicitLease = scheduler.schedule(implicit, taskExecution: {}, completion: { _ in
+            implicitDone.continuation.yield()
+        })
+        #expect(implicitLease.task.timeout == 0.3)
+        #expect(implicit.timeout == nil)
+
+        let explicit = TaskDescriptor(
+            requiredCapabilities: [.custom("ExpiryExplicit_\(UUID().uuidString)")],
+            timeout: 7.5
+        )
+        let explicitDone = AsyncStream<Void>.makeStream()
+        let explicitLease = scheduler.schedule(explicit, taskExecution: {}, completion: { _ in
+            explicitDone.continuation.yield()
+        })
+        #expect(explicitLease.task.timeout == 7.5)
+
+        for await _ in implicitDone.stream { break }
+        for await _ in explicitDone.stream { break }
+        #expect(implicitLease.state == .expired)
+        #expect(explicitLease.state == .expired)
     }
 
-    @Test("execution expiry records the execution race through the scheduler")
-    func executionExpiryRecordsExecutionRace() async {
+    @Test("execution expiry delivers expired through completion")
+    func executionExpiryDeliversExpired() async {
         let store = DynamicStore()
-        let pluginId = "DeadlineExec_\(UUID().uuidString)"
+        let pluginId = "ExpiryExec_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let recording = TaskScheduler.DeadlineRecording()
-        let scheduler = TaskScheduler(store: store, clock: immediateClock(), recording: recording)
+        let scheduler = TaskScheduler(store: store, clock: immediateClock())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2, maxRetries: 0)
         let done = AsyncStream<Void>.makeStream()
@@ -96,6 +71,21 @@ struct DeadlineTests {
         for await _ in done.stream { break }
 
         #expect(lease.state == .expired)
-        #expect(recording.all == [.init(race: .execution, outcome: .expired, timeout: 0.2)])
+    }
+
+    @Test("operation wins the single race when the clock never fires")
+    func operationWinsSingleRace() async {
+        let store = DynamicStore()
+        let pluginId = "ExpiryWin_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+        let scheduler = TaskScheduler(store: store, clock: neverClock())
+
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.5)
+        let result: String? = await scheduler.scheduleAndWait(task) {
+            return "ok"
+        }
+
+        #expect(result == "ok")
     }
 }

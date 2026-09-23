@@ -120,37 +120,6 @@ struct LeaseTests {
         #expect(scheduler.activeCount == 0)
     }
 
-    @Test func timeoutExpiresThroughSeam() async {
-        let store = DynamicStore()
-        let pluginId = "LeaseSeamExpire_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
-
-        actor Counter {
-            var completions = 0
-            func inc() { completions += 1 }
-        }
-        let counter = Counter()
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2, maxRetries: 0)
-        let lease = await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
-            scheduler.schedule(task, taskExecution: {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }, completion: { finished in
-                Task {
-                    await counter.inc()
-                    done.resume(returning: finished)
-                }
-            })
-        }
-
-        #expect(await counter.completions == 1)
-        #expect(lease.state == .expired)
-        #expect(lease.isTerminal)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
-    }
-
     @Test func cancelPendingSettlesExpiredThroughSeam() async {
         let store = DynamicStore()
         let scheduler = TaskScheduler(store: store)
@@ -465,64 +434,6 @@ struct TaskSchedulerTests {
         #expect(result == "ScheduledResult")
     }
 
-    @Test func scheduleWithoutCapabilityReturnsNil() async {
-        let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
-
-        let task = TaskDescriptor(
-            requiredCapabilities: [.custom("NonExistent_\(UUID().uuidString)")],
-            timeout: 0.5
-        )
-        let result = await scheduler.scheduleAndWait(task) {
-            return "ShouldNotRun"
-        }
-
-        #expect(result == nil)
-    }
-
-    @Test func priorityOrdering() async {
-        let store = DynamicStore()
-        let pluginId = "PriorityPlugin_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-
-        let scheduler = TaskScheduler(store: store)
-
-        actor ExecutionTracker {
-            var order: [String] = []
-            func append(_ value: String) { order.append(value) }
-        }
-        let tracker = ExecutionTracker()
-        let done = AsyncStream<Void>.makeStream()
-
-        let task1 = TaskDescriptor(
-            id: "low",
-            requiredCapabilities: [.heavyTask],
-            priority: .low
-        )
-        let task2 = TaskDescriptor(
-            id: "high",
-            requiredCapabilities: [.heavyTask],
-            priority: .high
-        )
-
-        scheduler.schedule(task2, taskExecution: {
-            await tracker.append("high")
-        }, completion: { _ in done.continuation.yield() })
-        scheduler.schedule(task1, taskExecution: {
-            await tracker.append("low")
-        }, completion: { _ in done.continuation.yield() })
-
-        var finished = 0
-        for await _ in done.stream {
-            finished += 1
-            if finished == 2 { break }
-        }
-
-        let order = await tracker.order
-        #expect(order.first == "high")
-        #expect(order.count == 2)
-    }
-
     @Test func cancelTask() async {
         let store = DynamicStore()
         let scheduler = TaskScheduler(store: store)
@@ -553,16 +464,18 @@ struct TaskSchedulerTests {
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
 
         let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
         let done = AsyncStream<Void>.makeStream()
         let lease = scheduler.schedule(task, taskExecution: {
             started.continuation.yield()
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            for await _ in release.stream { break }
         }, completion: { _ in done.continuation.yield() })
 
         for await _ in started.stream { break }
 
         // Revoke capability while task is running
         store.unregisterCapability(for: pluginId)
+        release.continuation.finish()
 
         for await _ in done.stream { break }
 
@@ -628,7 +541,7 @@ struct TaskSchedulerTests {
 
     @Test func twoMissingCapabilitiesShareOneDeadline() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
+        store.enableDeterministicTime()
 
         let task = TaskDescriptor(
             requiredCapabilities: [
@@ -637,13 +550,25 @@ struct TaskSchedulerTests {
             ],
             timeout: 1.0
         )
-        let start = Date()
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            scheduler.schedule(task, taskExecution: {}, completion: { _ in done.resume() })
+        let done = AsyncStream<Void>.makeStream()
+        actor Completions {
+            var count = 0
+            func inc() { count += 1 }
         }
-        let elapsed = Date().timeIntervalSince(start)
+        let completions = Completions()
+        let lease = store.scheduleTask(task, task: {}, completion: { _ in
+            Task {
+                await completions.inc()
+                done.continuation.yield()
+            }
+        })
+        await store.advanceTime(by: 1.0)
+        for await _ in done.stream { break }
 
-        #expect(elapsed < 2.0)
-        #expect(elapsed > 0.5)
+        #expect(await completions.count == 1)
+        #expect(lease.state == .expired)
+        #expect(lease.isTerminal)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 }

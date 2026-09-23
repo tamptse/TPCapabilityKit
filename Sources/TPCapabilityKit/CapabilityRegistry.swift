@@ -4,16 +4,18 @@ import Foundation
 /// Registry half of the Store: plugin-to-capabilities mapping, reverse index,
 /// per-capability subjects, and whole-snapshot subject.
 ///
-/// Holds no lock of its own: every call that touches mutable state must happen
-/// while holding the Store lock, exactly as the fields were guarded before
-/// extraction. The snapshot subject reference itself is stable (`let`) and its
-/// `send` / subscription are safe without holding the Store lock. Mutation is
-/// collected under lock and Combine sends happen after unlock, so sink-query
-/// callbacks stay safe.
+/// Owns its own lock behind one mutate-and-notify seam: `register` and
+/// `unregister` collect the mutation under lock and deliver per-Capability
+/// notices before the whole-snapshot publish after unlock, so sinks never
+/// run under lock and reentrant queries stay safe. No caller holds the Store
+/// lock across a registry call. Per-Capability subjects are retained after
+/// removal (emitting `false`) so a later creation reuses the same subject
+/// instead of leaving two subjects diverging.
 final class CapabilityRegistry: @unchecked Sendable {
     typealias PendingNotification = (subject: CurrentValueSubject<Bool, Never>, value: Bool)
     typealias MutationResult = (snapshot: [String: Set<Capability>], notifications: [PendingNotification])
 
+    private let lock = NSLock()
     private var capabilities: [String: Set<Capability>] = [:]
     private var capabilityIndex: [Capability: Set<String>] = [:]
     private var capabilitySubjects: [Capability: CurrentValueSubject<Bool, Never>] = [:]
@@ -25,7 +27,7 @@ final class CapabilityRegistry: @unchecked Sendable {
     ) {
         if capabilityIndex[cap]?.isEmpty == true {
             capabilityIndex.removeValue(forKey: cap)
-            if let subject = capabilitySubjects.removeValue(forKey: cap) {
+            if let subject = capabilitySubjects[cap] {
                 pending.append((subject, false))
             }
         }
@@ -43,59 +45,73 @@ final class CapabilityRegistry: @unchecked Sendable {
     }
 
     func register(for pluginId: String, capabilities caps: Set<Capability>) -> MutationResult {
-        var pending: [PendingNotification] = []
-        removeCapabilities(for: pluginId, pending: &pending)
+        let mutation: MutationResult = lock.withLock {
+            var pending: [PendingNotification] = []
+            removeCapabilities(for: pluginId, pending: &pending)
 
-        capabilities[pluginId] = caps
-        for cap in caps {
-            capabilityIndex[cap, default: []].insert(pluginId)
-            if let subject = capabilitySubjects[cap] {
-                pending.append((subject, true))
+            capabilities[pluginId] = caps
+            for cap in caps {
+                capabilityIndex[cap, default: []].insert(pluginId)
+                if let subject = capabilitySubjects[cap] {
+                    pending.append((subject, true))
+                }
             }
-        }
 
-        return (capabilities, pending)
+            return (capabilities, pending)
+        }
+        emit(mutation)
+        return mutation
     }
 
     func unregister(for pluginId: String) -> MutationResult {
-        var pending: [PendingNotification] = []
-        removeCapabilities(for: pluginId, pending: &pending)
+        let mutation: MutationResult = lock.withLock {
+            var pending: [PendingNotification] = []
+            removeCapabilities(for: pluginId, pending: &pending)
 
-        capabilities.removeValue(forKey: pluginId)
-        return (capabilities, pending)
+            capabilities.removeValue(forKey: pluginId)
+            return (capabilities, pending)
+        }
+        emit(mutation)
+        return mutation
     }
 
     func query(_ capability: Capability) -> Bool {
-        capabilityIndex[capability]?.isEmpty == false
+        lock.withLock {
+            capabilityIndex[capability]?.isEmpty == false
+        }
     }
 
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
-        capabilities[pluginId] ?? []
+        lock.withLock {
+            capabilities[pluginId] ?? []
+        }
     }
 
     func queryAll() -> [String: Set<Capability>] {
-        capabilities
+        lock.withLock { capabilities }
     }
 
     func observe(_ capability: Capability) -> AnyPublisher<Bool, Never> {
-        if let existing = capabilitySubjects[capability] {
-            return existing.eraseToAnyPublisher()
+        lock.withLock {
+            if let existing = capabilitySubjects[capability] {
+                return existing.eraseToAnyPublisher()
+            }
+            let initialValue = capabilityIndex[capability]?.isEmpty == false
+            let subject = CurrentValueSubject<Bool, Never>(initialValue)
+            capabilitySubjects[capability] = subject
+            return subject.eraseToAnyPublisher()
         }
-        let initialValue = capabilityIndex[capability]?.isEmpty == false
-        let subject = CurrentValueSubject<Bool, Never>(initialValue)
-        capabilitySubjects[capability] = subject
-        return subject.eraseToAnyPublisher()
     }
 
     func observeAll() -> AnyPublisher<[String: Set<Capability>], Never> {
         snapshotSubject.eraseToAnyPublisher()
     }
 
-    func publish(snapshot: [String: Set<Capability>]) {
+    private func publish(snapshot: [String: Set<Capability>]) {
         snapshotSubject.send(snapshot)
     }
 
-    func emit(_ mutation: MutationResult) {
+    private func emit(_ mutation: MutationResult) {
         for (subject, value) in mutation.notifications {
             subject.send(value)
         }

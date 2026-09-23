@@ -11,16 +11,6 @@ private enum Prim: Sendable, Hashable {
     case expire
     case beginRetry
 
-    var transition: Lease.Transition {
-        switch self {
-        case .activate: return .activate
-        case .complete: return .complete
-        case .fail: return .fail
-        case .expire: return .expire
-        case .beginRetry: return .beginRetry
-        }
-    }
-
     func apply(to lease: Lease) {
         switch self {
         case .activate: lease.activate()
@@ -53,7 +43,7 @@ private func leaseIn(_ state: Lease.State) -> Lease {
 
 @Suite("Lease Matrix Tests")
 struct LeaseMatrixTests {
-    @Test("transition matrix pins accepted vs rejected through primitives alone")
+    @Test("transition matrix pins accepted vs rejected from state comparison")
     func transitionMatrix() {
         let acceptedEnd: [Prim: Lease.State] = [
             .activate: .active,
@@ -75,15 +65,21 @@ struct LeaseMatrixTests {
         for start in starts {
             for prim in prims {
                 let lease = leaseIn(start)
-                let baseCount = lease.transcript.count
+                let retriesBefore = lease.retryCount
                 prim.apply(to: lease)
 
                 let accepted = acceptedFrom[start.rawValue, default: []].contains(prim)
-                #expect(
-                    lease.transcript.last == Lease.TransitionRecord(transition: prim.transition, accepted: accepted),
-                    "start \(start.rawValue), prim \(prim)"
-                )
-                #expect(lease.transcript.count == baseCount + 1, "start \(start.rawValue), prim \(prim)")
+                if prim == .beginRetry {
+                    #expect(
+                        (lease.retryCount == retriesBefore + 1) == accepted,
+                        "start \(start.rawValue), prim \(prim)"
+                    )
+                } else {
+                    #expect(
+                        (lease.state != start) == accepted,
+                        "start \(start.rawValue), prim \(prim)"
+                    )
+                }
                 if accepted {
                     #expect(lease.state == acceptedEnd[prim]!, "start \(start.rawValue), prim \(prim)")
                 } else {

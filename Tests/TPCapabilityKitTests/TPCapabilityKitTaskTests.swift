@@ -53,6 +53,7 @@ struct TPCapabilityKitTaskTests {
 
     @Test func runTaskWhenAvailableWaitsForCapability() async {
         let store = DynamicStore()
+        store.enableDeterministicTime()
         let pluginId = "WaitCapPlugin_\(UUID().uuidString)"
         let uniqueCap = Capability.custom("waitCap_\(UUID().uuidString)")
 
@@ -61,15 +62,14 @@ struct TPCapabilityKitTaskTests {
 
         // Start waiting in background
         let waitingTask = Task {
-            let result = await store.runTaskWhenAvailable(capability: uniqueCap, timeout: 2.0) {
+            let result = await store.runTaskWhenAvailable(capability: uniqueCap, timeout: 30.0) {
                 await flag.set()
                 return "WaitedResult"
             }
             return result
         }
 
-        // Give the waiting task time to start
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await store.waitForDeterministicWaiters(count: 1)
 
         // Now register the capability
         store.registerCapability(for: pluginId, capabilities: [uniqueCap])
@@ -81,12 +81,16 @@ struct TPCapabilityKitTaskTests {
 
     @Test func runTaskWhenAvailableTimesOut() async {
         let store = DynamicStore()
+        store.enableDeterministicTime()
         let uniqueCap = Capability.custom("timeoutCap_\(UUID().uuidString)")
 
-        let result = await store.runTaskWhenAvailable(capability: uniqueCap, timeout: 0.1) {
+        async let result = store.runTaskWhenAvailable(capability: uniqueCap, timeout: 0.1) {
             return "ShouldNotRun"
         }
-        #expect(result == nil)
+        await store.advanceTime(by: 0.1)
+
+        #expect(await result == nil)
+        #expect(store.pendingTaskCount == 0)
     }
 
     @Test func runTaskCapabilityRevokedAfterRegister() async {

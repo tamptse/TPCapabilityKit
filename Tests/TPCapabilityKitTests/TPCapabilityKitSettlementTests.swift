@@ -113,40 +113,6 @@ struct SettlementTests {
         #expect(result == nil)
     }
 
-    @Test("expired delivers exactly once on timeout")
-    func expiredExactlyOnce() async {
-        let store = DynamicStore()
-        let pluginId = "SettleExpired_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
-
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2, maxRetries: 0)
-        actor Counter {
-            var completions = 0
-            var state: Lease.State?
-            func record(_ lease: Lease) {
-                completions += 1
-                state = lease.state
-            }
-        }
-        let counter = Counter()
-
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            scheduler.schedule(task, taskExecution: {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }, completion: { lease in
-                Task {
-                    await counter.record(lease)
-                    done.resume()
-                }
-            })
-        }
-
-        #expect(await counter.completions == 1)
-        #expect(await counter.state == .expired)
-    }
-
     @Test("schedule Void task completes with completion delivered")
     func voidScheduleCompletes() async {
         let store = DynamicStore()

@@ -25,48 +25,6 @@ private func immediateClock(recording: RecordedTimeouts? = nil) -> TaskScheduler
 
 @Suite("Timeout Pins Tests")
 struct TimeoutPinsTests {
-    @Test("waiter expiry honours task timeout")
-    func waiterExpiryHonoursTimeout() async {
-        let store = DynamicStore()
-        let recorded = RecordedTimeouts()
-        let scheduler = TaskScheduler(store: store, clock: immediateClock(recording: recorded))
-
-        let task = TaskDescriptor(
-            requiredCapabilities: [.custom("WaiterPin_\(UUID().uuidString)")],
-            timeout: 0.3
-        )
-        let done = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(task, taskExecution: {}, completion: { _ in
-            done.continuation.yield()
-        })
-        for await _ in done.stream { break }
-
-        #expect(lease.state == .expired)
-        #expect(recorded.all == [0.3])
-    }
-
-    @Test("execution expiry honours task timeout")
-    func executionExpiryHonoursTimeout() async {
-        let store = DynamicStore()
-        let pluginId = "ExecPin_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let recorded = RecordedTimeouts()
-        let scheduler = TaskScheduler(store: store, clock: immediateClock(recording: recorded))
-
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2)
-        let done = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(task, taskExecution: {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-        }, completion: { _ in
-            done.continuation.yield()
-        })
-        for await _ in done.stream { break }
-
-        #expect(lease.state == .expired)
-        #expect(recorded.all == [0.2])
-    }
-
     @Test("configured default applies to waiter when task timeout is nil")
     func defaultTimeoutAppliesToWaiter() async {
         let store = DynamicStore()

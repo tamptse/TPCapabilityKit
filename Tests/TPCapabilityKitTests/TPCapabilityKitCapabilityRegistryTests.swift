@@ -5,13 +5,6 @@ import Testing
 
 @Suite("CapabilityRegistry Tests")
 struct TPCapabilityKitCapabilityRegistryTests {
-    private func emit(_ mutation: CapabilityRegistry.MutationResult, via registry: CapabilityRegistry) {
-        for (subject, value) in mutation.notifications {
-            subject.send(value)
-        }
-        registry.publish(snapshot: mutation.snapshot)
-    }
-
     @Test("query true after register, false after unregister")
     func queryAfterRegisterUnregister() {
         let registry = CapabilityRegistry()
@@ -21,12 +14,12 @@ struct TPCapabilityKitCapabilityRegistryTests {
         #expect(registry.query(cap) == false)
 
         let registered = registry.register(for: pluginId, capabilities: [cap])
-        emit(registered, via: registry)
+        #expect(registered.snapshot[pluginId] == [cap])
         #expect(registry.query(cap) == true)
         #expect(registry.queryCapabilities(for: pluginId) == [cap])
 
         let unregistered = registry.unregister(for: pluginId)
-        emit(unregistered, via: registry)
+        #expect(unregistered.snapshot[pluginId] == nil)
         #expect(registry.query(cap) == false)
         #expect(registry.queryCapabilities(for: pluginId) == [])
     }
@@ -37,12 +30,12 @@ struct TPCapabilityKitCapabilityRegistryTests {
         let pluginId = "RegReplace_\(UUID().uuidString)"
 
         let first = registry.register(for: pluginId, capabilities: [.heavyTask, .lightTask])
-        emit(first, via: registry)
+        #expect(first.snapshot[pluginId] == [.heavyTask, .lightTask])
         #expect(registry.query(.heavyTask) == true)
         #expect(registry.query(.lightTask) == true)
 
         let second = registry.register(for: pluginId, capabilities: [.networkAccess])
-        emit(second, via: registry)
+        #expect(second.snapshot[pluginId] == [.networkAccess])
         #expect(registry.query(.networkAccess) == true)
         #expect(registry.queryCapabilities(for: pluginId) == [.networkAccess])
 
@@ -50,7 +43,7 @@ struct TPCapabilityKitCapabilityRegistryTests {
         #expect(snapshot[pluginId] == [.networkAccess])
     }
 
-    @Test("unregister emptied capability emits false and cleans up")
+    @Test("unregister emptied capability emits false and retains subject for reuse")
     func unregisterCleanupEmitsFalse() {
         let registry = CapabilityRegistry()
         let pluginId = "RegCleanup_\(UUID().uuidString)"
@@ -64,18 +57,23 @@ struct TPCapabilityKitCapabilityRegistryTests {
         #expect(received.last == false)
 
         let registered = registry.register(for: pluginId, capabilities: [cap])
-        emit(registered, via: registry)
+        #expect(registered.notifications.contains(where: { $0.value == true }))
         #expect(received.last == true)
         #expect(registry.query(cap) == true)
 
         let unregistered = registry.unregister(for: pluginId)
         #expect(unregistered.notifications.count == 1)
         #expect(unregistered.notifications.first?.value == false)
-        emit(unregistered, via: registry)
 
         #expect(received.last == false)
         #expect(registry.query(cap) == false)
         #expect(registry.queryAll()[pluginId] == nil)
+
+        let otherPlugin = "RegCleanupOther_\(UUID().uuidString)"
+        registry.register(for: otherPlugin, capabilities: [cap])
+        #expect(received.last == true)
+        #expect(registry.query(cap) == true)
+        _ = registry.unregister(for: otherPlugin)
 
         cancellables.removeAll()
     }
@@ -87,9 +85,7 @@ struct TPCapabilityKitCapabilityRegistryTests {
         let pluginId2 = "RegSnap2_\(UUID().uuidString)"
 
         let first = registry.register(for: pluginId1, capabilities: [.heavyTask])
-        emit(first, via: registry)
         let second = registry.register(for: pluginId2, capabilities: [.lightTask, .networkAccess])
-        emit(second, via: registry)
 
         let snapshot = registry.queryAll()
         #expect(snapshot[pluginId1]?.contains(.heavyTask) == true)
@@ -105,7 +101,7 @@ struct TPCapabilityKitCapabilityRegistryTests {
             .sink { observedSnapshots.append($0) }
             .store(in: &cancellables)
         let third = registry.register(for: "RegSnap3_\(UUID().uuidString)", capabilities: [.backgroundExecution])
-        emit(third, via: registry)
+        #expect(third.snapshot.count == 3)
         #expect(observedSnapshots.last?[pluginId1]?.contains(.heavyTask) == true)
 
         cancellables.removeAll()
@@ -124,12 +120,10 @@ struct TPCapabilityKitCapabilityRegistryTests {
             .store(in: &cancellables)
         #expect(received == [false])
 
-        let registered = registry.register(for: pluginId, capabilities: [cap])
-        emit(registered, via: registry)
+        registry.register(for: pluginId, capabilities: [cap])
         #expect(received == [false, true])
 
-        let unregistered = registry.unregister(for: pluginId)
-        emit(unregistered, via: registry)
+        registry.unregister(for: pluginId)
         #expect(received == [false, true, false])
 
         cancellables.removeAll()
@@ -154,7 +148,7 @@ struct TPCapabilityKitCapabilityRegistryTests {
         order.removeAll()
 
         let mutation = registry.register(for: pluginId, capabilities: [cap])
-        registry.emit(mutation)
+        #expect(mutation.notifications.count == 1)
         #expect(order == ["notify", "snapshot"])
         #expect(registry.query(cap) == true)
         #expect(registry.queryAll()[pluginId] == [cap])
@@ -178,11 +172,12 @@ struct TPCapabilityKitCapabilityRegistryTests {
             .store(in: &cancellables)
 
         let first = registry.register(for: pluginId, capabilities: [.heavyTask])
-        registry.emit(first)
+        #expect(first.notifications.contains(where: { $0.value == true }))
         #expect(heavyReceived.last == true)
 
         let second = registry.register(for: pluginId, capabilities: [.networkAccess])
-        registry.emit(second)
+        #expect(second.notifications.map(\.value).contains(false))
+        #expect(second.notifications.map(\.value).contains(true))
         #expect(heavyReceived.last == false)
         #expect(networkReceived.last == true)
         #expect(registry.query(.heavyTask) == false)

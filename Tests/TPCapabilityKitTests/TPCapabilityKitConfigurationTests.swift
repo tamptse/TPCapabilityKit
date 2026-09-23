@@ -7,22 +7,28 @@ import Foundation
 struct ConfigurationTests {
     @Test("defaultTimeout varies expiry for default-timed tasks")
     func defaultTimeoutVariesExpiry() async {
-        let store = DynamicStore()
+        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
+        store.enableDeterministicTime()
         let pluginId = "ConfigTimeout_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
-            store: store,
-            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20)
-        )
 
-        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
-        let result: String? = await scheduler.scheduleAndWait(task) {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        async let result: String? = store.scheduleTaskAndWait(
+            TaskDescriptor(requiredCapabilities: [.heavyTask])
+        ) {
+            started.continuation.yield()
+            for await _ in release.stream { break }
             return "should-expire"
         }
 
-        #expect(result == nil)
+        for await _ in started.stream { break }
+        await store.advanceTime(by: 0.2)
+        release.continuation.finish()
+
+        #expect(await result == nil)
+        #expect(store.pendingTaskCount == 0)
     }
 
     @Test("explicit 30.0 timeout is honored, not treated as default")
@@ -38,7 +44,6 @@ struct ConfigurationTests {
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)
         let result: String? = await scheduler.scheduleAndWait(task) {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
             return "ok"
         }
 
@@ -94,23 +99,31 @@ struct ConfigurationTests {
     @Test("store configuration varies default timeout")
     func storeConfigurationVariesTimeout() async {
         let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
+        store.enableDeterministicTime()
         let pluginId = "ConfigStore_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
 
-        let result: String? = await store.scheduleTaskAndWait(
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        async let result: String? = store.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [.heavyTask])
         ) {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            started.continuation.yield()
+            for await _ in release.stream { break }
             return "should-expire"
         }
 
-        #expect(result == nil)
+        for await _ in started.stream { break }
+        await store.advanceTime(by: 0.2)
+        release.continuation.finish()
+
+        #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
     }
 
-    @Test("store configureScheduler varies limits without replacing scheduler")
+    @Test("store configureScheduler preserves generations while varying limits")
     func storeConfigureVariesLimits() async {
         let store = DynamicStore()
         let pluginId = "ConfigStoreLimits_\(UUID().uuidString)"
@@ -140,6 +153,7 @@ struct ConfigurationTests {
     @Test("bridge unspecified timeout follows scheduler default")
     func bridgeUnspecifiedFollowsDefault() async {
         let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
+        store.enableDeterministicTime()
         let pluginId = "ConfigBridgeUnspec_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
@@ -148,14 +162,22 @@ struct ConfigurationTests {
         let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
         #expect(!descriptor.hasExplicitTimeout)
 
+        let started = AsyncStream<Void>.makeStream()
+        let gate = DispatchSemaphore(value: 0)
         await withCheckedContinuation { continuation in
             bridge.taskScheduler.scheduleAndWait(descriptor, task: {
-                Thread.sleep(forTimeInterval: 1.0)
+                started.continuation.yield()
+                gate.wait()
                 return NSString(string: "should-expire")
             }, completion: { result in
                 #expect(result == nil)
                 continuation.resume()
             })
+            Task {
+                for await _ in started.stream { break }
+                await store.advanceTime(by: 0.2)
+                gate.signal()
+            }
         }
         #expect(store.pendingTaskCount == 0)
     }

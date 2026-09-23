@@ -94,12 +94,11 @@ struct TPCapabilityKitCoreTests {
         store.updateState(pluginId: pluginId, newState: "BeforeRemove")
         #expect(receivedValues.last == "BeforeRemove")
 
-        // removeState sends nil, but observeState uses compactMap which filters nil
-        // So subscribers stop receiving updates, and the subject is removed
+        // removeState completes detached subscribers; the subject is removed
         store.removeState(for: pluginId)
 
         // After removeState, the subject is removed from stateSubjects
-        // A new update will create a fresh subject (no nil delivered through compactMap)
+        // A new update will create a fresh subject (old subscriber completed)
         store.updateState(pluginId: pluginId, newState: "AfterRemove")
         #expect(receivedValues.last == "BeforeRemove")
 
@@ -185,7 +184,7 @@ struct TPCapabilityKitCoreTests {
         newCancellables.removeAll()
     }
 
-    @Test func stateRemovalIsInvisibleToTypedObservers() {
+    @Test func stateRemovalCompletesWithoutValues() {
         let store = DynamicStore()
         let pluginId = "RemovalContract_\(UUID().uuidString)"
         var received: [String] = []

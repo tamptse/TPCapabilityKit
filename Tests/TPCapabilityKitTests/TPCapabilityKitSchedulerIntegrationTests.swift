@@ -19,8 +19,9 @@ struct DynamicStoreSchedulerIntegrationTests {
 
     @Test func scheduleTaskWithoutCapability() async {
         let store = DynamicStore()
+        store.enableDeterministicTime()
 
-        let result = await store.scheduleTaskAndWait(
+        async let result = store.scheduleTaskAndWait(
             TaskDescriptor(
                 requiredCapabilities: [.custom("Missing_\(UUID().uuidString)")],
                 timeout: 0.5
@@ -29,7 +30,10 @@ struct DynamicStoreSchedulerIntegrationTests {
             return "ShouldNotRun"
         }
 
-        #expect(result == nil)
+        await store.advanceTime(by: 0.5)
+
+        #expect(await result == nil)
+        #expect(store.pendingTaskCount == 0)
     }
 
     @Test func immediateAndQueuedShareOneWaiterForLateCapability() async {
@@ -46,7 +50,6 @@ struct DynamicStoreSchedulerIntegrationTests {
             "queued"
         }
 
-        try? await Task.sleep(nanoseconds: 100_000_000)
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }
 
@@ -80,7 +83,6 @@ struct DynamicStoreSchedulerIntegrationTests {
                 }
             }
 
-            try? await Task.sleep(nanoseconds: 100_000_000)
             store.registerCapability(for: pluginId, capabilities: [cap])
             defer { store.unregisterCapability(for: pluginId) }
 

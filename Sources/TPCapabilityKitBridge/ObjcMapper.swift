@@ -23,6 +23,11 @@ enum ObjcMapper {
         descriptor.timeout ?? omittedTimeout
     }
 
+    /// Queue choice is explicit in exactly one place for every Bridge hop.
+    static func deliveryQueue(from queue: DispatchQueue?) -> DispatchQueue {
+        queue ?? .main
+    }
+
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
     }
