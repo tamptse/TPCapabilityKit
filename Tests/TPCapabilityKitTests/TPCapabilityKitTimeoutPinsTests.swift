@@ -48,7 +48,7 @@ struct TimeoutPinsTests {
         #expect(recorded.all == [0.3])
     }
 
-    @Test("nil timeout resolves to configured default once at enqueue")
+    @Test("nil timeout keeps nil in lease; Deadline resolves to configured default once")
     func nilTimeoutResolvesOnceAtEnqueue() async {
         let store = DynamicStore()
         let scheduler = TaskScheduler(
@@ -66,7 +66,7 @@ struct TimeoutPinsTests {
         let lease = scheduler.schedule(task, taskExecution: {}, completion: { _ in
             done.continuation.yield()
         })
-        #expect(lease.task.timeout == 0.3)
+        #expect(lease.task.timeout == nil)
         #expect(task.timeout == nil)
 
         for await _ in done.stream { break }

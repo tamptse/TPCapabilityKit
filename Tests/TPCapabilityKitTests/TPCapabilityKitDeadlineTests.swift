@@ -17,8 +17,8 @@ private func immediateClock() -> TaskScheduler.ExpiryClock {
 
 @Suite("Expiry Tests")
 struct DeadlineTests {
-    @Test("resolve once at enqueue shares one expiry through lease state")
-    func resolveOnceAtEnqueue() async {
+    @Test("resolve once at Deadline construction shares one expiry through lease state")
+    func resolveOnceAtDeadlineConstruction() async {
         let store = DynamicStore()
         let scheduler = TaskScheduler(
             store: store,
@@ -34,7 +34,7 @@ struct DeadlineTests {
         let implicitLease = scheduler.schedule(implicit, taskExecution: {}, completion: { _ in
             implicitDone.continuation.yield()
         })
-        #expect(implicitLease.task.timeout == 0.3)
+        #expect(implicitLease.task.timeout == nil)
         #expect(implicit.timeout == nil)
 
         let explicit = TaskDescriptor(

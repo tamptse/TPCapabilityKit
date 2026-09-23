@@ -77,8 +77,8 @@ public final class TaskScheduler: @unchecked Sendable {
     }
 
     /// Owns the whole expiry story behind one seam: timeout resolves once at
-    /// enqueue and travels with the Task, and the single race serves both the
-    /// capability wait and the execution path. Waiter and executor cross
+    /// Deadline construction from the task plus the configured default, and
+    /// the single race serves both the capability wait and the execution path. Waiter and executor cross
     /// `race(_:operation:)`; neither computes timeouts nor builds task groups
     /// directly. The execution result box lives here too, so the race outcome
     /// plus the winning value cross one seam. Expiry reads from lease state
@@ -106,13 +106,9 @@ public final class TaskScheduler: @unchecked Sendable {
         let timeout: TimeInterval
         private let clock: ExpiryClock
 
-        init(timeout: TimeInterval, clock: ExpiryClock) {
-            self.timeout = timeout
+        init(task: TaskDescriptor, default defaultTimeout: TimeInterval, clock: ExpiryClock) {
+            self.timeout = task.timeout ?? defaultTimeout
             self.clock = clock
-        }
-
-        static func resolve(task: TaskDescriptor, default defaultTimeout: TimeInterval) -> TimeInterval {
-            task.timeout ?? defaultTimeout
         }
 
         func race(_ kind: Race, operation: @Sendable @escaping () async -> Bool) async -> Bool {
@@ -271,7 +267,7 @@ public final class TaskScheduler: @unchecked Sendable {
             return nil
         }
 
-        mutating func beginPark(for lease: Lease) -> Bool {
+        fileprivate mutating func beginPark(for lease: Lease) -> Bool {
             guard var row = rows[lease.task.id], row.lease === lease else { return false }
             if row.waiting { return false }
             row.waiting = true
@@ -279,7 +275,7 @@ public final class TaskScheduler: @unchecked Sendable {
             return true
         }
 
-        mutating func setParkWaiter(for lease: Lease, waiter: Task<Void, Never>) -> Bool {
+        fileprivate mutating func setParkWaiter(for lease: Lease, waiter: Task<Void, Never>) -> Bool {
             if var row = rows[lease.task.id], row.lease === lease {
                 row.waiter = waiter
                 rows[lease.task.id] = row
@@ -287,7 +283,7 @@ public final class TaskScheduler: @unchecked Sendable {
             return lease.isTerminal
         }
 
-        mutating func clearParkWait(for lease: Lease) {
+        fileprivate mutating func clearParkWait(for lease: Lease) {
             if var row = rows[lease.task.id], row.lease === lease {
                 row.waiting = false
                 row.waiter = nil
@@ -462,19 +458,7 @@ public final class TaskScheduler: @unchecked Sendable {
         execution: @escaping @Sendable () async -> Any?,
         completion: ((Lease) -> Void)?
     ) -> Lease {
-        // Single nil-to-default resolution so waiter and executor share one expiry.
-        let resolved = Deadline.resolve(task: task, default: configuration.defaultTimeout)
-        let resolvedTask = task.timeout == nil
-            ? TaskDescriptor(
-                id: task.id,
-                requiredCapabilities: task.requiredCapabilities,
-                priority: task.priority,
-                timeout: resolved,
-                maxRetries: task.maxRetries,
-                metadata: task.metadata
-            )
-            : task
-        let lease = Lease(task: resolvedTask)
+        let lease = Lease(task: task)
 
         // Same-id concurrent scheduling is unsupported: a non-terminal row for
         // this id belongs to an in-flight lease, so settle it first (expired —
@@ -668,27 +652,11 @@ public final class TaskScheduler: @unchecked Sendable {
         while true {
             guard let nextLease = dequeueNext() else { break }
             guard !nextLease.isTerminal else { continue }
-            // Resolved once at enqueue, so always present; failure here ends the wait instead of hanging.
-            guard let timeout = nextLease.task.timeout else {
-                settle(nextLease, as: .failed)
-                continue
-            }
-            let deadline = Deadline(timeout: timeout, clock: clock)
+            let deadline = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
 
             // Check capability availability
             guard waiter.isAvailable(for: nextLease.task) else {
-                // Park the row with a single waiter;
-                // the waiter executes or expires it when done.
-                let shouldWait: Bool = lock.withLock {
-                    lifecycleStore.beginPark(for: nextLease)
-                }
-                if shouldWait {
-                    let waiter = Task { await self.waitForCapabilitiesAndProcess(nextLease, deadline: deadline) }
-                    let alreadyTerminal: Bool = lock.withLock {
-                        lifecycleStore.setParkWaiter(for: nextLease, waiter: waiter)
-                    }
-                    if alreadyTerminal { waiter.cancel() }
-                }
+                parkLeaseForCapabilities(nextLease, deadline: deadline)
                 continue
             }
 
@@ -701,6 +669,18 @@ public final class TaskScheduler: @unchecked Sendable {
         lock.withLock {
             lifecycleStore.dequeueNext()
         }
+    }
+
+    private func parkLeaseForCapabilities(_ lease: Lease, deadline: Deadline) {
+        let shouldWait: Bool = lock.withLock {
+            lifecycleStore.beginPark(for: lease)
+        }
+        guard shouldWait else { return }
+        let waiterTask = Task { await self.waitForCapabilitiesAndProcess(lease, deadline: deadline) }
+        let alreadyTerminal: Bool = lock.withLock {
+            lifecycleStore.setParkWaiter(for: lease, waiter: waiterTask)
+        }
+        if alreadyTerminal { waiterTask.cancel() }
     }
 
     private func waitForCapabilitiesAndProcess(_ lease: Lease, deadline: Deadline) async {

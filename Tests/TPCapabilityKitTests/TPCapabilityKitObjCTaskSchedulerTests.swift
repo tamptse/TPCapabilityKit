@@ -119,7 +119,7 @@ struct ObjcTaskDescriptorTests {
         )
         #expect(swiftNil.timeout == nil)
         let swiftLease = scheduler.schedule(swiftNil, taskExecution: {})
-        #expect(swiftLease.task.timeout == 0.3)
+        #expect(swiftLease.task.timeout == nil)
         scheduler.cancel(taskId: swiftNil.id)
 
         let omitted = ObjcTaskDescriptor(capabilities: ["heavyTask"])
@@ -132,7 +132,7 @@ struct ObjcTaskDescriptorTests {
         let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
         #expect(negative.underlying.timeout == nil)
         let negativeLease = scheduler.schedule(negative.underlying, taskExecution: {})
-        #expect(negativeLease.task.timeout == 0.3)
+        #expect(negativeLease.task.timeout == nil)
         scheduler.cancel(taskId: negative.id)
     }
 

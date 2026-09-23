@@ -34,20 +34,6 @@ final class ConcurrencyController: @unchecked Sendable {
         self.maxGlobal = maxGlobal
     }
 
-    /// Scoped hold: one call per hold, scope exit shares the one release with
-    /// Settlement. Returns nil when admission was cancelled or duplicated;
-    /// Settlement already settled those paths, so there is nothing to run.
-    internal func withHold<T: Sendable>(
-        keys: Set<Capability>,
-        taskId: String,
-        owner: ObjectIdentifier,
-        operation: @Sendable () async -> T
-    ) async -> T? {
-        guard await acquire(keys: keys, taskId: taskId, owner: owner) else { return nil }
-        defer { release(taskId: taskId, owner: owner) }
-        return await operation()
-    }
-
     internal func acquire(keys: Set<Capability>, taskId: String, owner: ObjectIdentifier) async -> Bool {
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in

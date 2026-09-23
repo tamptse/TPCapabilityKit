@@ -60,32 +60,18 @@ public final class DynamicStore: @unchecked Sendable {
         plugin.start(with: self)
     }
 
-    /// Updates the state associated with a plugin identifier.
-    /// Writers get-or-create: the subject is created on first write.
-    /// - Parameters:
-    ///   - pluginId: Unique identifier of the target plugin.
-    ///   - newState: The new state value to update or broadcast.
+    /// Updates the state for a plugin identifier.
     public func updateState<T>(pluginId: String, newState: T) {
-        guard validatePluginId(pluginId) else { return }
         state.update(pluginId: pluginId, newState: newState)
     }
 
-    /// Synchronously retrieves the current state for a plugin identifier.
-    /// - Parameters:
-    ///   - pluginId: Unique identifier of the target plugin.
-    ///   - type: Expected type of the state.
-    /// - Returns: The state cast to `T`, or `nil` if not set or type mismatch.
+    /// Returns the current state for a plugin identifier.
     public func getState<T>(pluginId: String, type: T.Type) -> T? {
-        guard validatePluginId(pluginId) else { return nil }
         return state.get(pluginId: pluginId, type: type)
     }
 
-    /// Removes the state subject for a plugin identifier.
-    /// Removal completes detached subscribers with `.finished`; the next
-    /// `updateState` creates a fresh subject for new subscribers.
-    /// - Parameter pluginId: Unique identifier of the target plugin.
+    /// Removes the state for a plugin identifier.
     public func removeState(for pluginId: String) {
-        guard validatePluginId(pluginId) else { return }
         state.remove(pluginId: pluginId)
     }
 
@@ -96,21 +82,8 @@ public final class DynamicStore: @unchecked Sendable {
         unregisterCapability(for: plugin.id)
     }
 
-    /// Subscribes reactively to state changes for a plugin identifier.
-    /// Observation alone never creates: writers get-or-create via `updateState`.
-    /// An observer that subscribes before the first write waits for creation
-    /// and then receives values from the fresh subject, without storing
-    /// per-id state for probes. Removal completes observers with `.finished`.
-    /// - Parameters:
-    ///   - pluginId: Unique identifier of the target plugin.
-    ///   - type: Expected type of the state.
-    /// - Returns: A publisher emitting values matching type `T`. Subscribers must handle thread scheduling.
-    /// - Note: Values are delivered synchronously on the writer's thread with no
-    ///   lock held, so calling back into `query` APIs from a sink is safe.
+    /// Observes state changes for a plugin identifier.
     public func observeState<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
-        guard validatePluginId(pluginId) else {
-            return Empty(completeImmediately: true).eraseToAnyPublisher()
-        }
         return state.observe(pluginId: pluginId, type: type)
     }
 
@@ -292,13 +265,29 @@ public final class DynamicStore: @unchecked Sendable {
     }
 }
 
+/// State storage behind the Store seam.
+/// Writers get-or-create on update; observation alone never creates; removal
+/// completes detached subscribers and the next update creates a fresh subject.
+/// Empty plugin identifiers are rejected here: writes and removals are no-ops,
+/// reads return nil, observations return an immediately-completed publisher.
 final class StoreState: @unchecked Sendable {
     private let lock = NSLock()
     private var subjects: [String: CurrentValueSubject<Any?, Never>] = [:]
     private var creationSequence: UInt64 = 0
     private let creationClock = CurrentValueSubject<UInt64, Never>(0)
 
+    private func validate(pluginId: String) -> Bool {
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return false
+        }
+        return true
+    }
+
     func update<T>(pluginId: String, newState: T) {
+        guard validate(pluginId: pluginId) else { return }
         let (subject, sequence): (CurrentValueSubject<Any?, Never>, UInt64?) = lock.withLock {
             if let existing = subjects[pluginId] {
                 return (existing, nil)
@@ -315,7 +304,8 @@ final class StoreState: @unchecked Sendable {
     }
 
     func get<T>(pluginId: String, type: T.Type) -> T? {
-        lock.withLock {
+        guard validate(pluginId: pluginId) else { return nil }
+        return lock.withLock {
             guard let subject = subjects[pluginId] else {
                 #if DEBUG
                 print("[DynamicStore] Warning: getState called for non-existent plugin '\(pluginId)'")
@@ -333,6 +323,7 @@ final class StoreState: @unchecked Sendable {
     }
 
     func remove(pluginId: String) {
+        guard validate(pluginId: pluginId) else { return }
         let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
             subjects.removeValue(forKey: pluginId)
         }
@@ -340,7 +331,10 @@ final class StoreState: @unchecked Sendable {
     }
 
     func observe<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
-        Deferred { [weak self] () -> AnyPublisher<T, Never> in
+        guard validate(pluginId: pluginId) else {
+            return Empty(completeImmediately: true).eraseToAnyPublisher()
+        }
+        return Deferred { [weak self] () -> AnyPublisher<T, Never> in
             guard let self else {
                 return Empty(completeImmediately: true).eraseToAnyPublisher()
             }
@@ -406,14 +400,12 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
 
     var pendingCount: Int {
         pruneDrainedGenerations()
-        let snapshot = lock.withLock { generations }
-        return snapshot.reduce(0) { $0 + $1.pendingCount }
+        return countsWithoutPruning().pending
     }
 
     var activeCount: Int {
         pruneDrainedGenerations()
-        let snapshot = lock.withLock { generations }
-        return snapshot.reduce(0) { $0 + $1.activeCount }
+        return countsWithoutPruning().active
     }
 
     var generationCount: Int {
@@ -459,6 +451,17 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         await clock.waitForWaiters(count: expected)
     }
 
+    private func countsWithoutPruning() -> (pending: Int, active: Int) {
+        let snapshot = lock.withLock { generations }
+        var pending = 0
+        var active = 0
+        for generation in snapshot {
+            pending += generation.pendingCount
+            active += generation.activeCount
+        }
+        return (pending, active)
+    }
+
     private func pruneDrainedGenerations() {
         let snapshot = lock.withLock { generations }
         guard snapshot.count > 1 else { return }
@@ -477,75 +480,5 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
                 return id != currentID && drainedIDs.contains(id)
             }
         }
-    }
-}
-
-private final class StoreVirtualClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var now: TimeInterval = 0
-    private var nextID: UInt64 = 0
-    private var waiters: [UInt64: (deadline: TimeInterval, continuation: CheckedContinuation<Void, Never>)] = [:]
-
-    var waiterCount: Int {
-        lock.withLock { waiters.count }
-    }
-
-    func sleep(_ timeout: TimeInterval) async {
-        if timeout <= 0 { return }
-        if Task.isCancelled { return }
-        let id: UInt64 = lock.withLock {
-            nextID &+= 1
-            return nextID
-        }
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                var immediate: CheckedContinuation<Void, Never>?
-                lock.withLock {
-                    let deadline = now + timeout
-                    if deadline <= now {
-                        immediate = cont
-                    } else {
-                        waiters[id] = (deadline, cont)
-                    }
-                }
-                immediate?.resume()
-            }
-        } onCancel: {
-            var cont: CheckedContinuation<Void, Never>?
-            lock.withLock { cont = waiters.removeValue(forKey: id)?.continuation }
-            cont?.resume()
-        }
-    }
-
-    func advance(by delta: TimeInterval) {
-        precondition(delta >= 0)
-        var expired: [CheckedContinuation<Void, Never>] = []
-        lock.withLock {
-            now += delta
-            let current = now
-            var remaining: [UInt64: (deadline: TimeInterval, continuation: CheckedContinuation<Void, Never>)] = [:]
-            remaining.reserveCapacity(waiters.count)
-            for (id, waiter) in waiters {
-                if waiter.deadline <= current {
-                    expired.append(waiter.continuation)
-                } else {
-                    remaining[id] = waiter
-                }
-            }
-            waiters = remaining
-        }
-        for cont in expired {
-            cont.resume()
-        }
-    }
-
-    func waitForWaiters(count expected: Int) async {
-        let deadline = Date().addingTimeInterval(5.0)
-        while Date() < deadline {
-            if lock.withLock({ waiters.count }) >= expected { return }
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
-        preconditionFailure("StoreVirtualClock: no waiter registered within 5s (expected \(expected))")
     }
 }

@@ -11,9 +11,9 @@ enum ObjcMapper {
     /// Single statement of ObjC timeout compat, shared by both descriptor
     /// initializers and the wait-then-run entry: omitted (nil wire) pins the
     /// construction-time default as explicit; wire-negative means unspecified
-    /// (nil, scheduler default applies at enqueue); explicit non-negative
+    /// (nil, scheduler default applies at Deadline construction); explicit non-negative
     /// travels as explicit. Swift nil (wrapped descriptors) resolves at
-    /// enqueue and never crosses this resolver.
+    /// Deadline construction and never crosses this resolver.
     static func resolveTimeout(wire: TimeInterval?) -> TimeInterval? {
         guard let wire else { return omittedTimeout }
         return wire < 0 ? nil : wire

@@ -160,12 +160,18 @@ struct SlotHoldTests {
         #expect(log.all.last?.1 == true)
     }
 
-    @Test("withHold runs the operation and releases on scope exit")
-    func withHoldScopedRelease() async {
+    @Test("acquire releases on scope exit through the shared release")
+    func acquireScopedRelease() async {
         let controller = holdController()
         let owners = Owners(2)
 
-        let value = await controller.withHold(keys: [.heavyTask], taskId: "a", owner: owners.ids[0]) { 42 }
+        func scoped() async -> Int {
+            guard await controller.acquire(keys: [.heavyTask], taskId: "a", owner: owners.ids[0]) else { return -1 }
+            defer { controller.release(taskId: "a", owner: owners.ids[0]) }
+            return 42
+        }
+
+        let value = await scoped()
         #expect(value == 42)
 
         let log = ResumeLog()

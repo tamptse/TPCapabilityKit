@@ -61,9 +61,9 @@ Owns the retry budget check, the void-completion policy, and the retry
 re-queue; `enqueue` is the only queue writer conceptually, retry re-uses the
 same Lease identity through a shared re-queue path. Owns the lease lifecycle row (place, execution, waiters) and the single
 release shared by terminal, retry, and scope-exit paths.
-_Deadline_ (expiry detail): timeout resolves once at enqueue and travels with
-the Task; one Deadline module owns the single race for both the capability
-wait and the execution path, with recording behind its seam.
+_Deadline_ (expiry detail): timeout resolves once at Deadline construction
+from the task plus the configured default; one Deadline module owns the
+single race for both the capability wait and the execution path.
 
 ## Tasks (Scheduler)
 
@@ -76,6 +76,9 @@ active; the order index is an internal detail of the table, counts served
 from one snapshot), the single capability waiter (one deadline per set), the Settlement path
 (exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
 across retry), and scoped slot acquisition with re-check inside.
+Park is one waiter per dequeued row: the pending → parked → active move
+crosses one park-and-wait seam, so double-park and waiter-cancel rules live
+in the table, not in callers.
  `executeLease` is the only prod activator. Serves every wait through one
  result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
  by task identity with owner-guarded release. Slot hold is scoped: one
@@ -92,7 +95,7 @@ of the underlying Lease. Capability/priority/state/timeout/descriptor mapping li
 mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
  Completion delivery defaults to the main queue unless a queue is given.
  Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
- default applies at enqueue); an omitted ObjC timeout is instead the pinned
+ default applies at Deadline construction); an omitted ObjC timeout is instead the pinned
  construction-time default carried as an explicit value for compat. One
  mapper-owned resolver states the fork once.
 Immediate sync and wait-then-run agree through the one Tasks waiter.
