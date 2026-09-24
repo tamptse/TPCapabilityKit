@@ -1,16 +1,13 @@
 import Foundation
 import TPCapabilityKit
 
-/// Mapper-internal timeout form owning the omitted/unspecified/explicit fork once.
+/// Mapper-internal timeout form owning the unspecified/explicit fork once.
 ///
 /// The @objc boundary spells timeout as a non-optional TimeInterval (negative
-/// means unspecified), and Swift default arguments cannot distinguish an
-/// omitted call from an explicit pin value — while both pin the compat
-/// literal as explicit with identical downstream readings. Wire equal to the
-/// pin literal therefore collapses to omitted, keeping three live branches at
-/// this one site.
+/// means unspecified). An omitted call arrives as the pin literal, which
+/// collapses to explicit on purpose per ADR-0020: downstream only distinguishes
+/// nil from non-nil, so explicit 30.0 and omitted read identically.
 enum ObjcTimeout: Sendable {
-    case omitted
     case unspecified
     case explicit(TimeInterval)
 
@@ -19,21 +16,19 @@ enum ObjcTimeout: Sendable {
     /// construction stays the sole Swift resolver for nil timeouts.
     static let pinnedDefault: TimeInterval = 30.0
 
-    /// Single statement of ObjC timeout compat: omitted pins the compat
-    /// default as explicit; wire-negative means unspecified (nil, scheduler
-    /// default applies at Deadline construction); explicit non-negative
-    /// travels as explicit.
+    /// Single statement of ObjC timeout compat: wire-negative means unspecified
+    /// (nil, scheduler default applies at Deadline construction); every
+    /// non-negative wire travels as explicit, with wire equal to the pin
+    /// literal collapsing to explicit(pinnedDefault) per ADR-0020.
     static func resolve(wire: TimeInterval) -> ObjcTimeout {
         if wire < 0 { return .unspecified }
-        if wire == pinnedDefault { return .omitted }
         return .explicit(wire)
     }
 
-    /// Domain reading: omitted pins the literal as explicit, unspecified
-    /// stays nil for Deadline construction, explicit travels unchanged.
+    /// Domain reading: unspecified stays nil for Deadline construction,
+    /// explicit travels unchanged.
     var resolved: TimeInterval? {
         switch self {
-        case .omitted: Self.pinnedDefault
         case .unspecified: nil
         case .explicit(let value): value
         }
