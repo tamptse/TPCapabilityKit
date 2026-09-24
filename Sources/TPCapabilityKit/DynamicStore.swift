@@ -415,27 +415,31 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
+    /// Single generations read in one prune-then-loop pass: counts SUM across
+    /// live generations while slot admission SHARES the one Store-owned domain,
+    /// so reconfigure never doubles the configured limit during drain.
+    var snapshot: (pending: Int, active: Int, generationCount: Int) {
+        let live = prunedSnapshot()
+        var pending = 0
+        var active = 0
+        for generation in live {
+            let counts = generation.countsSnapshot
+            pending += counts.pending
+            active += counts.active
+        }
+        return (pending, active, live.count)
+    }
+
     var pendingCount: Int {
-        counts().pending
+        snapshot.pending
     }
 
     var activeCount: Int {
-        counts().active
+        snapshot.active
     }
 
     var generationCount: Int {
-        prunedSnapshot().count
-    }
-
-    private func counts() -> (pending: Int, active: Int) {
-        let snapshot = prunedSnapshot()
-        var pending = 0
-        var active = 0
-        for generation in snapshot {
-            pending += generation.pendingCount
-            active += generation.activeCount
-        }
-        return (pending, active)
+        snapshot.generationCount
     }
 
     @discardableResult
