@@ -19,11 +19,14 @@ plus the scheduling facade (schedule/schedule-and-wait/cancel/pending/active/con
 immediate run styles).
 The scheduler instance itself is private; all scheduling crosses the facade.
 Reconfigure preserves in-flight generations: the old scheduler drains
-naturally while new work enters the new one, and pending/active counts
-aggregate across live generations.
-Slot admission aggregates too: one slot domain shared across live
-generations, owned by the Store, so reconfigure never doubles the
-configured limit during drain.
+naturally while new work enters the new one. Counts sum across live
+generations while slot admission shares one Store-owned domain across
+them, so reconfigure never doubles the configured limit during drain;
+the single generations snapshot states this sum-vs-share split once.
+Empty plugin ids are rejected once per domain at the owner seam: State
+owns update/get/remove/observe, the capability registry owns
+register/unregister/queryCapabilities, and the Store facade delegates
+without guarding.
 Two observation granularities: per-Capability observation serves UI-style
 subscribers; whole-registry observation serves the Tasks waiter only.
 Whole-set readiness is served behind the registry wait interface; Tasks
@@ -46,15 +49,20 @@ String `rawValue` exists for ObjC bridge; `description` derives from it.
 ## Task / TaskDescriptor
 
 A unit of work requiring all `requiredCapabilities`, with `priority`,
-`timeout`, `maxRetries`, `metadata`. Two execution styles share one waiting
-mechanism: immediate (`runTask`) vs queued (`scheduleTask`).
+`timeout`, `maxRetries`, `metadata`. Two documented fire entries:
+check-and-run (sync `runIfAvailable`, bypassing Lease, slot admission,
+and Deadline by contract) vs schedule-and-wait (async, the one waiter;
+`runTaskWhenAvailable` is its single-capability convenience). The legacy
+async `runTask` is deprecated in favor of the two.
 
 ## Lease
 
 Lifecycle tracker `pending → active → completed/failed/expired` for one
 scheduled Task. Exposes state transitions plus a read-only retry budget
 view; budget checks and reset decisions live in Settlement, not in Lease.
-Custom `==` ignores associated `Error` values.
+Custom `==` ignores associated `Error` values. The lifecycle table is
+the single writer: each Lease mutation happens together with its row
+write in one locked transition.
 
 ## Settlement
 
@@ -82,8 +90,10 @@ parked, or active; the order index is an internal detail of the table,
 counts served from one immutable snapshot) as internal mechanics. Keeps
 park, Deadline expiry, activation, and the Settlement step (exactly-once
 terminal delivery for cancel/fail/timeout/retry, waiter preserved across
-retry); whole-set readiness crosses the registry wait seam with one
-deadline per set. Scoped slot acquisition with re-check inside.
+retry, and the outcome decision reads adjacent to the settlement step
+that applies it, so decide-then-transition reviews as one path); whole-set readiness crosses the registry wait seam with one
+injected expiry race per set (the Tasks Deadline passes its own race as
+the value, so the registry never names the Deadline type). Scoped slot acquisition with re-check inside.
 Park is one waiter per dequeued row: the pending → parked → active move
 crosses one park-and-wait seam, so double-park and waiter-cancel rules live
 in the table, not in callers.
@@ -105,8 +115,9 @@ the time module behind one sleep seam.
 Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
 live view. `ObjcLease` is a live view
 of the underlying Lease. The Bridge view and both descriptor creation
-paths are thin translators; the whole ObjC timeout fork (omitted vs
-wire-negative vs explicit plus display fallback) lives in one internal
+paths are thin translators; the whole ObjC timeout fork (wire-negative
+vs explicit plus display fallback; an omitted call arrives as the pin
+literal collapsing to explicit) lives in one internal
 mapper module behind its interface. ObjC Plugins are capability-consumers
 only (no `capabilities`).
    Completion delivery hops to the given queue or the main queue via a
