@@ -12,9 +12,10 @@ import Foundation
 /// expired path (`TaskScheduler.settle(_:as:)` row transition), so
 /// completed/failed staying active-only is intentional, not a missing case.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
-///   (`activate`, `terminalize`, `beginRetry`) are `internal`
-///   and only called by `TaskScheduler` which coordinates access via its
-///   own lock. External code only reads state. Do not add public mutators.
+///   (`activate`, `terminalize`, `beginRetry`) are `internal` and only
+///   called by the lifecycle table's single transition, which pairs each
+///   mutation with its row write under the scheduler lock. Never call them
+///   directly from a new path. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
     /// State of the lease.
     public enum State: Sendable, Equatable {

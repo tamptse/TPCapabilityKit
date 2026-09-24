@@ -153,36 +153,29 @@ extension TaskScheduler {
         var settled = false
         var didRetry = false
         lock.withLock {
-            guard !lease.isTerminal else { return }
-            guard lifecycleStore.isLive(lease) else { return }
-            let terminalDecision: Decision
+            let target: LifecycleStore.Transition
             switch decide(lease: lease, outcome: outcome) {
             case .retry:
-                lease.beginRetry()
-                lifecycleStore.applyRetry(for: lease, execution: execution)
+                target = .retry(execution)
+            case .complete(let result):
+                target = .terminal(.completed(result))
+            case .fail:
+                target = .terminal(.failed(TaskExecutionError()))
+            case .expire:
+                target = .terminal(.expired)
+            }
+            guard let applied = lifecycleStore.transition(for: lease, to: target) else { return }
+            switch applied {
+            case .activated:
+                return
+            case .retried:
                 didRetry = true
                 return
-            case .complete(let result):
-                terminalDecision = .complete(result)
-            case .fail:
-                terminalDecision = .fail
-            case .expire:
-                terminalDecision = .expire
+            case .terminal(let takenWaiters, let takenWaiter):
+                waiterToCancel = takenWaiter
+                waiters = takenWaiters
+                settled = true
             }
-            guard let taken = lifecycleStore.takeTerminal(for: lease) else { return }
-            waiterToCancel = taken.waiter
-            waiters = taken.waiters
-            switch terminalDecision {
-            case .retry:
-                return
-            case .complete(let result):
-                lease.terminalize(.completed(result))
-            case .fail:
-                lease.terminalize(.failed(TaskExecutionError()))
-            case .expire:
-                lease.terminalize(.expired)
-            }
-            settled = true
         }
         guard didRetry || settled else { return }
         waiterToCancel?.cancel()
