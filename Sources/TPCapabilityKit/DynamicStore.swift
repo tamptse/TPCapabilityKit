@@ -135,8 +135,11 @@ public final class DynamicStore: @unchecked Sendable {
     /// Whole-set readiness for the Tasks waiter: thin delegation to the
     /// registry interface, so park/Deadline/activate/settle stay in Tasks
     /// while set-matching lives in the registry.
-    func waitForAllCapabilities(_ required: Set<Capability>, deadline: TaskScheduler.Deadline) async -> Bool {
-        await registry.waitForAll(required, deadline: deadline)
+    func waitForAllCapabilities(
+        _ required: Set<Capability>,
+        race: @Sendable @escaping (@escaping CapabilityRegistry.WaitOperation) async -> Bool
+    ) async -> Bool {
+        await registry.waitForAll(required, race: race)
     }
 
     // MARK: - Task Execution

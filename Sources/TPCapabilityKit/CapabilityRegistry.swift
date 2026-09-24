@@ -14,6 +14,9 @@ import Foundation
 final class CapabilityRegistry: @unchecked Sendable {
     typealias PendingNotification = (subject: CurrentValueSubject<Bool, Never>, value: Bool)
 
+    /// Wait loop the registry runs against the caller's expiry.
+    typealias WaitOperation = @Sendable () async -> Bool
+
     private let lock = NSLock()
     private var capabilities: [String: Set<Capability>] = [:]
     private var capabilityIndex: [Capability: Set<String>] = [:]
@@ -111,14 +114,19 @@ final class CapabilityRegistry: @unchecked Sendable {
 
     /// Whole-set readiness behind the registry interface: resolves true once
     /// every required capability is simultaneously available, false when the
-    /// single Deadline expiry wins. Empty set resolves true without
-    /// subscribing; otherwise one `race` covers the whole wait. Re-queries
-    /// per snapshot emission without holding the lock across sends, so the
-    /// per-Capability-before-snapshot emission order is untouched.
-    func waitForAll(_ required: Set<Capability>, deadline: TaskScheduler.Deadline) async -> Bool {
+    /// single injected expiry wins. The waiter injects its expiry race, so
+    /// the registry never names the Tasks type that owns it. Empty set
+    /// resolves true without subscribing; otherwise one `race` covers the
+    /// whole wait. Re-queries per snapshot emission without holding the lock
+    /// across sends, so the per-Capability-before-snapshot emission order is
+    /// untouched.
+    func waitForAll(
+        _ required: Set<Capability>,
+        race: @Sendable @escaping (@escaping WaitOperation) async -> Bool
+    ) async -> Bool {
         if required.isEmpty { return true }
         if required.allSatisfy({ query($0) }) { return true }
-        return await deadline.race {
+        return await race {
             for await _ in self.observeAll().values {
                 if required.allSatisfy({ self.query($0) }) { return true }
             }
