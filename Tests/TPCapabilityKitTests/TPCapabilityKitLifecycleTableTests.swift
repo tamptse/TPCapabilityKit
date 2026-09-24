@@ -34,7 +34,7 @@ struct LifecycleTableTests {
     @Test("terminal removal cleans order, same id reschedules through Tasks seam")
     func cancelThenRescheduleSameId() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
         let missing = Capability.custom("lifecycleTable_\(UUID().uuidString)")
         let id = "lifecycle-reuse_\(UUID().uuidString)"
 

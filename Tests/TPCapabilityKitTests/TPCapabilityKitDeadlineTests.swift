@@ -23,7 +23,8 @@ struct DeadlineTests {
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
-            clock: immediateClock()
+            clock: immediateClock(),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let implicit = TaskDescriptor(
@@ -59,7 +60,7 @@ struct DeadlineTests {
         let pluginId = "ExpiryExec_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, clock: immediateClock())
+        let scheduler = TaskScheduler(store: store, clock: immediateClock(), concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2, maxRetries: 0)
         let done = AsyncStream<Void>.makeStream()
@@ -79,7 +80,7 @@ struct DeadlineTests {
         let pluginId = "ExpiryWin_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, clock: neverClock())
+        let scheduler = TaskScheduler(store: store, clock: neverClock(), concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.5)
         let result: String? = await scheduler.scheduleAndWait(task) {

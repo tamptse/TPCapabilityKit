@@ -10,7 +10,7 @@ struct ScopedSlotTests {
         let pluginId = "SlotDrain_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let total = 10
         await withTaskGroup(of: Void.self) { group in
@@ -34,7 +34,7 @@ struct ScopedSlotTests {
         let pluginId = "SlotCancel_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let started = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
@@ -166,5 +166,51 @@ struct ScopedSlotTests {
         for await _ in blockerDone.stream { break }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
+    }
+
+    @Test("standalone scheduler enforces its injected domain limits")
+    func injectedDomainLimitsEnforced() async {
+        let store = DynamicStore()
+        let pluginId = "SlotInjected_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+        let scheduler = TaskScheduler(
+            store: store,
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 1)
+        )
+
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let blockerDone = AsyncStream<Void>.makeStream()
+        let secondDone = AsyncStream<Void>.makeStream()
+        scheduler.schedule(
+            TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
+            taskExecution: {
+                started.continuation.yield()
+                for await _ in release.stream { break }
+            },
+            completion: { _ in blockerDone.continuation.yield() }
+        )
+        for await _ in started.stream { break }
+
+        scheduler.schedule(
+            TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
+            taskExecution: {},
+            completion: { _ in secondDone.continuation.yield() }
+        )
+
+        let gate = Date().addingTimeInterval(5.0)
+        while (scheduler.pendingCount != 1 || scheduler.activeCount != 1) && Date() < gate {
+            await Task.yield()
+        }
+        #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.activeCount == 1)
+
+        release.continuation.finish()
+        for await _ in blockerDone.stream { break }
+        for await _ in secondDone.stream { break }
+        #expect(scheduler.pendingCount == 0)
+        #expect(scheduler.activeCount == 0)
     }
 }

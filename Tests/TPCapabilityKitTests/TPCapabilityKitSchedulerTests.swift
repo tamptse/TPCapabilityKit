@@ -49,7 +49,7 @@ struct LeaseTests {
         let pluginId = "LeaseSeamComplete_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
         let lease = await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
@@ -69,7 +69,7 @@ struct LeaseTests {
         let pluginId = "LeaseSeamFail_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         actor Attempts {
             var count = 0
@@ -97,7 +97,7 @@ struct LeaseTests {
         let pluginId = "LeaseSeamBudget_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         actor Attempts {
             var count = 0
@@ -122,7 +122,7 @@ struct LeaseTests {
 
     @Test func cancelPendingSettlesExpiredThroughSeam() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         actor Counter {
             var completions = 0
@@ -155,7 +155,7 @@ struct LeaseTests {
         let pluginId = "LeaseSeamRetry_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         actor Attempts {
             var count = 0
@@ -186,7 +186,7 @@ struct ConcurrencyControllerTests {
         let pluginId = "ControllerAcquire_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
         let lease = await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
@@ -208,7 +208,8 @@ struct ConcurrencyControllerTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: TaskScheduler.Configuration(maxPerCapability: 2, maxGlobal: 1)
+            configuration: TaskScheduler.Configuration(maxPerCapability: 2, maxGlobal: 1),
+            concurrencyController: ConcurrencyController(maxPerCapability: 2, maxGlobal: 1)
         )
 
         let id = "idempotent_\(UUID().uuidString)"
@@ -232,7 +233,8 @@ struct ConcurrencyControllerTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: TaskScheduler.Configuration(maxPerCapability: 10, maxGlobal: 2)
+            configuration: TaskScheduler.Configuration(maxPerCapability: 10, maxGlobal: 2),
+            concurrencyController: ConcurrencyController(maxPerCapability: 10, maxGlobal: 2)
         )
 
         actor Probe {
@@ -332,7 +334,8 @@ struct ConcurrencyControllerTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: TaskScheduler.Configuration(maxPerCapability: 1, maxGlobal: 10)
+            configuration: TaskScheduler.Configuration(maxPerCapability: 1, maxGlobal: 10),
+            concurrencyController: ConcurrencyController(maxPerCapability: 1, maxGlobal: 10)
         )
 
         actor Probe {
@@ -424,7 +427,7 @@ struct TaskSchedulerTests {
         let pluginId = "SchedulerPlugin_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
 
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
         let result = await scheduler.scheduleAndWait(task) {
@@ -436,7 +439,7 @@ struct TaskSchedulerTests {
 
     @Test func cancelTask() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(
             id: "cancelable",
@@ -459,7 +462,7 @@ struct TaskSchedulerTests {
         let pluginId = "TOCTOU_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
 
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
 
@@ -489,7 +492,7 @@ struct TaskSchedulerTests {
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
 
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
         let task = TaskDescriptor(
             requiredCapabilities: [.heavyTask],
             timeout: 5.0,

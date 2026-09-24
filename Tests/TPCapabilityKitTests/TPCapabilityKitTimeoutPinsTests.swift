@@ -32,7 +32,8 @@ struct TimeoutPinsTests {
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
-            clock: immediateClock(recording: recorded)
+            clock: immediateClock(recording: recorded),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(
@@ -54,7 +55,8 @@ struct TimeoutPinsTests {
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
-            clock: immediateClock()
+            clock: immediateClock(),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(
@@ -81,7 +83,8 @@ struct TimeoutPinsTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)

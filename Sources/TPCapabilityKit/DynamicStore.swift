@@ -26,7 +26,7 @@ public final class DynamicStore: @unchecked Sendable {
     private let state = StoreState()
     private let registry = CapabilityRegistry()
     private let scheduling: StoreSchedulingGenerations
-    private let deadlineClock: TaskScheduler.Deadline.Clock
+    private let deadlineClock: ExpiryClock
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
@@ -36,18 +36,6 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     // MARK: - Private Helpers
-
-    // Single facade guard for capability paths; state paths delegate to
-    // StoreState's own guard with identical no-op semantics.
-    private func validatePluginId(_ pluginId: String) -> Bool {
-        guard !pluginId.isEmpty else {
-            #if DEBUG
-            print("[DynamicStore] Error: Plugin ID cannot be empty")
-            #endif
-            return false
-        }
-        return true
-    }
 
     // MARK: - Plugin Registration
 
@@ -167,6 +155,19 @@ public final class DynamicStore: @unchecked Sendable {
         return try await task()
     }
 
+    /// Runs a task synchronously only if the required capability is currently available.
+    /// The single sync-check seam behind the Store: every sync entry (Swift and
+    /// both Bridge entries) crosses here, so sync and wait-then-run agree by
+    /// construction. Sync execution bypasses Lease lifecycle, slot admission,
+    /// and timeout; for queued work use scheduleTask.
+    public func runIfAvailable<T>(
+        requiring capability: Capability,
+        task: () -> T
+    ) -> T? {
+        guard queryCapability(capability) else { return nil }
+        return task()
+    }
+
     /// Runs a task when the required capability becomes available, with a timeout.
     /// Immediate-style entry to the one shared Tasks waiter; delegates to
     /// `scheduleTaskAndWait`, so immediate and queued styles behave identically.
@@ -281,19 +282,8 @@ final class StoreState: @unchecked Sendable {
     private var creationSequence: UInt64 = 0
     private let creationClock = CurrentValueSubject<UInt64, Never>(0)
 
-    // Module's own guard (no facade access); mirrors the facade with identical no-op semantics.
-    private func validate(pluginId: String) -> Bool {
-        guard !pluginId.isEmpty else {
-            #if DEBUG
-            print("[DynamicStore] Error: Plugin ID cannot be empty")
-            #endif
-            return false
-        }
-        return true
-    }
-
     func update<T>(pluginId: String, newState: T) {
-        guard validate(pluginId: pluginId) else { return }
+        guard validatePluginId(pluginId) else { return }
         let (subject, sequence): (CurrentValueSubject<Any?, Never>, UInt64?) = lock.withLock {
             if let existing = subjects[pluginId] {
                 return (existing, nil)
@@ -310,7 +300,7 @@ final class StoreState: @unchecked Sendable {
     }
 
     func get<T>(pluginId: String, type: T.Type) -> T? {
-        guard validate(pluginId: pluginId) else { return nil }
+        guard validatePluginId(pluginId) else { return nil }
         return lock.withLock {
             guard let subject = subjects[pluginId] else {
                 #if DEBUG
@@ -329,7 +319,7 @@ final class StoreState: @unchecked Sendable {
     }
 
     func remove(pluginId: String) {
-        guard validate(pluginId: pluginId) else { return }
+        guard validatePluginId(pluginId) else { return }
         let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
             subjects.removeValue(forKey: pluginId)
         }
@@ -337,7 +327,7 @@ final class StoreState: @unchecked Sendable {
     }
 
     func observe<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
-        guard validate(pluginId: pluginId) else {
+        guard validatePluginId(pluginId) else {
             return Empty(completeImmediately: true).eraseToAnyPublisher()
         }
         return Deferred { [weak self] () -> AnyPublisher<T, Never> in
@@ -379,7 +369,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         self.slots = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
-    func current(owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) -> TaskScheduler {
+    func current(owner: DynamicStore, clock: ExpiryClock) -> TaskScheduler {
         lock.withLock {
             if let current = generations.last { return current }
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
@@ -388,7 +378,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
-    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) {
+    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: ExpiryClock) {
         lock.withLock {
             configuration = newConfiguration
             slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)

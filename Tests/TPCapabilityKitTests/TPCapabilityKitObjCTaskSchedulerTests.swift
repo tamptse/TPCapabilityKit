@@ -111,7 +111,8 @@ struct ObjcTaskDescriptorTests {
         let store = DynamicStore()
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let swiftNil = TaskDescriptor(

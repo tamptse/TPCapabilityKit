@@ -37,7 +37,7 @@ struct SettlementGuardsTests {
         let pluginId = "GuardsIdentity_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 1)
         actor State {

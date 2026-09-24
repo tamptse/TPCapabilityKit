@@ -128,7 +128,9 @@ public final class Lease: @unchecked Sendable {
     }
 
     /// Whether the lease is currently active.
-    private var isActive: Bool {
+    /// Internal so Settlement can route failures for pending leases to expiry
+    /// (`fail()` below is active-only by contract).
+    var isActive: Bool {
         if case .active = state { return true }
         return false
     }

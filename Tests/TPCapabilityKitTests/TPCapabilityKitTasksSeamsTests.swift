@@ -7,7 +7,7 @@ struct TasksSeamsTests {
     @Test("parked-vs-queued observable while counting policy unchanged")
     func parkedVsQueuedObservable() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
         let missing = Capability.custom("parkedVsQueued_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [missing], timeout: 10.0)
         let done = AsyncStream<Void>.makeStream()
@@ -51,7 +51,8 @@ struct TasksSeamsTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 10.0, maxPerCapability: 10, maxGlobal: 1)
+            configuration: .init(defaultTimeout: 10.0, maxPerCapability: 10, maxGlobal: 1),
+            concurrencyController: ConcurrencyController(maxPerCapability: 10, maxGlobal: 1)
         )
 
         actor Order {
@@ -122,7 +123,8 @@ struct TasksSeamsTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 10.0, maxPerCapability: 10, maxGlobal: 1)
+            configuration: .init(defaultTimeout: 10.0, maxPerCapability: 10, maxGlobal: 1),
+            concurrencyController: ConcurrencyController(maxPerCapability: 10, maxGlobal: 1)
         )
 
         actor Order {

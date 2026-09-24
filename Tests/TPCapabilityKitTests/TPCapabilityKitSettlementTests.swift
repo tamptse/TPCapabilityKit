@@ -10,7 +10,7 @@ struct SettlementTests {
         let pluginId = "SettleRetry_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(
             requiredCapabilities: [.heavyTask],
@@ -43,7 +43,7 @@ struct SettlementTests {
         let pluginId = "SettleCompletion_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(
             requiredCapabilities: [.heavyTask],
@@ -75,7 +75,7 @@ struct SettlementTests {
         let pluginId = "SettleCompleted_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
         let result = await scheduler.scheduleAndWait(task) { "ok" }
@@ -103,7 +103,7 @@ struct SettlementTests {
         let pluginId = "SettleFailed_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         struct Boom: Error {}
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 0)
@@ -119,7 +119,7 @@ struct SettlementTests {
         let pluginId = "SettleVoid_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
         actor State {
@@ -153,7 +153,7 @@ struct SettlementTests {
         let pluginId = "SettleCancel_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store)
+        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let started = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()

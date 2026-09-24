@@ -39,7 +39,8 @@ struct ConfigurationTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)
@@ -58,7 +59,8 @@ struct ConfigurationTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20),
+            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
@@ -77,7 +79,8 @@ struct ConfigurationTests {
         defer { store.unregisterCapability(for: pluginId) }
         let scheduler = TaskScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 2)
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 2),
+            concurrencyController: ConcurrencyController(maxPerCapability: 1, maxGlobal: 2)
         )
 
         let total = 6

@@ -80,9 +80,8 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// Runs a task only if the required capability is currently available.
-    /// Sync fast-path over the same registry state the Tasks waiter resolves,
-    /// so sync and wait-then-run agree by construction. Stays synchronous
-    /// because `@objc` cannot await.
+    /// Crosses the single Store sync-check seam, so sync and wait-then-run agree
+    /// by construction. Stays synchronous because `@objc` cannot await.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -91,17 +90,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        syncCheckAndRun(capability: capability, task: task)
-    }
-
-    /// The single sync-check seam behind the Bridge: every sync entry consults
-    /// the Store registry state here, so sync and wait-then-run cannot drift.
-    private func syncCheckAndRun(
-        capability: String,
-        task: () -> NSObject
-    ) -> NSObject? {
-        guard store.queryCapability(ObjcMapper.capability(from: capability)) else { return nil }
-        return task()
+        store.runIfAvailable(requiring: ObjcMapper.capability(from: capability), task: task)
     }
 
     /// The one delivery core for every value-returning wait behind the view.
