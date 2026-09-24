@@ -13,6 +13,37 @@ extension TaskScheduler {
         case cancelled
     }
 
+    /// Single terminal table: Settlement owns retry budget, void policy, and
+    /// waiter preservation; Lease writers are safety no-ops per the Lease contract.
+    private enum Decision {
+        case retry
+        case complete(Any?)
+        case fail
+        case expire
+    }
+
+    private func decide(lease: Lease, outcome: Settlement) -> Decision {
+        // Single terminal decision per ADR-0001/0004: Settlement owns retry
+        // budget, void policy, and waiter preservation, evaluating Lease
+        // state together so reviewers read one table. Lease writers stay as
+        // safety no-ops; row transition in settle(_:as:) is terminal for every
+        // non-terminal combo. `fail()` is active-only per the Lease
+        // contract, so a failure requested for a pending lease — one that
+        // never activated because its capability was withdrawn
+        // mid-admission — expires instead: without this the row would be
+        // removed and waiters delivered while the lease stayed pending.
+        switch outcome {
+        case .completed(let result):
+            if result == nil, lease.canRetry { return .retry }
+            if result != nil { return .complete(result) }
+            return lease.isActive ? .fail : .expire
+        case .failed:
+            return lease.isActive ? .fail : .expire
+        case .expired, .cancelled:
+            return .expire
+        }
+    }
+
     func settle(_ lease: Lease, result: Any?, timedOut: Bool, execution: (@Sendable () async -> Any?)?) async {
         if timedOut {
             settle(lease, as: .expired)
@@ -26,34 +57,6 @@ extension TaskScheduler {
     /// release, waiter delivery/cancellation, and retry re-pump. Cancel
     /// settles via the expired path with no Lease state-shape change.
     func settle(_ lease: Lease, as outcome: Settlement, execution: (@Sendable () async -> Any?)? = nil) {
-        enum Decision {
-            case retry
-            case complete(Any?)
-            case fail
-            case expire
-        }
-        func decide(lease: Lease, outcome: Settlement) -> Decision {
-            // Single terminal decision per ADR-0001/0004: Settlement owns retry
-            // budget, void policy, and waiter preservation, evaluating Lease
-            // state together so reviewers read one table. Lease writers stay as
-            // safety no-ops; row transition below is terminal for every
-            // non-terminal combo. `fail()` is active-only per the Lease
-            // contract, so a failure requested for a pending lease — one that
-            // never activated because its capability was withdrawn
-            // mid-admission — expires instead: without this the row would be
-            // removed and waiters delivered while the lease stayed pending.
-            switch outcome {
-            case .completed(let result):
-                if result == nil, lease.canRetry { return .retry }
-                if result != nil { return .complete(result) }
-                return lease.isActive ? .fail : .expire
-            case .failed:
-                return lease.isActive ? .fail : .expire
-            case .expired, .cancelled:
-                return .expire
-            }
-        }
-
         var waiters: [(Lease) -> Void] = []
         var waiterToCancel: Task<Void, Never>?
         var settled = false

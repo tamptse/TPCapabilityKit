@@ -44,10 +44,7 @@ struct LifecycleTableTests {
             firstDone.continuation.yield()
         })
 
-        for _ in 0..<100_000 {
-            if scheduler.parkedCount == 1 { break }
-            await Task.yield()
-        }
+        #expect(await scheduler.waitForCounts(parked: 1))
         #expect(scheduler.parkedCount == 1)
         #expect(scheduler.queuedCount == 0)
         #expect(scheduler.pendingCount == 1)
@@ -66,10 +63,7 @@ struct LifecycleTableTests {
             secondDone.continuation.yield()
         })
 
-        for _ in 0..<100_000 {
-            if scheduler.parkedCount == 1 { break }
-            await Task.yield()
-        }
+        #expect(await scheduler.waitForCounts(parked: 1))
         #expect(scheduler.parkedCount == 1)
         #expect(scheduler.pendingCount == 1)
         #expect(!secondLease.isTerminal)

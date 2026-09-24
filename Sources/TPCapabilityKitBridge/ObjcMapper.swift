@@ -2,11 +2,11 @@ import Foundation
 import TPCapabilityKit
 
 /// Single mapping point between Objective-C primitives and Swift domain types.
-enum ObjcMapper {
+@usableFromInline enum ObjcMapper {
     /// Pinned compat default carried as explicit for omitted wire. Literal on
     /// purpose: it must never follow a reconfigured Swift default. Deadline
     /// construction stays the sole Swift resolver for nil timeouts.
-    static let omittedTimeout: TimeInterval = 30.0
+    @usableFromInline static let omittedTimeout: TimeInterval = 30.0
 
     /// Single statement of ObjC timeout compat, shared by both descriptor
     /// initializers and the wait-then-run entry: omitted (nil wire) pins the

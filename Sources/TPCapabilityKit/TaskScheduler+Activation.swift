@@ -101,13 +101,13 @@ extension TaskScheduler {
     }
 
     /// Decides only; settling stays in `activate`, so this never terminalizes.
-    enum ActivationGate: Sendable, Equatable {
+    private enum ActivationGate: Sendable, Equatable {
         case proceed
         case failed
         case refused
     }
 
-    func gateAdmitted(_ lease: Lease) -> ActivationGate {
+    private func gateAdmitted(_ lease: Lease) -> ActivationGate {
         guard !lease.isTerminal else { return .refused }
         guard isAvailable(for: lease.task) else { return .failed }
         let admitted = lock.withLock { lifecycleStore.tryActivate(for: lease) }

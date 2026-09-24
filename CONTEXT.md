@@ -102,8 +102,8 @@ Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
 live view. `ObjcLease` is a live view
 of the underlying Lease. Capability/priority/state/timeout/descriptor mapping lives in one internal
  mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
-  Completion delivery lives in one delivery module defaulting to the main
-  queue unless a queue is given.
+   Completion delivery hops to the given queue or the main queue via a
+   local helper in the Bridge view; no standalone delivery module.
   Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler
   default applies at Deadline construction); an omitted ObjC timeout is instead the pinned
   compat literal carried as an explicit value, independent of reconfigured

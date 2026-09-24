@@ -30,22 +30,25 @@ extension TaskScheduler {
 
         private var rows: [String: LifecycleRow] = [:]
         private var order = OrderIndex()
+        private var snapshot = Counts(pending: 0, queued: 0, parked: 0, active: 0)
 
-        var counts: Counts {
-            var queued = 0
-            var parked = 0
-            var active = 0
-            for row in rows.values {
-                switch row.place {
-                case .pending:
-                    queued += 1
-                case .parked:
-                    parked += 1
-                case .active:
-                    active += 1
-                }
+        var counts: Counts { snapshot }
+
+        private mutating func adjust(queued: Int = 0, parked: Int = 0, active: Int = 0) {
+            snapshot = Counts(
+                pending: snapshot.pending + queued + parked,
+                queued: snapshot.queued + queued,
+                parked: snapshot.parked + parked,
+                active: snapshot.active + active
+            )
+        }
+
+        private mutating func shift(_ place: Place, by sign: Int) {
+            switch place {
+            case .pending: adjust(queued: sign)
+            case .parked: adjust(parked: sign)
+            case .active: adjust(active: sign)
             }
-            return Counts(pending: queued + parked, queued: queued, parked: parked, active: active)
         }
 
         mutating func insert(
@@ -53,6 +56,9 @@ extension TaskScheduler {
             execution: (@Sendable () async -> Any?)?,
             waiters: [(Lease) -> Void]
         ) {
+            if let old = rows[lease.task.id]?.place {
+                shift(old, by: -1)
+            }
             rows[lease.task.id] = LifecycleRow(
                 lease: lease,
                 place: .pending,
@@ -62,6 +68,7 @@ extension TaskScheduler {
                 waiting: false
             )
             order.enqueue(id: lease.task.id, priority: lease.task.priority)
+            shift(.pending, by: 1)
         }
 
         func nonTerminalLease(for id: String) -> Lease? {
@@ -120,6 +127,8 @@ extension TaskScheduler {
         mutating func dequeueNext() -> Lease? {
             while let id = order.dequeue() {
                 if var row = rows[id] {
+                    shift(row.place, by: -1)
+                    shift(.parked, by: 1)
                     row.place = .parked
                     rows[id] = row
                     return row.lease
@@ -136,6 +145,8 @@ extension TaskScheduler {
         mutating func tryActivate(for lease: Lease) -> Bool {
             guard !lease.isTerminal else { return false }
             guard var row = rows[lease.task.id], row.lease === lease else { return false }
+            shift(row.place, by: -1)
+            shift(.active, by: 1)
             lease.activate()
             row.place = .active
             rows[lease.task.id] = row
@@ -147,6 +158,8 @@ extension TaskScheduler {
             execution: (@Sendable () async -> Any?)?
         ) {
             guard var row = rows[lease.task.id], row.lease === lease else { return }
+            shift(row.place, by: -1)
+            shift(.pending, by: 1)
             row.place = .pending
             if let execution {
                 row.execution = execution
@@ -157,6 +170,7 @@ extension TaskScheduler {
 
         mutating func takeTerminal(for lease: Lease) -> (waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)? {
             guard let row = rows[lease.task.id], row.lease === lease else { return nil }
+            shift(row.place, by: -1)
             rows.removeValue(forKey: lease.task.id)
             order.remove(taskId: lease.task.id)
             return (row.waiters, row.waiter)

@@ -53,10 +53,9 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         queue: DispatchQueue? = nil,
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
-        let cancellable = ObjcBridgeDelivery.received(
-            store.observeState(pluginId: pluginId, type: NSObject.self),
-            on: queue
-        )
+        let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
+            .receive(on: queue ?? .main)
+            .eraseToAnyPublisher()
         .sink { state in
             observer(state)
         }
@@ -84,7 +83,9 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
         let cap = ObjcMapper.capability(from: capability)
-        let cancellable = ObjcBridgeDelivery.received(store.observeCapability(cap), on: queue)
+        let cancellable = store.observeCapability(cap)
+            .receive(on: queue ?? .main)
+            .eraseToAnyPublisher()
             .sink { observer($0) }
         return ObjcCancellable(cancellable)
     }

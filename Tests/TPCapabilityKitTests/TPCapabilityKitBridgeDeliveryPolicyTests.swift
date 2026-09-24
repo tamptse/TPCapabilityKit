@@ -1,5 +1,4 @@
 @preconcurrency import Foundation
-import Combine
 import Testing
 @testable import TPCapabilityKit
 @testable import TPCapabilityKitBridge
@@ -48,11 +47,16 @@ struct BridgeDeliveryPolicyTests {
         }
     }
 
-    @Test func deliverNilExecutesOnMainThread() {
+    @Test func bridgeSubscribeNilDeliversOnMain() {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "DeliveryPolicy_\(UUID().uuidString)"
         let flag = DeliveryFlag()
-        ObjcBridgeDelivery.deliver(on: nil) {
+        let cancellable = bridge.subscribe(pluginId: pluginId, queue: nil) { _ in
             flag.record(wasMain: Thread.isMainThread)
         }
+        defer { cancellable.cancel() }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "Main"))
 
         let deadline = Date().addingTimeInterval(2.0)
         while Date() < deadline {
@@ -65,25 +69,29 @@ struct BridgeDeliveryPolicyTests {
         #expect(snapshot.wasMain)
     }
 
-    @Test func deliverOnBackgroundQueueExecutesOffMain() async {
+    @Test func bridgeSubscribeDeliversOnGivenQueue() async {
         struct Observation: Sendable {
-            let isMain: Bool
             let onQueue: Bool
+            let isMain: Bool
         }
 
-        let queue = DispatchQueue(label: "bridge.delivery.policy.\(UUID().uuidString)")
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "DeliveryPolicy_\(UUID().uuidString)"
+        let queue = DispatchQueue(label: "bridge.subscribe.policy.\(UUID().uuidString)")
         let identity = QueueIdentity()
         queue.setSpecific(key: identity.key, value: true)
 
         let gated = AsyncStream<Observation>.makeStream()
-        ObjcBridgeDelivery.deliver(on: queue) {
-            let observation = Observation(
-                isMain: Thread.isMainThread,
-                onQueue: DispatchQueue.getSpecific(key: identity.key) == true
-            )
-            gated.continuation.yield(observation)
+        let cancellable = bridge.subscribe(pluginId: pluginId, queue: queue) { _ in
+            gated.continuation.yield(Observation(
+                onQueue: DispatchQueue.getSpecific(key: identity.key) == true,
+                isMain: Thread.isMainThread
+            ))
             gated.continuation.finish()
         }
+        defer { cancellable.cancel() }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "Custom"))
 
         let result = await firstValue(from: gated.stream, timeout: 2.0)
         #expect(result != nil)
@@ -91,35 +99,76 @@ struct BridgeDeliveryPolicyTests {
         #expect(result?.isMain == false)
     }
 
-    @Test func receivedDeliversValuesOnGivenQueue() async {
+    @Test func bridgeCapabilitySubscribeDeliversOnGivenQueue() async {
         struct Observation: Sendable {
-            let value: Int
             let onQueue: Bool
             let isMain: Bool
         }
 
-        let queue = DispatchQueue(label: "bridge.received.policy.\(UUID().uuidString)")
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "deliveryCap_\(UUID().uuidString)"
+        let queue = DispatchQueue(label: "bridge.capability.policy.\(UUID().uuidString)")
         let identity = QueueIdentity()
         queue.setSpecific(key: identity.key, value: true)
 
-        let subject = PassthroughSubject<Int, Never>()
         let gated = AsyncStream<Observation>.makeStream()
-        let cancellable = ObjcBridgeDelivery.received(subject.eraseToAnyPublisher(), on: queue)
-            .sink { value in
-                gated.continuation.yield(Observation(
-                    value: value,
-                    onQueue: DispatchQueue.getSpecific(key: identity.key) == true,
-                    isMain: Thread.isMainThread
-                ))
-                gated.continuation.finish()
-            }
-        defer { _ = cancellable }
-
-        subject.send(42)
+        let cancellable = bridge.subscribeCapability(uniqueCap, queue: queue) { _ in
+            gated.continuation.yield(Observation(
+                onQueue: DispatchQueue.getSpecific(key: identity.key) == true,
+                isMain: Thread.isMainThread
+            ))
+            gated.continuation.finish()
+        }
+        defer { cancellable.cancel() }
 
         let result = await firstValue(from: gated.stream, timeout: 2.0)
-        #expect(result?.value == 42)
+        #expect(result != nil)
         #expect(result?.onQueue == true)
         #expect(result?.isMain == false)
+    }
+
+    @Test func viewWaitNilDeliversOnMain() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "DeliveryPolicyWait_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        await withCheckedContinuation { continuation in
+            bridge.taskScheduler.runWhenAvailable(
+                capability: "heavyTask", timeout: 1.0, queue: nil,
+                task: { NSString(string: "MainDefault") },
+                completion: { result in
+                    #expect(Thread.isMainThread)
+                    #expect((result as? String) == "MainDefault")
+                    continuation.resume()
+                }
+            )
+        }
+    }
+
+    @Test func viewWaitDeliversOnGivenQueue() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "DeliveryPolicyWait_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let queue = DispatchQueue(label: "bridge.wait.policy.\(UUID().uuidString)")
+        let key = DispatchSpecificKey<Bool>()
+        queue.setSpecific(key: key, value: true)
+
+        await withCheckedContinuation { continuation in
+            bridge.taskScheduler.runWhenAvailable(
+                capability: "heavyTask", timeout: 1.0, queue: queue,
+                task: { NSString(string: "CustomQueue") },
+                completion: { result in
+                    #expect(DispatchQueue.getSpecific(key: key) == true)
+                    #expect((result as? String) == "CustomQueue")
+                    continuation.resume()
+                }
+            )
+        }
     }
 }

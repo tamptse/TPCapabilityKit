@@ -15,16 +15,8 @@ struct TasksSeamsTests {
             done.continuation.yield()
         })
 
-        var observedParked = false
-        for _ in 0..<100_000 {
-            if scheduler.parkedCount == 1 {
-                observedParked = true
-                break
-            }
-            await Task.yield()
-        }
+        #expect(await scheduler.waitForCounts(parked: 1))
 
-        #expect(observedParked)
         #expect(scheduler.queuedCount == 0)
         #expect(scheduler.parkedCount == 1)
         #expect(scheduler.pendingCount == 1)
@@ -100,10 +92,7 @@ struct TasksSeamsTests {
             }
         })
 
-        for _ in 0..<100_000 {
-            if scheduler.pendingCount == 2 { break }
-            await Task.yield()
-        }
+        #expect(await scheduler.waitForCounts(pending: 2))
 
         release.continuation.finish()
         for await _ in drained.stream {
@@ -198,10 +187,7 @@ struct TasksSeamsTests {
             }
         })
 
-        for _ in 0..<100_000 {
-            if scheduler.pendingCount == 2 { break }
-            await Task.yield()
-        }
+        #expect(await scheduler.waitForCounts(pending: 2))
 
         release.continuation.finish()
         for await _ in drained.stream {

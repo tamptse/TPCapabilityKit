@@ -2,80 +2,88 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
-/// Pins the activation ordering contract: the post-admission gates decide
-/// without settling, `activate` settles failed exits and silently releases
-/// refused ones, and refused exits never leak slots.
+/// Pins the activation ordering contract through the public Store seam:
+/// post-admission failure expires without executing, refusal frees slots,
+/// availability proceeds to completion, and parking alone never settles.
 ///
 /// The entry-availability exit has no pump-driven integration test by design:
-/// the dequeue guard makes it reachable only through TOCTOU injection, so the
-/// gate unit test plus review cover it instead of a flaky timing test.
+/// the dequeue guard makes it reachable only through TOCTOU injection between
+/// the dequeue check and the activator entry, so review covers that narrow
+/// window while the post-admission re-check (same settlement) is pinned below.
 struct ActivationGateTests {
-    private func makeScheduler(store: DynamicStore) -> TaskScheduler {
-        TaskScheduler(store: store, concurrencyController: ConcurrencyController())
-    }
-
-    @Test func gateFailsWhenCapabilityMissing() {
+    @Test func missingCapabilityParksWithoutTerminalizing() async {
         let store = DynamicStore()
-        let scheduler = makeScheduler(store: store)
         let missing = Capability.custom("GateMissing_\(UUID().uuidString)")
-        let lease = scheduler.schedule(
+        let done = AsyncStream<Void>.makeStream()
+        let lease = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
-            taskExecution: {}
+            task: {},
+            completion: { _ in done.continuation.yield() }
         )
-        defer { scheduler.cancel(taskId: lease.task.id) }
 
-        #expect(scheduler.gateAdmitted(lease) == .failed)
-    }
-
-    @Test func gateNeverSettles() {
-        let store = DynamicStore()
-        let scheduler = makeScheduler(store: store)
-        let missing = Capability.custom("GateNoSettle_\(UUID().uuidString)")
-        let lease = scheduler.schedule(
-            TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
-            taskExecution: {}
-        )
-        defer { scheduler.cancel(taskId: lease.task.id) }
-
-        _ = scheduler.gateAdmitted(lease)
+        try? await Task.sleep(nanoseconds: 200_000_000)
         #expect(!lease.isTerminal)
+        #expect(lease.state == .pending)
+        #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 0)
+
+        store.cancelTask(taskId: lease.task.id)
+        for await _ in done.stream { break }
+        #expect(lease.isTerminal)
+        #expect(lease.state == .expired)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
-    @Test func gateRefusesTerminalLease() {
+    @Test func cancelledLeaseExpiresWithoutExecuting() async {
         let store = DynamicStore()
-        let scheduler = makeScheduler(store: store)
         let missing = Capability.custom("GateTerminal_\(UUID().uuidString)")
-        let lease = scheduler.schedule(
+        actor Executions {
+            var count = 0
+            func increment() { count += 1 }
+        }
+        let executions = Executions()
+        let done = AsyncStream<Void>.makeStream()
+        let lease = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
-            taskExecution: {}
+            task: { await executions.increment() },
+            completion: { _ in done.continuation.yield() }
         )
 
-        scheduler.cancel(taskId: lease.task.id)
+        store.cancelTask(taskId: lease.task.id)
+        for await _ in done.stream { break }
         #expect(lease.isTerminal)
-        #expect(scheduler.gateAdmitted(lease) == .refused)
+        #expect(lease.state == .expired)
+        #expect(await executions.count == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
-    @Test func gateProceedsWhenAvailable() {
+    @Test func availableCapabilityProceedsToCompletion() async {
         let store = DynamicStore()
         let cap = Capability.custom("GateProceed_\(UUID().uuidString)")
         let pluginId = "GateProceed_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = makeScheduler(store: store)
 
-        let gate = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(
-            TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0),
-            taskExecution: {
-                for await _ in gate.stream { break }
-            }
-        )
-        defer {
-            gate.continuation.finish()
-            scheduler.cancel(taskId: lease.task.id)
+        actor Executions {
+            var count = 0
+            func increment() { count += 1 }
         }
+        let executions = Executions()
+        let done = AsyncStream<Void>.makeStream()
+        let lease = store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0),
+            task: { await executions.increment() },
+            completion: { _ in done.continuation.yield() }
+        )
 
-        #expect(scheduler.gateAdmitted(lease) == .proceed)
+        for await _ in done.stream { break }
+        #expect(lease.isTerminal)
+        #expect(lease.state == .completed)
+        #expect(await executions.count == 1)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     /// A capability withdrawn mid-admission expires the lease without ever

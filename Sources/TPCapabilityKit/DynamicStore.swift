@@ -26,7 +26,7 @@ public final class DynamicStore: @unchecked Sendable {
     private let state = StoreState()
     private let registry = CapabilityRegistry()
     private let scheduling: StoreSchedulingGenerations
-    private let deadlineClock: ExpiryClock
+    private let deadlineClock: TaskScheduler.Deadline.Clock
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
@@ -369,7 +369,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         self.slots = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
-    func current(owner: DynamicStore, clock: ExpiryClock) -> TaskScheduler {
+    func current(owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) -> TaskScheduler {
         lock.withLock {
             if let current = generations.last { return current }
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
@@ -378,7 +378,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
-    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: ExpiryClock) {
+    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) {
         lock.withLock {
             configuration = newConfiguration
             slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)
@@ -421,21 +421,14 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     private func pruneDrainedGenerations() {
-        let snapshot = lock.withLock { generations }
-        guard snapshot.count > 1 else { return }
-        var drainedIDs = Set<ObjectIdentifier>()
-        for generation in snapshot.dropLast() {
-            if generation.pendingCount == 0 && generation.activeCount == 0 {
-                drainedIDs.insert(ObjectIdentifier(generation))
-            }
-        }
-        guard !drainedIDs.isEmpty else { return }
+        // Lock order Store→Tasks: Store lock held while reading isDrained
+        // (scheduler lock inside); no path takes Store under scheduler lock.
         lock.withLock {
             guard generations.count > 1 else { return }
             let currentID = ObjectIdentifier(generations.last!)
             generations.removeAll { generation in
-                let id = ObjectIdentifier(generation)
-                return id != currentID && drainedIDs.contains(id)
+                guard ObjectIdentifier(generation) != currentID else { return false }
+                return generation.isDrained
             }
         }
     }
