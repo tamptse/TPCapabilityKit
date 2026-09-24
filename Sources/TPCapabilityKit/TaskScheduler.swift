@@ -38,6 +38,9 @@ public final class TaskScheduler: @unchecked Sendable {
     var lifecycleStore = LifecycleStore()
 
 
+    /// Prod generations are built only by the Store threading its one shared
+    /// slots + clock across live generations; direct construction with a fresh
+    /// controller is a test-only seam that bypasses the shared domain.
     init(store: DynamicStore = .shared, configuration: Configuration = .init(), clock: Clock = .live, concurrencyController: ConcurrencyController) {
         self.store = store
         self.configuration = configuration
@@ -145,17 +148,25 @@ public final class TaskScheduler: @unchecked Sendable {
         settle(target, as: .cancelled)
     }
 
+    /// One acquisition so adjacent pending/active/drain reads never disagree.
+    var countsSnapshot: (pending: Int, active: Int, isDrained: Bool) {
+        lock.withLock {
+            let counts = lifecycleStore.counts
+            return (counts.pending, counts.active, counts.pending == 0 && counts.active == 0)
+        }
+    }
+
     /// Returns the number of pending tasks (queued plus parked; parked-in-pending stays).
     var pendingCount: Int {
-        lock.withLock { lifecycleStore.counts.pending }
+        countsSnapshot.pending
     }
 
     /// Returns the number of active tasks.
     var activeCount: Int {
-        lock.withLock { lifecycleStore.counts.active }
+        countsSnapshot.active
     }
 
     var isDrained: Bool {
-        lock.withLock { lifecycleStore.counts.pending == 0 && lifecycleStore.counts.active == 0 }
+        countsSnapshot.isDrained
     }
 }
