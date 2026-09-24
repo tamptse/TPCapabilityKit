@@ -22,17 +22,15 @@ public final class DynamicStore: @unchecked Sendable {
     /// Shared singleton instance.
     public static let shared = DynamicStore()
 
-    // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns generations; Deadline owns expiry + virtual time)
+    // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns generations + shared time)
     private let state = StoreState()
     private let registry = CapabilityRegistry()
     private let scheduling: StoreSchedulingGenerations
-    private let deadlineClock: TaskScheduler.Deadline.Clock
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
     internal init(configuration: TaskScheduler.Configuration = .init()) {
-        self.deadlineClock = .live
-        self.scheduling = StoreSchedulingGenerations(configuration: configuration)
+        self.scheduling = StoreSchedulingGenerations(configuration: configuration, clock: .live)
     }
 
     // MARK: - Private Helpers
@@ -137,6 +135,13 @@ public final class DynamicStore: @unchecked Sendable {
         registry.observeAll()
     }
 
+    /// Whole-set readiness for the Tasks waiter: thin delegation to the
+    /// registry interface, so park/Deadline/activate/settle stay in Tasks
+    /// while set-matching lives in the registry.
+    func waitForAllCapabilities(_ required: Set<Capability>, deadline: TaskScheduler.Deadline) async -> Bool {
+        await registry.waitForAll(required, deadline: deadline)
+    }
+
     // MARK: - Task Execution
 
     /// Runs a task only if the required capability is currently available.
@@ -190,27 +195,22 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Task Scheduling (facade over StoreSchedulingGenerations)
 
     private var scheduler: TaskScheduler {
-        scheduling.current(owner: self, clock: deadlineClock)
+        scheduling.current(owner: self)
     }
 
     internal func enableDeterministicTime() {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        precondition(scheduling.generationCount == 0, "enableDeterministicTime must precede first schedule")
-        deadlineClock.enableDeterministic()
+        scheduling.enableDeterministicTime()
     }
 
     internal func advanceTime(by delta: TimeInterval) async {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        await deadlineClock.advance(by: delta)
+        await scheduling.advanceTime(by: delta)
     }
 
     internal func waitForDeterministicWaiters(count expected: Int) async {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        await deadlineClock.waitForWaiters(count: expected)
-    }
-
-    internal var deterministicWaiterCount: Int {
-        deadlineClock.waiterCount
+        await scheduling.waitForDeterministicWaiters(count: expected)
     }
 
     internal var generationCount: Int {
@@ -222,7 +222,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// and pending/active counts aggregate across live generations until the
     /// drained ones release.
     public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
-        scheduling.reconfigure(configuration, owner: self, clock: deadlineClock)
+        scheduling.reconfigure(configuration, owner: self)
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
@@ -363,13 +363,17 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     private var generations: [TaskScheduler] = []
     private var configuration: TaskScheduler.Configuration
     private let slots: ConcurrencyController
+    /// One time instance shared across live generations, so reconfigure never
+    /// forks virtual time. Fixed here at construction, never threaded per call.
+    private let clock: Clock
 
-    init(configuration: TaskScheduler.Configuration) {
+    init(configuration: TaskScheduler.Configuration, clock: Clock) {
         self.configuration = configuration
+        self.clock = clock
         self.slots = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
-    func current(owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) -> TaskScheduler {
+    func current(owner: DynamicStore) -> TaskScheduler {
         lock.withLock {
             if let current = generations.last { return current }
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
@@ -378,7 +382,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
-    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore, clock: TaskScheduler.Deadline.Clock) {
+    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore) {
         lock.withLock {
             configuration = newConfiguration
             slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)
@@ -386,6 +390,23 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
             generations.append(new)
         }
         prunedSnapshot()
+    }
+
+    /// Deterministic-time controls live here next to the generations they
+    /// gate: precede-first-use is checked against the pruned count in exactly
+    /// one place, enable-once and virtual-only inside the time module. The
+    /// Store keeps thin spelling-only delegation.
+    func enableDeterministicTime() {
+        precondition(generationCount == 0, "enableDeterministicTime must precede first schedule")
+        clock.enableDeterministic()
+    }
+
+    func advanceTime(by delta: TimeInterval) async {
+        await clock.advance(by: delta)
+    }
+
+    func waitForDeterministicWaiters(count expected: Int) async {
+        await clock.waitForWaiters(count: expected)
     }
 
     func cancel(taskId: String) {

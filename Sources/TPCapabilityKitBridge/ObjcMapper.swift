@@ -23,6 +23,13 @@ import TPCapabilityKit
         descriptor.timeout ?? omittedTimeout
     }
 
+    /// Whether the descriptor carries an explicit timeout: the exact inverse
+    /// of the `displayTimeout` fallback above, so the display reading and the
+    /// explicitness flag agree through this one mapper-owned statement.
+    static func hasExplicitTimeout(for descriptor: TaskDescriptor) -> Bool {
+        descriptor.timeout != nil
+    }
+
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
     }

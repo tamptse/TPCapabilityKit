@@ -33,12 +33,12 @@ public final class TaskScheduler: @unchecked Sendable {
     let concurrencyController: ConcurrencyController
     let lock = NSLock()
 
-    let clock: Deadline.Clock
+    let clock: Clock
 
     var lifecycleStore = LifecycleStore()
 
 
-    init(store: DynamicStore = .shared, configuration: Configuration = .init(), clock: Deadline.Clock = .live, concurrencyController: ConcurrencyController) {
+    init(store: DynamicStore = .shared, configuration: Configuration = .init(), clock: Clock = .live, concurrencyController: ConcurrencyController) {
         self.store = store
         self.configuration = configuration
         self.clock = clock
@@ -150,18 +150,6 @@ public final class TaskScheduler: @unchecked Sendable {
         lock.withLock { lifecycleStore.counts.pending }
     }
 
-    /// Queued portion of pending, internal-only: Tasks tests read the split,
-    /// Store facade exposes pending/active only.
-    var queuedCount: Int {
-        lock.withLock { lifecycleStore.counts.queued }
-    }
-
-    /// Parked portion of pending, internal-only: Tasks tests read the split,
-    /// Store facade exposes pending/active only.
-    var parkedCount: Int {
-        lock.withLock { lifecycleStore.counts.parked }
-    }
-
     /// Returns the number of active tasks.
     var activeCount: Int {
         lock.withLock { lifecycleStore.counts.active }
@@ -169,18 +157,5 @@ public final class TaskScheduler: @unchecked Sendable {
 
     var isDrained: Bool {
         lock.withLock { lifecycleStore.counts.pending == 0 && lifecycleStore.counts.active == 0 }
-    }
-
-    func waitForCounts(parked: Int? = nil, pending: Int? = nil, timeout: TimeInterval = 2.0) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while true {
-            let satisfied = lock.withLock {
-                (parked == nil || lifecycleStore.counts.parked == parked)
-                    && (pending == nil || lifecycleStore.counts.pending == pending)
-            }
-            if satisfied { return true }
-            if Date() >= deadline { return false }
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
     }
 }

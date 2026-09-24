@@ -68,14 +68,14 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         task: @escaping () -> NSObject,
         completion: @escaping (NSObject?) -> Void
     ) {
-        let descriptor = ObjcTaskDescriptor(
+        let descriptor = ObjcMapper.makeDescriptor(
             capabilities: [capability],
             priority: TaskPriority.normal.rawValue,
             timeout: timeout,
             maxRetries: 0,
             metadata: [:]
         )
-        waitThenRun(descriptor: descriptor.underlying, queue: queue, task: task, completion: completion)
+        waitThenRun(descriptor: descriptor, queue: queue, task: task, completion: completion)
     }
 
     /// Runs a task only if the required capability is currently available.

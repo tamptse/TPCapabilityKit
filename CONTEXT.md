@@ -26,6 +26,8 @@ generations, owned by the Store, so reconfigure never doubles the
 configured limit during drain.
 Two observation granularities: per-Capability observation serves UI-style
 subscribers; whole-registry observation serves the Tasks waiter only.
+Whole-set readiness is served behind the registry wait interface; Tasks
+keeps park, expiry, activation, and settlement.
 
 ## State
 
@@ -50,24 +52,23 @@ mechanism: immediate (`runTask`) vs queued (`scheduleTask`).
 ## Lease
 
 Lifecycle tracker `pending → active → completed/failed/expired` for one
-scheduled Task. Exposes state transitions only; callers read
-`state/isTerminal/result` plus the retry budget view. Retry budget checks
-and reset decisions live in Settlement, not in Lease.
+scheduled Task. Exposes state transitions plus a read-only retry budget
+view; budget checks and reset decisions live in Settlement, not in Lease.
 Custom `==` ignores associated `Error` values.
-Deadline and retry decisions live in Settlement, not in Lease.
 
 ## Settlement
 
 Single terminal decision for one Lease: timeout vs result vs retry vs
-cancel, with completion delivery and waiter preservation. Owned by Tasks.
-Owns the retry budget check, the void-completion policy, and the retry
-re-queue; `enqueue` is the only queue writer conceptually, retry re-uses the
-same Lease identity through a shared re-queue path. Owns the lease lifecycle row (place, execution, waiters) and the single
-release shared by terminal, retry, and scope-exit paths.
+cancel, with completion delivery and waiter preservation. Internal step of
+the single Tasks path, not a standalone module. Owns the retry budget
+check, the void-completion policy, and the retry re-queue; `enqueue` is
+the only queue writer conceptually, retry re-uses the same Lease identity
+through a shared re-queue path. Decides outcome and delivers waiters but
+never releases the slot — release belongs to the activation scope exit.
 _Deadline_ (expiry detail): timeout resolves once at Deadline construction
-from the task plus the configured default; one Deadline module owns the
-single race for both the capability wait and the execution path, plus the
-virtual clock and the advance policy — no separate expiry-clock module.
+from the task plus the configured default; Deadline owns only the single
+race for both the capability wait and the execution path, while live and
+virtual adapters plus the advance policy live in the time module.
 
 ## Tasks (Scheduler)
 
@@ -75,12 +76,14 @@ Deep module behind `schedule/cancel/pending/active`. Hides priority queues,
 capability matching, timeout, retry, concurrency limits, and fire-and-forget
 tracking. Variation is via `Configuration` values, not a protocol seam.
 `autoProcess` is an internal detail, not part of the seam.
-Owns one lifecycle table keyed by task id (place is pending, parked, or
-active; the order index is an internal detail of the table, counts served
-from one immutable snapshot), the capability wait folded inside Tasks
-(one deadline per set, no standalone waiter module), the Settlement path
-(exactly-once terminal delivery for cancel/fail/timeout/retry, waiter preserved
-across retry), and scoped slot acquisition with re-check inside.
+Owns one path from queued to parked to active to terminal plus retry
+re-queue, with one lifecycle table keyed by task id (place is pending,
+parked, or active; the order index is an internal detail of the table,
+counts served from one immutable snapshot) as internal mechanics. Keeps
+park, Deadline expiry, activation, and the Settlement step (exactly-once
+terminal delivery for cancel/fail/timeout/retry, waiter preserved across
+retry); whole-set readiness crosses the registry wait seam with one
+deadline per set. Scoped slot acquisition with re-check inside.
 Park is one waiter per dequeued row: the pending → parked → active move
 crosses one park-and-wait seam, so double-park and waiter-cancel rules live
 in the table, not in callers.
@@ -92,16 +95,20 @@ in the table, not in callers.
    scope-exit release. Activation crosses one seam: park, capability wait,
    admission, re-check, and row activation read as one path with one
    release shared by terminal, retry, and scope-exit.
-Availability wait crosses one `race(operation:)` seam with an
-injectable clock, so waiter and executor share one expiry with no
-wait-vs-execution kind distinction.
+Availability wait crosses one `race(operation:)` seam on Deadline, so
+waiter and executor share one expiry with no wait-vs-execution kind
+distinction; live and virtual adapters plus the advance policy live in
+the time module behind one sleep seam.
 
 ## Bridge (ObjC adapter)
 
 Single scheduling adapter behind `TPStoreBridge`: the `taskScheduler`
 live view. `ObjcLease` is a live view
-of the underlying Lease. Capability/priority/state/timeout/descriptor mapping lives in one internal
- mapper module. ObjC Plugins are capability-consumers only (no `capabilities`).
+of the underlying Lease. The Bridge view and both descriptor creation
+paths are thin translators; the whole ObjC timeout fork (omitted vs
+wire-negative vs explicit plus display fallback) lives in one internal
+mapper module behind its interface. ObjC Plugins are capability-consumers
+only (no `capabilities`).
    Completion delivery hops to the given queue or the main queue via a
    local helper in the Bridge view; no standalone delivery module.
   Timeout: Swift `nil` and ObjC wire-negative mean unspecified (scheduler

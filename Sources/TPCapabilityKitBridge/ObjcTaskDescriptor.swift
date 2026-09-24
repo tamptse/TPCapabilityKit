@@ -10,13 +10,13 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// Collapsed timeout reading: the stored value when explicit, otherwise
     /// the pinned compat default. `hasExplicitTimeout` tells the two apart;
-    /// the fork itself is stated once in
-    /// `ObjcMapper.resolveTimeout`/`displayTimeout`.
+    /// both read through the single mapper-owned statement
+    /// (`ObjcMapper.displayTimeout`/`hasExplicitTimeout`).
     @objc public var timeout: TimeInterval {
         ObjcMapper.displayTimeout(for: underlying)
     }
 
-    @objc public var hasExplicitTimeout: Bool { underlying.timeout != nil }
+    @objc public var hasExplicitTimeout: Bool { ObjcMapper.hasExplicitTimeout(for: underlying) }
 
     @objc public var maxRetries: Int { underlying.maxRetries }
 

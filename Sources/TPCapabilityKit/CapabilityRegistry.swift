@@ -104,6 +104,23 @@ final class CapabilityRegistry: @unchecked Sendable {
         snapshotSubject.eraseToAnyPublisher()
     }
 
+    /// Whole-set readiness behind the registry interface: resolves true once
+    /// every required capability is simultaneously available, false when the
+    /// single Deadline expiry wins. Empty set resolves true without
+    /// subscribing; otherwise one `race` covers the whole wait. Re-queries
+    /// per snapshot emission without holding the lock across sends, so the
+    /// per-Capability-before-snapshot emission order is untouched.
+    func waitForAll(_ required: Set<Capability>, deadline: TaskScheduler.Deadline) async -> Bool {
+        if required.isEmpty { return true }
+        if required.allSatisfy({ query($0) }) { return true }
+        return await deadline.race {
+            for await _ in self.observeAll().values {
+                if required.allSatisfy({ self.query($0) }) { return true }
+            }
+            return false
+        }
+    }
+
     private func publish(snapshot: [String: Set<Capability>]) {
         snapshotSubject.send(snapshot)
     }

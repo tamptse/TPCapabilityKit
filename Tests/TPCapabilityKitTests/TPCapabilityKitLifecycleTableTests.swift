@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
-@Suite("Lifecycle Table Single Owner Tests")
+@Suite("Lifecycle Table Single Owner Tests (path internal mechanics + Tasks seam)")
 struct LifecycleTableTests {
     private func makeLease(id: String = UUID().uuidString, priority: TaskPriority = .normal) -> Lease {
         Lease(task: TaskDescriptor(id: id, requiredCapabilities: [], priority: priority))

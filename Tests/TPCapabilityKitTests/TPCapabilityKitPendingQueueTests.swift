@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
-@Suite("PendingQueue Tests")
+@Suite("PendingQueue Tests (path internal mechanics: row storage + order + single snapshot)")
 struct PendingQueueTests {
     private func makeLease(id: String = UUID().uuidString, priority: TaskPriority = .normal) -> Lease {
         Lease(task: TaskDescriptor(id: id, requiredCapabilities: [], priority: priority))

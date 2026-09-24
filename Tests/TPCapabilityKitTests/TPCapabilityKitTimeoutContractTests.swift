@@ -16,14 +16,14 @@ private final class ContractRecordedTimeouts: @unchecked Sendable {
     }
 }
 
-private func contractImmediateClock() -> TaskScheduler.Deadline.Clock {
-    TaskScheduler.Deadline.Clock(sleep: { _ in })
+private func contractImmediateClock() -> Clock {
+    Clock(sleep: { _ in })
 }
 
 private func contractBlockingRecordingClock(
     recording: ContractRecordedTimeouts
-) -> TaskScheduler.Deadline.Clock {
-    TaskScheduler.Deadline.Clock(sleep: { timeout in
+) -> Clock {
+    Clock(sleep: { timeout in
         recording.record(timeout)
         try? await Task.sleep(nanoseconds: UInt64.max)
     })
