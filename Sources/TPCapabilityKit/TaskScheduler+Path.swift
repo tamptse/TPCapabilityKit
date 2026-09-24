@@ -68,7 +68,12 @@ extension TaskScheduler {
     /// No per-emission query loop remains here.
     private func waitForCapabilities(_ task: TaskDescriptor, deadline: Deadline) async -> Bool {
         guard let store else { return false }
-        return await store.waitForAllCapabilities(task.requiredCapabilities, deadline: deadline)
+        // Deadline adapts to the registry-owned race: same single expiry,
+        // now passed as a value instead of named across the seam.
+        let race: @Sendable (@escaping CapabilityRegistry.WaitOperation) async -> Bool = { operation in
+            await deadline.race(operation: operation)
+        }
+        return await store.waitForAllCapabilities(task.requiredCapabilities, race: race)
     }
 
     /// Sole production activator: every prod path to `active` goes through here
