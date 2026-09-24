@@ -105,9 +105,56 @@ extension TaskScheduler {
             rows[id]?.lease
         }
 
-        func isLive(_ lease: Lease) -> Bool {
-            guard let row = rows[lease.task.id] else { return false }
-            return row.lease === lease
+        enum Transition {
+            case activate
+            case retry((@Sendable () async -> Any?)?)
+            case terminal(Lease.Terminal)
+        }
+
+        enum TransitionResult {
+            case activated
+            case retried
+            case terminal(waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)
+        }
+
+        /// Single writer for the Lease lifecycle: the Lease mutation and the
+        /// row mutation happen together here under the scheduler lock, entered
+        /// through one liveness query. Production callers use this; the
+        /// per-move methods below delegate to it.
+        mutating func transition(for lease: Lease, to target: Transition) -> TransitionResult? {
+            guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
+                return nil
+            }
+            switch target {
+            case .activate:
+                move(from: row.place, to: .active)
+                lease.activate()
+                row.place = .active
+                rows[lease.task.id] = row
+                return .activated
+            case .retry(let execution):
+                lease.beginRetry()
+                move(from: row.place, to: .pending)
+                row.place = .pending
+                if let execution {
+                    row.execution = execution
+                }
+                rows[lease.task.id] = row
+                order.enqueue(id: lease.task.id, priority: lease.task.priority)
+                return .retried
+            case .terminal(let terminal):
+                guard let taken = takeRow(for: lease) else { return nil }
+                lease.terminalize(terminal)
+                return .terminal(waiters: taken.waiters, waiter: taken.waiter)
+            }
+        }
+
+        private mutating func takeRow(for lease: Lease) -> LifecycleRow? {
+            guard let row = rows[lease.task.id], row.lease === lease else { return nil }
+            move(from: row.place, to: nil)
+            rows.removeValue(forKey: lease.task.id)
+            order.remove(taskId: lease.task.id)
+            return row
         }
 
         mutating func appendScheduleWaiter(
@@ -167,34 +214,21 @@ extension TaskScheduler {
         }
 
         mutating func tryActivate(for lease: Lease) -> Bool {
-            guard !lease.isTerminal else { return false }
-            guard var row = rows[lease.task.id], row.lease === lease else { return false }
-            move(from: row.place, to: .active)
-            lease.activate()
-            row.place = .active
-            rows[lease.task.id] = row
-            return true
+            if case .activated = transition(for: lease, to: .activate) {
+                return true
+            }
+            return false
         }
 
         mutating func applyRetry(
             for lease: Lease,
             execution: (@Sendable () async -> Any?)?
         ) {
-            guard var row = rows[lease.task.id], row.lease === lease else { return }
-            move(from: row.place, to: .pending)
-            row.place = .pending
-            if let execution {
-                row.execution = execution
-            }
-            rows[lease.task.id] = row
-            order.enqueue(id: lease.task.id, priority: lease.task.priority)
+            _ = transition(for: lease, to: .retry(execution))
         }
 
         mutating func takeTerminal(for lease: Lease) -> (waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)? {
-            guard let row = rows[lease.task.id], row.lease === lease else { return nil }
-            move(from: row.place, to: nil)
-            rows.removeValue(forKey: lease.task.id)
-            order.remove(taskId: lease.task.id)
+            guard let row = takeRow(for: lease) else { return nil }
             return (row.waiters, row.waiter)
         }
 
