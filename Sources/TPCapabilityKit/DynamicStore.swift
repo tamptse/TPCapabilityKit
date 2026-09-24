@@ -141,14 +141,10 @@ public final class DynamicStore: @unchecked Sendable {
 
     // MARK: - Task Execution
 
-    /// Runs a task only if the required capability is currently available.
-    /// Immediate fire without waiting; for queued work use scheduleTask.
-    /// `runTaskWhenAvailable` is the waiting counterpart and shares the one
-    /// Tasks waiter with `scheduleTaskAndWait`.
-    /// - Parameters:
-    ///   - capability: The capability required to run the task.
-    ///   - task: The async closure to execute.
-    /// - Returns: The result of the task, or `nil` if the capability is not available.
+    /// Legacy async immediate, kept bit-identical for existing callers.
+    /// Prefer the two documented entries (see `runIfAvailable`): sync
+    /// check-and-run, or `scheduleTaskAndWait` for the queued waiter.
+    @available(*, deprecated, message: "Use runIfAvailable(requiring:task:) for sync check-and-run, or scheduleTaskAndWait for the queued waiter.")
     public func runTask<T>(
         requiring capability: Capability,
         task: () async throws -> T
@@ -157,11 +153,15 @@ public final class DynamicStore: @unchecked Sendable {
         return try await task()
     }
 
-    /// Runs a task synchronously only if the required capability is currently available.
-    /// The single sync-check seam behind the Store: every sync entry (Swift and
-    /// both Bridge entries) crosses here, so sync and wait-then-run agree by
-    /// construction. Sync execution bypasses Lease lifecycle, slot admission,
-    /// and timeout; for queued work use scheduleTask.
+    /// Choosing a fire entry (the one decision; Bridge comments point here).
+    ///
+    /// | When | Call |
+    /// | Check-and-run: sync fire, @objc-compatible | `runIfAvailable` |
+    /// | Schedule-and-wait: async, the one waiter | `scheduleTaskAndWait` (`runTaskWhenAvailable` is the single-capability convenience over it) |
+    ///
+    /// Immediate entries bypass Lease, slot admission, and Deadline by contract:
+    /// fire-and-forget must not queue, so under slot pressure sync fire runs
+    /// while a scheduled wait parks.
     public func runIfAvailable<T>(
         requiring capability: Capability,
         task: () -> T
@@ -170,9 +170,8 @@ public final class DynamicStore: @unchecked Sendable {
         return task()
     }
 
-    /// Runs a task when the required capability becomes available, with a timeout.
-    /// Immediate-style entry to the one shared Tasks waiter; delegates to
-    /// `scheduleTaskAndWait`, so immediate and queued styles behave identically.
+    /// Single-capability convenience over `scheduleTaskAndWait` (the one waiter).
+    /// For the entry choice see `runIfAvailable`.
     /// - Parameters:
     ///   - capability: The capability required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Default is 5.0.
@@ -223,7 +222,7 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
-    /// Queued work; for immediate fire use runTask.
+    /// Queued work; for immediate fire see the entry table on `runIfAvailable`.
     /// - Parameters:
     ///   - descriptor: The task descriptor.
     ///   - task: The async closure to execute.

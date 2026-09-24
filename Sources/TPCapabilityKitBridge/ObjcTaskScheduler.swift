@@ -78,9 +78,10 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         waitThenRun(descriptor: descriptor, queue: queue, task: task, completion: completion)
     }
 
-    /// Runs a task only if the required capability is currently available.
-    /// Crosses the single Store sync-check seam, so sync and wait-then-run agree
-    /// by construction. Stays synchronous because `@objc` cannot await.
+    /// Check-and-run entry (the facade two-entry table on
+    /// `DynamicStore.runIfAvailable`: sync fire). Stays synchronous because
+    /// `@objc` cannot await; bypasses Lease, slot admission, and Deadline by
+    /// contract.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
