@@ -385,7 +385,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
         }
-        pruneDrainedGenerations()
+        prunedSnapshot()
     }
 
     func cancel(taskId: String) {
@@ -396,21 +396,19 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     var pendingCount: Int {
-        pruneDrainedGenerations()
-        return countsWithoutPruning().pending
+        counts().pending
     }
 
     var activeCount: Int {
-        pruneDrainedGenerations()
-        return countsWithoutPruning().active
+        counts().active
     }
 
     var generationCount: Int {
-        lock.withLock { generations.count }
+        prunedSnapshot().count
     }
 
-    private func countsWithoutPruning() -> (pending: Int, active: Int) {
-        let snapshot = lock.withLock { generations }
+    private func counts() -> (pending: Int, active: Int) {
+        let snapshot = prunedSnapshot()
         var pending = 0
         var active = 0
         for generation in snapshot {
@@ -420,16 +418,17 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return (pending, active)
     }
 
-    private func pruneDrainedGenerations() {
-        // Lock order Store→Tasks: Store lock held while reading isDrained
-        // (scheduler lock inside); no path takes Store under scheduler lock.
+    @discardableResult
+    private func prunedSnapshot() -> [TaskScheduler] {
+        // Store→Tasks: Store lock held while reading each non-current generation's drain state.
         lock.withLock {
-            guard generations.count > 1 else { return }
+            guard generations.count > 1 else { return generations }
             let currentID = ObjectIdentifier(generations.last!)
             generations.removeAll { generation in
                 guard ObjectIdentifier(generation) != currentID else { return false }
                 return generation.isDrained
             }
+            return generations
         }
     }
 }

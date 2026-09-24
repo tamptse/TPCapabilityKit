@@ -35,11 +35,6 @@ import TPCapabilityKit
         TaskPriority(rawValue: rawValue) ?? .normal
     }
 
-    /// Maps an ObjC timeout to the Swift domain spelling via the single resolver.
-    static func taskTimeout(from rawValue: TimeInterval) -> TimeInterval? {
-        resolveTimeout(wire: rawValue)
-    }
-
     static func makeDescriptor(
         id: String? = nil,
         capabilities: [String],
@@ -52,7 +47,7 @@ import TPCapabilityKit
             id: id ?? UUID().uuidString,
             requiredCapabilities: Set(capabilities.map { capability(from: $0) }),
             priority: taskPriority(from: priority),
-            timeout: taskTimeout(from: timeout),
+            timeout: resolveTimeout(wire: timeout),
             maxRetries: maxRetries,
             metadata: metadata
         )

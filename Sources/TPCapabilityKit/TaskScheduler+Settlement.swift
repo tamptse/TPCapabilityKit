@@ -23,15 +23,7 @@ extension TaskScheduler {
     }
 
     private func decide(lease: Lease, outcome: Settlement) -> Decision {
-        // Single terminal decision per ADR-0001/0004: Settlement owns retry
-        // budget, void policy, and waiter preservation, evaluating Lease
-        // state together so reviewers read one table. Lease writers stay as
-        // safety no-ops; row transition in settle(_:as:) is terminal for every
-        // non-terminal combo. `fail()` is active-only per the Lease
-        // contract, so a failure requested for a pending lease — one that
-        // never activated because its capability was withdrawn
-        // mid-admission — expires instead: without this the row would be
-        // removed and waiters delivered while the lease stayed pending.
+        // Single terminal decision per ADR-0001/0004; see Lease transition contract.
         switch outcome {
         case .completed(let result):
             if result == nil, lease.canRetry { return .retry }
