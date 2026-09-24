@@ -98,14 +98,12 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     // MARK: - Task Execution APIs
 
-    /// Runs a task immediately if the required capability is available.
-    /// Convenience over the single scheduling door: delegates to the
-    /// `taskScheduler` view's sync fast-path, which consults the same registry
-    /// state the Tasks waiter resolves, so sync and wait-then-run agree by
-    /// construction (pinned by interface tests, not by this comment). Stays
-    /// synchronous because `@objc` cannot await; blocking the calling thread
-    /// on a semaphore would risk deadlock. For wait-then-run use
-    /// `runTaskWhenAvailable`.
+    /// Check-and-run entry for @objc callers (the facade two-entry table on
+    /// `DynamicStore.runIfAvailable`: sync fire). Delegates to the
+    /// `taskScheduler` view's sync fast-path. Stays synchronous because
+    /// `@objc` cannot await; blocking the calling thread on a semaphore would
+    /// risk deadlock. Bypasses Lease, slot admission, and Deadline by contract;
+    /// for wait-then-run use `runTaskWhenAvailable`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -117,8 +115,8 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         taskScheduler.runIfAvailable(capability: capability, task: task)
     }
 
-    /// Runs a task when the required capability becomes available, with a timeout.
-    /// Convenience over the single scheduling door: delegates to the
+    /// Schedule-and-wait entry for @objc callers (the facade two-entry table:
+    /// async, the one waiter). Delegates to the
     /// `taskScheduler` view, which owns descriptor building, timeout compat,
     /// queue hopping, and defaults with one delivery story. Delivers the
     /// result on the specified queue, or the main queue when omitted.
