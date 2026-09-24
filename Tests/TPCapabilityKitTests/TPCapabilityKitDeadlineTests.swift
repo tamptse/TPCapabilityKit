@@ -3,16 +3,15 @@ import Foundation
 @testable import TPCapabilityKit
 
 private func neverClock() -> Clock {
-    let gate = AsyncStream<Void>.makeStream()
-    return Clock(
-        sleep: { _ in
-            for await _ in gate.stream { break }
-        }
-    )
+    let clock = Clock()
+    clock.enableDeterministic()
+    return clock
 }
 
 private func immediateClock() -> Clock {
-    Clock(sleep: { _ in })
+    let clock = Clock()
+    clock.enableDeterministic()
+    return clock
 }
 
 @Suite("Expiry Tests")
@@ -20,10 +19,11 @@ struct DeadlineTests {
     @Test("resolve once at Deadline construction shares one expiry through lease state")
     func resolveOnceAtDeadlineConstruction() async {
         let store = DynamicStore()
+        let clock = immediateClock()
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
-            clock: immediateClock(),
+            clock: clock,
             concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
@@ -48,6 +48,9 @@ struct DeadlineTests {
         })
         #expect(explicitLease.task.timeout == 7.5)
 
+        await clock.waitForWaiters(count: 2)
+        await clock.advance(by: 7.5)
+
         for await _ in implicitDone.stream { break }
         for await _ in explicitDone.stream { break }
         #expect(implicitLease.state == .expired)
@@ -60,7 +63,8 @@ struct DeadlineTests {
         let pluginId = "ExpiryExec_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, clock: immediateClock(), concurrencyController: ConcurrencyController())
+        let clock = immediateClock()
+        let scheduler = TaskScheduler(store: store, clock: clock, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 0.2, maxRetries: 0)
         let done = AsyncStream<Void>.makeStream()
@@ -69,6 +73,8 @@ struct DeadlineTests {
         }, completion: { _ in
             done.continuation.yield()
         })
+        await clock.waitForWaiters(count: 1)
+        await clock.advance(by: 0.2)
         for await _ in done.stream { break }
 
         #expect(lease.state == .expired)

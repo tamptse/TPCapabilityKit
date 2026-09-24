@@ -53,11 +53,13 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         queue: DispatchQueue? = nil,
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
+        let observerBox = ObjcCallbackBox(observer)
         let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
-            .receive(on: queue ?? .main)
             .eraseToAnyPublisher()
         .sink { state in
-            observer(state)
+            ObjcDelivery.on(queue) {
+                observerBox.value(state)
+            }
         }
         return ObjcCancellable(cancellable)
     }
@@ -83,10 +85,14 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
         let cap = ObjcMapper.capability(from: capability)
+        let observerBox = ObjcCallbackBox(observer)
         let cancellable = store.observeCapability(cap)
-            .receive(on: queue ?? .main)
             .eraseToAnyPublisher()
-            .sink { observer($0) }
+            .sink { available in
+                ObjcDelivery.on(queue) {
+                    observerBox.value(available)
+                }
+            }
         return ObjcCancellable(cancellable)
     }
 
@@ -116,7 +122,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// `taskScheduler` view, which owns descriptor building, timeout compat,
     /// queue hopping, and defaults with one delivery story. Delivers the
     /// result on the specified queue, or the main queue when omitted.
-    /// Timeout compat follows the single mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
+    /// Timeout compat follows the single mapper-owned fork (see `ObjcTimeout.resolve`).
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Negative means

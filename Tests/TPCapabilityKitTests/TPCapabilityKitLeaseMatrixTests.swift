@@ -14,9 +14,9 @@ private enum Prim: Sendable, Hashable {
     func apply(to lease: Lease) {
         switch self {
         case .activate: lease.activate()
-        case .complete: lease.complete(with: "ok")
-        case .fail: lease.fail(with: MatrixError())
-        case .expire: lease.expire()
+        case .complete: lease.terminalize(.completed("ok"))
+        case .fail: lease.terminalize(.failed(MatrixError()))
+        case .expire: lease.terminalize(.expired)
         case .beginRetry: lease.beginRetry()
         }
     }
@@ -31,12 +31,12 @@ private func leaseIn(_ state: Lease.State) -> Lease {
         lease.activate()
     case .completed:
         lease.activate()
-        lease.complete(with: "ok")
+        lease.terminalize(.completed("ok"))
     case .failed:
         lease.activate()
-        lease.fail(with: MatrixError())
+        lease.terminalize(.failed(MatrixError()))
     case .expired:
-        lease.expire()
+        lease.terminalize(.expired)
     }
     return lease
 }

@@ -1,9 +1,8 @@
 import Foundation
 
-/// Time module: live + virtual adapters plus advance policy behind one sleep seam.
+/// Time module: live + virtual behind one sleep seam.
 ///
-/// The adapter is fixed at construction — `.live` suspends on real time,
-/// `init(sleep:)` pins a test double — with one allowed pre-use promotion:
+/// The adapter starts live — `sleep` suspends on real time — with one allowed pre-use promotion:
 /// `enableDeterministic` swaps live for virtual exactly once before first
 /// use, after which the adapter never changes and is never threaded per call.
 /// `sleep` is the single seam the waiter and the executor share through
@@ -13,15 +12,9 @@ import Foundation
 /// rendezvous tests synchronize on.
 final class Clock: @unchecked Sendable {
     private let lock = NSLock()
-    private let override: (@Sendable (TimeInterval) async -> Void)?
     private var virtual: VirtualTime?
 
     init() {
-        self.override = nil
-    }
-
-    init(sleep: @Sendable @escaping (TimeInterval) async -> Void) {
-        self.override = sleep
     }
 
     static var live: Clock {
@@ -40,10 +33,6 @@ final class Clock: @unchecked Sendable {
     }
 
     func sleep(_ timeout: TimeInterval) async {
-        if let override {
-            await override(timeout)
-            return
-        }
         let parked: VirtualTime? = lock.withLock { virtual }
         guard let parked else {
             try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))

@@ -10,8 +10,8 @@ import TPCapabilityKit
 ///
 /// One delivery story: `schedule` completion fires on the Tasks execution
 /// context with no hop, while every value-returning wait (`scheduleAndWait`,
-/// `runWhenAvailable`) delivers its completion through a local given-or-main
-/// helper alongside the Bridge subscribes. Descriptor building and timeout compat stay
+/// `runWhenAvailable`) delivers its completion through `ObjcDelivery`
+/// alongside the Bridge subscribes. Descriptor building and timeout compat stay
 /// in `ObjcMapper`; the sync fast-path (`runIfAvailable`) consults the same
 /// registry state the Tasks waiter resolves, so sync and wait-then-run agree
 /// by construction.
@@ -71,7 +71,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         let descriptor = ObjcMapper.makeDescriptor(
             capabilities: [capability],
             priority: TaskPriority.normal.rawValue,
-            timeout: timeout,
+            timeout: ObjcTimeout.resolve(wire: timeout),
             maxRetries: 0,
             metadata: [:]
         )
@@ -105,9 +105,9 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
             let result: NSObject? = await store.scheduleTaskAndWait(descriptor) {
                 taskBox.value()
             }
-            (queue ?? .main).async(execute: {
+            ObjcDelivery.on(queue) {
                 completionBox.value(result)
-            })
+            }
         }
     }
 

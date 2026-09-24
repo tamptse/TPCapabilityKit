@@ -84,17 +84,18 @@ struct ObjcFastPathAgreementTests {
 
     @Test func timeoutCompatPinnedThroughDescriptor() {
         let omitted = ObjcTaskDescriptor(capabilities: ["heavyTask"])
-        #expect(omitted.underlying.timeout == ObjcMapper.omittedTimeout)
-        #expect(omitted.underlying.timeout == ObjcMapper.resolveTimeout(wire: nil))
+        #expect(omitted.underlying.timeout == 30.0)
+        #expect(omitted.hasExplicitTimeout)
+        #expect(omitted.timeout == 30.0)
 
         let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
         #expect(negative.underlying.timeout == nil)
-        #expect(negative.underlying.timeout == ObjcMapper.resolveTimeout(wire: -1))
         #expect(!negative.hasExplicitTimeout)
+        #expect(negative.timeout == 30.0)
 
         let explicit = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: 60.0)
         #expect(explicit.underlying.timeout == 60.0)
-        #expect(explicit.underlying.timeout == ObjcMapper.resolveTimeout(wire: 60.0))
         #expect(explicit.hasExplicitTimeout)
+        #expect(explicit.timeout == 60.0)
     }
 }

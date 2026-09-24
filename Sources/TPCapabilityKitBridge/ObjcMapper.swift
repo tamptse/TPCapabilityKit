@@ -1,33 +1,68 @@
 import Foundation
 import TPCapabilityKit
 
-/// Single mapping point between Objective-C primitives and Swift domain types.
-@usableFromInline enum ObjcMapper {
+/// Mapper-internal timeout form owning the omitted/unspecified/explicit fork once.
+///
+/// The @objc boundary spells timeout as a non-optional TimeInterval (negative
+/// means unspecified), and Swift default arguments cannot distinguish an
+/// omitted call from an explicit pin value — while both pin the compat
+/// literal as explicit with identical downstream readings. Wire equal to the
+/// pin literal therefore collapses to omitted, keeping three live branches at
+/// this one site.
+enum ObjcTimeout: Sendable {
+    case omitted
+    case unspecified
+    case explicit(TimeInterval)
+
     /// Pinned compat default carried as explicit for omitted wire. Literal on
     /// purpose: it must never follow a reconfigured Swift default. Deadline
     /// construction stays the sole Swift resolver for nil timeouts.
-    @usableFromInline static let omittedTimeout: TimeInterval = 30.0
+    static let pinnedDefault: TimeInterval = 30.0
 
-    /// Single statement of ObjC timeout compat, shared by both descriptor
-    /// initializers and the wait-then-run entry: omitted (nil wire) pins the
-    /// compat default as explicit; wire-negative means unspecified
-    /// (nil, scheduler default applies at Deadline construction); explicit non-negative
-    /// travels as explicit. Swift nil (wrapped descriptors) resolves at
-    /// Deadline construction and never crosses this resolver.
-    static func resolveTimeout(wire: TimeInterval?) -> TimeInterval? {
-        guard let wire else { return omittedTimeout }
-        return wire < 0 ? nil : wire
+    /// Single statement of ObjC timeout compat: omitted pins the compat
+    /// default as explicit; wire-negative means unspecified (nil, scheduler
+    /// default applies at Deadline construction); explicit non-negative
+    /// travels as explicit.
+    static func resolve(wire: TimeInterval) -> ObjcTimeout {
+        if wire < 0 { return .unspecified }
+        if wire == pinnedDefault { return .omitted }
+        return .explicit(wire)
     }
+
+    /// Domain reading: omitted pins the literal as explicit, unspecified
+    /// stays nil for Deadline construction, explicit travels unchanged.
+    var resolved: TimeInterval? {
+        switch self {
+        case .omitted: Self.pinnedDefault
+        case .unspecified: nil
+        case .explicit(let value): value
+        }
+    }
+
+    /// Collapsed display reading: the stored value when explicit, otherwise
+    /// the pinned compat default.
+    static func display(for descriptor: TaskDescriptor) -> TimeInterval {
+        descriptor.timeout ?? pinnedDefault
+    }
+
+    /// Exact inverse of the display fallback above: true exactly when display
+    /// returns the stored value rather than the pin.
+    static func isExplicit(for descriptor: TaskDescriptor) -> Bool {
+        descriptor.timeout != nil
+    }
+}
+
+/// Single mapping point between Objective-C primitives and Swift domain types.
+@usableFromInline enum ObjcMapper {
+    /// Compat spelling of the pin literal, owned by `ObjcTimeout`.
+    @usableFromInline static let omittedTimeout: TimeInterval = ObjcTimeout.pinnedDefault
 
     static func displayTimeout(for descriptor: TaskDescriptor) -> TimeInterval {
-        descriptor.timeout ?? omittedTimeout
+        ObjcTimeout.display(for: descriptor)
     }
 
-    /// Whether the descriptor carries an explicit timeout: the exact inverse
-    /// of the `displayTimeout` fallback above, so the display reading and the
-    /// explicitness flag agree through this one mapper-owned statement.
     static func hasExplicitTimeout(for descriptor: TaskDescriptor) -> Bool {
-        descriptor.timeout != nil
+        ObjcTimeout.isExplicit(for: descriptor)
     }
 
     static func capability(from string: String) -> Capability {
@@ -46,7 +81,7 @@ import TPCapabilityKit
         id: String? = nil,
         capabilities: [String],
         priority: Int,
-        timeout: TimeInterval,
+        timeout: ObjcTimeout,
         maxRetries: Int,
         metadata: [String: String]
     ) -> TaskDescriptor {
@@ -54,7 +89,7 @@ import TPCapabilityKit
             id: id ?? UUID().uuidString,
             requiredCapabilities: Set(capabilities.map { capability(from: $0) }),
             priority: taskPriority(from: priority),
-            timeout: resolveTimeout(wire: timeout),
+            timeout: timeout.resolved,
             maxRetries: maxRetries,
             metadata: metadata
         )

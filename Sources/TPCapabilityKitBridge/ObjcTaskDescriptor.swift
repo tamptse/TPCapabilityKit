@@ -30,7 +30,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     public let underlying: TaskDescriptor
 
     /// Creates a new task descriptor. Timeout compat follows the single
-    /// mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
+    /// mapper-owned fork (see `ObjcTimeout.resolve`).
     /// - Parameters:
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
@@ -50,7 +50,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
             id: nil,
             capabilities: capabilities,
             priority: priority,
-            timeout: timeout,
+            timeout: ObjcTimeout.resolve(wire: timeout),
             maxRetries: maxRetries,
             metadata: metadata
         )
@@ -58,7 +58,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// Creates a new task descriptor with a client-chosen identifier.
     /// The identifier survives the Bridge round-trip, so cancel-by-id works from ObjC.
-    /// Timeout compat follows the single mapper-owned resolver (see `ObjcMapper.resolveTimeout`).
+    /// Timeout compat follows the single mapper-owned fork (see `ObjcTimeout.resolve`).
     /// - Parameters:
     ///   - clientId: Client-chosen task identifier, preserved as the descriptor id.
     ///   - capabilities: Array of capability strings required.
@@ -80,7 +80,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
             id: clientId,
             capabilities: capabilities,
             priority: priority,
-            timeout: timeout,
+            timeout: ObjcTimeout.resolve(wire: timeout),
             maxRetries: maxRetries,
             metadata: metadata
         )
@@ -90,7 +90,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         id: String?,
         capabilities: [String],
         priority: Int,
-        timeout: TimeInterval,
+        timeout: ObjcTimeout,
         maxRetries: Int,
         metadata: [String: String]
     ) {

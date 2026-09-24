@@ -1,16 +1,15 @@
 import Foundation
 
 /// Concurrency limiter keyed by Capability sets, holders owned by task identity.
-/// One scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
-/// scope-exit release with the identity guard inside derived from the Lease
-/// so a displaced-active row's stale scope-exit defer cannot release
-/// the new holder's slot.
-/// Displaced-active then self-heals: old defer no-ops, new holder keeps its slot.
+/// Sole admission seam is `withHold(for:_:)` owning admission, FIFO wake order,
+/// cancellable wait, and scope-exit release with the identity guard inside
+/// derived from the Lease so a displaced-active row's stale scope-exit cannot
+/// release the new holder's slot.
+/// Displaced-active then self-heals: old scope-exit no-ops, new holder keeps its slot.
 final class ConcurrencyController: @unchecked Sendable {
-    enum HoldAdmission: Sendable, Equatable {
+    private enum HoldAdmission: Sendable, Equatable {
         case admitted
         case parked
-        /// Same task already holds or waits; rejected instead of absorbed.
         case duplicate
     }
 
@@ -41,7 +40,15 @@ final class ConcurrencyController: @unchecked Sendable {
         }
     }
 
-    internal func acquire(_ lease: Lease) async -> Bool {
+    /// Sole admission seam: runs `body` with whether the hold was admitted,
+    /// releasing on scope exit when admitted. Missed release is unrepresentable.
+    internal func withHold<R: Sendable>(for lease: Lease, _ body: (Bool) async -> R) async -> R {
+        guard await acquire(lease) else { return await body(false) }
+        defer { release(lease) }
+        return await body(true)
+    }
+
+    private func acquire(_ lease: Lease) async -> Bool {
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 let decision = self.park(lease) { admitted in
@@ -64,7 +71,7 @@ final class ConcurrencyController: @unchecked Sendable {
     }
 
     /// Newcomers never overtake queued waiters.
-    internal func park(
+    private func park(
         _ lease: Lease,
         resume: @Sendable @escaping (Bool) -> Void
     ) -> HoldAdmission {
@@ -93,7 +100,7 @@ final class ConcurrencyController: @unchecked Sendable {
 
     /// Removes a parked waiter and resumes it with false; owner mismatch no-ops
     /// so cancelling one lease never yanks another holder's wait.
-    internal func cancel(_ lease: Lease) {
+    private func cancel(_ lease: Lease) {
         let taskId = lease.task.id
         let owner = ObjectIdentifier(lease)
         var resume: (@Sendable (Bool) -> Void)?
@@ -104,7 +111,7 @@ final class ConcurrencyController: @unchecked Sendable {
         resume?(false)
     }
 
-    internal func release(_ lease: Lease) {
+    private func release(_ lease: Lease) {
         let taskId = lease.task.id
         let owner = ObjectIdentifier(lease)
         var toResume: (@Sendable (Bool) -> Void)?

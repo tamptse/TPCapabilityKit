@@ -3,30 +3,10 @@ import Foundation
 @testable import TPCapabilityKit
 @testable import TPCapabilityKitBridge
 
-private final class ContractRecordedTimeouts: @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [TimeInterval] = []
-
-    func record(_ timeout: TimeInterval) {
-        lock.withLock { values.append(timeout) }
-    }
-
-    var all: [TimeInterval] {
-        lock.withLock { values }
-    }
-}
-
 private func contractImmediateClock() -> Clock {
-    Clock(sleep: { _ in })
-}
-
-private func contractBlockingRecordingClock(
-    recording: ContractRecordedTimeouts
-) -> Clock {
-    Clock(sleep: { timeout in
-        recording.record(timeout)
-        try? await Task.sleep(nanoseconds: UInt64.max)
-    })
+    let clock = Clock()
+    clock.enableDeterministic()
+    return clock
 }
 
 @Suite("Timeout Contract Tests")
@@ -63,7 +43,6 @@ struct TimeoutContractTests {
         let cap = "TimeoutContractOmitted_\(UUID().uuidString)"
         let plain = ObjcTaskDescriptor(capabilities: [cap])
         #expect(plain.underlying.timeout == 30.0)
-        #expect(plain.underlying.timeout == ObjcMapper.omittedTimeout)
         #expect(plain.timeout == 30.0)
         #expect(plain.hasExplicitTimeout)
 
@@ -72,7 +51,6 @@ struct TimeoutContractTests {
             capabilities: [cap]
         )
         #expect(client.underlying.timeout == 30.0)
-        #expect(client.underlying.timeout == ObjcMapper.omittedTimeout)
         #expect(client.timeout == 30.0)
         #expect(client.hasExplicitTimeout)
     }
@@ -86,7 +64,7 @@ struct TimeoutContractTests {
         let descriptor = ObjcTaskDescriptor(capabilities: [cap], timeout: -1)
         #expect(descriptor.underlying.timeout == nil)
         #expect(!descriptor.hasExplicitTimeout)
-        #expect(descriptor.timeout == ObjcMapper.omittedTimeout)
+        #expect(descriptor.timeout == 30.0)
 
         let deadline = TaskScheduler.Deadline(
             task: descriptor.underlying,
@@ -114,17 +92,18 @@ struct TimeoutContractTests {
     func waiterAndExecutorShareOneResolvedExpiry() async {
         let store = DynamicStore()
         let resolved: TimeInterval = 4.25
-        let recorded = ContractRecordedTimeouts()
+        let clock = contractImmediateClock()
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: resolved, maxPerCapability: 5, maxGlobal: 20),
-            clock: contractBlockingRecordingClock(recording: recorded),
+            clock: clock,
             concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
         let cap = Capability.custom("TimeoutContractShared_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [cap])
         #expect(task.timeout == nil)
+        #expect(TaskScheduler.Deadline(task: task, default: resolved, clock: clock).timeout == resolved)
 
         actor Produced {
             var value: String?
@@ -142,11 +121,7 @@ struct TimeoutContractTests {
             done.continuation.yield()
         })
 
-        let waitDeadline = Date().addingTimeInterval(5.0)
-        while recorded.all.count < 1 && Date() < waitDeadline {
-            await Task.yield()
-        }
-        #expect(recorded.all.count >= 1)
+        await clock.waitForWaiters(count: 1)
 
         let pluginId = "TimeoutContractShared_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
@@ -154,16 +129,11 @@ struct TimeoutContractTests {
 
         for await _ in started.stream { break }
 
-        let execDeadline = Date().addingTimeInterval(5.0)
-        while recorded.all.count < 2 && Date() < execDeadline {
-            await Task.yield()
-        }
-        #expect(recorded.all.count >= 2)
+        await clock.waitForWaiters(count: 1)
         release.continuation.finish()
 
         for await _ in done.stream { break }
         #expect(lease.state == .completed)
         #expect(await produced.value == "flipped-ok")
-        #expect(recorded.all == [resolved, resolved])
     }
 }

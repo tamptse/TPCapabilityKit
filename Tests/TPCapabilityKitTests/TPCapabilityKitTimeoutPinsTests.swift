@@ -2,25 +2,10 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
-private final class RecordedTimeouts: @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [TimeInterval] = []
-
-    func record(_ timeout: TimeInterval) {
-        lock.withLock { values.append(timeout) }
-    }
-
-    var all: [TimeInterval] {
-        lock.withLock { values }
-    }
-}
-
-private func immediateClock(recording: RecordedTimeouts? = nil) -> Clock {
-    Clock(
-        sleep: { timeout in
-            recording?.record(timeout)
-        }
-    )
+private func immediateClock() -> Clock {
+    let clock = Clock()
+    clock.enableDeterministic()
+    return clock
 }
 
 @Suite("Timeout Pins Tests")
@@ -28,11 +13,11 @@ struct TimeoutPinsTests {
     @Test("configured default applies to waiter when task timeout is nil")
     func defaultTimeoutAppliesToWaiter() async {
         let store = DynamicStore()
-        let recorded = RecordedTimeouts()
+        let clock = immediateClock()
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
-            clock: immediateClock(recording: recorded),
+            clock: clock,
             concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
@@ -41,21 +26,23 @@ struct TimeoutPinsTests {
         )
         #expect(task.timeout == nil)
 
-        let result: String? = await scheduler.scheduleAndWait(task) {
+        async let result: String? = scheduler.scheduleAndWait(task) {
             return "should-not-run"
         }
+        await clock.waitForWaiters(count: 1)
+        await clock.advance(by: 0.3)
 
-        #expect(result == nil)
-        #expect(recorded.all == [0.3])
+        #expect(await result == nil)
     }
 
     @Test("nil timeout keeps nil in lease; Deadline resolves to configured default once")
     func nilTimeoutResolvesOnceAtEnqueue() async {
         let store = DynamicStore()
+        let clock = immediateClock()
         let scheduler = TaskScheduler(
             store: store,
             configuration: .init(defaultTimeout: 0.3, maxPerCapability: 5, maxGlobal: 20),
-            clock: immediateClock(),
+            clock: clock,
             concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
         )
 
@@ -70,6 +57,9 @@ struct TimeoutPinsTests {
         })
         #expect(lease.task.timeout == nil)
         #expect(task.timeout == nil)
+
+        await clock.waitForWaiters(count: 1)
+        await clock.advance(by: 0.3)
 
         for await _ in done.stream { break }
         #expect(lease.state == .expired)

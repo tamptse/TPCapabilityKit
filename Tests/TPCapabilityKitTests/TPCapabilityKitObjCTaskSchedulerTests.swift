@@ -138,21 +138,21 @@ struct ObjcTaskDescriptorTests {
     }
 
     @Test func descriptorConstructionIsOneSharedPath() {
-        let auto = ObjcMapper.makeDescriptor(
+        let auto = ObjcTaskDescriptor(
             capabilities: ["heavyTask"], priority: 4, timeout: 60.0,
             maxRetries: 2, metadata: ["source": "test"]
         )
-        let explicit = ObjcMapper.makeDescriptor(
-            id: "fixed-id",
+        let explicit = ObjcTaskDescriptor(
+            clientId: "fixed-id",
             capabilities: ["heavyTask"], priority: 4, timeout: 60.0,
             maxRetries: 2, metadata: ["source": "test"]
         )
 
         #expect(!auto.id.isEmpty)
         #expect(explicit.id == "fixed-id")
-        #expect(auto.requiredCapabilities == explicit.requiredCapabilities)
+        #expect(Set(auto.capabilities) == Set(explicit.capabilities))
         #expect(auto.priority == explicit.priority)
-        #expect(auto.timeout == explicit.timeout)
+        #expect(auto.underlying.timeout == explicit.underlying.timeout)
         #expect(auto.maxRetries == explicit.maxRetries)
         #expect(auto.metadata == explicit.metadata)
     }
@@ -198,7 +198,7 @@ struct ObjcLeaseTests {
         #expect(objcLease.underlying.activatedAt != nil)
         
         // Complete
-        lease.complete(with: "result")
+        lease.terminalize(.completed("result"))
         #expect(lease.state == .completed)
         #expect(objcLease.underlying.completedAt != nil)
         #expect(objcLease.underlying.result as? String == "result")
@@ -211,7 +211,7 @@ struct ObjcLeaseTests {
         
         lease.activate()
         struct TestError: Error {}
-        lease.fail(with: TestError())
+        lease.terminalize(.failed(TestError()))
         
         if case .failed = lease.state {
             // Expected
@@ -240,7 +240,7 @@ struct ObjcLeaseTests {
 
         #expect(objcLease.state == .active)
 
-        lease.complete(with: "result")
+        lease.terminalize(.completed("result"))
 
         #expect(objcLease.state == .completed)
         #expect(objcLease.result as? String == "result")

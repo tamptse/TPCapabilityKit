@@ -2,21 +2,6 @@ import Testing
 import Foundation
 @testable import TPCapabilityKit
 
-private final class ResumeLog: @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [(String, Bool)] = []
-
-    func recorder(for id: String) -> @Sendable (Bool) -> Void {
-        { admitted in
-            self.lock.withLock { self.values.append((id, admitted)) }
-        }
-    }
-
-    var all: [(String, Bool)] {
-        lock.withLock { values }
-    }
-}
-
 private func makeHoldLease(id: String) -> Lease {
     Lease(task: TaskDescriptor(id: id, requiredCapabilities: [.heavyTask]))
 }
@@ -25,177 +10,323 @@ private func holdController() -> ConcurrencyController {
     ConcurrencyController(maxPerCapability: 1, maxGlobal: 1)
 }
 
+private actor OrderLog {
+    private var values: [(String, Bool)] = []
+    func append(_ id: String, _ admitted: Bool) { values.append((id, admitted)) }
+    var all: [(String, Bool)] { values }
+    var ids: [String] { values.map { $0.0 } }
+}
+
 @Suite("Slot Hold Tests")
 struct SlotHoldTests {
-    @Test("admits inline when free and frees on release")
-    func admitAndRelease() {
+    @Test("admits inline when free and frees on scope exit")
+    func admitAndRelease() async {
         let controller = holdController()
-        let log = ResumeLog()
         let first = makeHoldLease(id: "a")
         let second = makeHoldLease(id: "b")
 
-        #expect(controller.park(first, resume: log.recorder(for: "a")) == .admitted)
-        #expect(log.all.isEmpty)
+        let firstAdmitted = await controller.withHold(for: first) { $0 }
+        #expect(firstAdmitted)
 
-        controller.release(first)
-        #expect(log.all.isEmpty)
-
-        #expect(controller.park(second, resume: log.recorder(for: "b")) == .admitted)
+        let secondAdmitted = await controller.withHold(for: second) { $0 }
+        #expect(secondAdmitted)
     }
 
     @Test("wakes parked waiters in FIFO order")
-    func fifoWakeOrder() {
+    func fifoWakeOrder() async {
         let controller = holdController()
-        let log = ResumeLog()
-        let leaseA = makeHoldLease(id: "a")
+        let log = OrderLog()
+        let holder = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
         let leaseC = makeHoldLease(id: "c")
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
 
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
-        #expect(controller.park(leaseC, resume: log.recorder(for: "c")) == .parked)
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                await log.append("holder", admitted)
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+            }
+        }
+        for await _ in entered.stream { break }
 
-        controller.release(leaseA)
-        #expect(log.all.map { $0.0 } == ["b"])
-        #expect(log.all.map { $0.1 } == [true])
+        let taskB = Task {
+            await controller.withHold(for: leaseB) { admitted in
+                await log.append("b", admitted)
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let taskC = Task {
+            await controller.withHold(for: leaseC) { admitted in
+                await log.append("c", admitted)
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        release.continuation.finish()
+        await holderTask.value
+        await taskB.value
+        await taskC.value
 
-        controller.release(leaseB)
-        #expect(log.all.map { $0.0 } == ["b", "c"])
+        let ids = await log.ids
+        #expect(ids == ["holder", "b", "c"])
+        let all = await log.all
+        #expect(all.allSatisfy { $0.1 })
     }
 
     @Test("cancelled waiter is skipped on wake")
-    func cancelSkipsWaiter() {
+    func cancelSkipsWaiter() async {
         let controller = holdController()
-        let log = ResumeLog()
-        let leaseA = makeHoldLease(id: "a")
+        let log = OrderLog()
+        let holder = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
         let leaseC = makeHoldLease(id: "c")
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
 
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
-        #expect(controller.park(leaseC, resume: log.recorder(for: "c")) == .parked)
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                await log.append("holder", admitted)
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+            }
+        }
+        for await _ in entered.stream { break }
 
-        controller.cancel(leaseB)
-        #expect(log.all.map { $0.0 } == ["b"])
-        #expect(log.all.map { $0.1 } == [false])
+        let taskB = Task {
+            await controller.withHold(for: leaseB) { admitted in
+                await log.append("b", admitted)
+                return admitted
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let taskC = Task {
+            await controller.withHold(for: leaseC) { admitted in
+                await log.append("c", admitted)
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        taskB.cancel()
+        let bAdmitted = await taskB.value
+        #expect(!bAdmitted)
 
-        controller.release(leaseA)
-        #expect(log.all.map { $0.0 } == ["b", "c"])
-        #expect(log.all.last?.1 == true)
+        release.continuation.finish()
+        await holderTask.value
+        await taskC.value
+
+        let ids = await log.ids
+        #expect(ids == ["holder", "b", "c"])
+        let all = await log.all
+        #expect(all[1].1 == false)
+        #expect(all[2].1 == true)
     }
 
     @Test("cancel with unknown id or wrong owner is a no-op")
-    func cancelMismatchNoops() {
+    func cancelMismatchNoops() async {
         let controller = holdController()
-        let log = ResumeLog()
-        let leaseA = makeHoldLease(id: "a")
+        let log = OrderLog()
+        let holder = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
-        let missing = makeHoldLease(id: "missing")
-        let impostorB = makeHoldLease(id: "b")
+        let unrelated = makeHoldLease(id: "unrelated")
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
 
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                await log.append("holder", admitted)
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+            }
+        }
+        for await _ in entered.stream { break }
 
-        controller.cancel(missing)
-        controller.cancel(impostorB)
-        #expect(log.all.isEmpty)
+        let taskB = Task {
+            await controller.withHold(for: leaseB) { admitted in
+                await log.append("b", admitted)
+                return admitted
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let unrelatedTask = Task {
+            await controller.withHold(for: unrelated) { admitted in
+                await log.append("unrelated", admitted)
+                return admitted
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        unrelatedTask.cancel()
+        let unrelatedAdmitted = await unrelatedTask.value
+        #expect(!unrelatedAdmitted)
 
-        controller.release(leaseA)
-        #expect(log.all.map { $0.0 } == ["b"])
-        #expect(log.all.map { $0.1 } == [true])
+        release.continuation.finish()
+        let bAdmitted = await taskB.value
+        await holderTask.value
+        #expect(bAdmitted)
+
+        let ids = await log.ids
+        #expect(ids == ["holder", "unrelated", "b"])
     }
 
     @Test("double acquire is rejected instead of absorbed")
-    func doubleAcquireRejected() {
+    func doubleAcquireRejected() async {
         let controller = holdController()
-        let log = ResumeLog()
-        let leaseA = makeHoldLease(id: "a")
+        let holder = makeHoldLease(id: "a")
         let impostorA = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
 
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a2")) == .duplicate)
-        #expect(log.all.isEmpty)
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+                return admitted
+            }
+        }
+        for await _ in entered.stream { break }
 
-        controller.release(impostorA)
-        #expect(log.all.isEmpty)
+        let duplicateAdmitted = await controller.withHold(for: holder) { $0 }
+        #expect(!duplicateAdmitted)
 
-        controller.release(leaseA)
-        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .admitted)
+        let impostorAdmitted = await controller.withHold(for: impostorA) { $0 }
+        #expect(!impostorAdmitted)
+
+        release.continuation.finish()
+        #expect(await holderTask.value)
+
+        let bAdmitted = await controller.withHold(for: leaseB) { $0 }
+        #expect(bAdmitted)
     }
 
-    @Test("double release wakes at most once")
-    func doubleReleaseWakesOnce() {
+    @Test("scope exit wakes at most once")
+    func doubleReleaseWakesOnce() async {
         let controller = holdController()
-        let log = ResumeLog()
-        let leaseA = makeHoldLease(id: "a")
+        let log = OrderLog()
+        let holder = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
 
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
-        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .parked)
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                await log.append("holder", admitted)
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+            }
+        }
+        for await _ in entered.stream { break }
 
-        controller.release(leaseA)
-        controller.release(leaseA)
-        #expect(log.all.map { $0.0 } == ["b"])
+        let taskB = Task {
+            await controller.withHold(for: leaseB) { admitted in
+                await log.append("b", admitted)
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        release.continuation.finish()
+        await holderTask.value
+        await taskB.value
 
-        controller.release(leaseB)
-        #expect(log.all.map { $0.0 } == ["b"])
+        let ids = await log.ids
+        #expect(ids == ["holder", "b"])
+
+        let leaseC = makeHoldLease(id: "c")
+        let cAdmitted = await controller.withHold(for: leaseC) { $0 }
+        #expect(cAdmitted)
+        let idsAfter = await log.ids
+        #expect(idsAfter == ["holder", "b"])
     }
 
     @Test("same-id new owner retires the displaced waiter")
-    func sameIdDisplacementRetiresOldWaiter() {
+    func sameIdDisplacementRetiresOldWaiter() async {
         let controller = holdController()
-        let log = ResumeLog()
+        let log = OrderLog()
         let holder = makeHoldLease(id: "h")
         let old = makeHoldLease(id: "x")
         let new = makeHoldLease(id: "x")
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
 
-        #expect(controller.park(holder, resume: log.recorder(for: "h")) == .admitted)
-        #expect(controller.park(old, resume: log.recorder(for: "old")) == .parked)
-        #expect(controller.park(new, resume: log.recorder(for: "new")) == .parked)
-        #expect(log.all.map { $0.0 } == ["old"])
-        #expect(log.all.map { $0.1 } == [false])
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                await log.append("holder", admitted)
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+            }
+        }
+        for await _ in entered.stream { break }
 
-        controller.release(holder)
-        #expect(log.all.map { $0.0 } == ["old", "new"])
-        #expect(log.all.last?.1 == true)
+        let oldTask = Task {
+            await controller.withHold(for: old) { admitted in
+                await log.append("old", admitted)
+                return admitted
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let newTask = Task {
+            await controller.withHold(for: new) { admitted in
+                await log.append("new", admitted)
+                return admitted
+            }
+        }
+        let oldAdmitted = await oldTask.value
+        #expect(!oldAdmitted)
+
+        release.continuation.finish()
+        let newAdmitted = await newTask.value
+        await holderTask.value
+        #expect(newAdmitted)
+
+        let ids = await log.ids
+        #expect(ids == ["holder", "old", "new"])
     }
 
-    @Test("acquire releases on scope exit through the shared release")
+    @Test("withHold releases on scope exit")
     func acquireScopedRelease() async {
         let controller = holdController()
         let leaseA = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
 
         func scoped() async -> Int {
-            guard await controller.acquire(leaseA) else { return -1 }
-            defer { controller.release(leaseA) }
-            return 42
+            await controller.withHold(for: leaseA) { admitted in
+                guard admitted else { return -1 }
+                return 42
+            }
         }
 
         let value = await scoped()
         #expect(value == 42)
 
-        let log = ResumeLog()
-        #expect(controller.park(leaseB, resume: log.recorder(for: "b")) == .admitted)
+        let bAdmitted = await controller.withHold(for: leaseB) { $0 }
+        #expect(bAdmitted)
     }
 
     @Test("cancelled acquire never admits")
     func cancelledAcquireNeverAdmits() async {
         let controller = holdController()
-        let log = ResumeLog()
-        let leaseA = makeHoldLease(id: "a")
+        let holder = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
-        #expect(controller.park(leaseA, resume: log.recorder(for: "a")) == .admitted)
+        let release = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
+
+        let holderTask = Task {
+            await controller.withHold(for: holder) { admitted in
+                entered.continuation.yield()
+                for await _ in release.stream { break }
+                return admitted
+            }
+        }
+        for await _ in entered.stream { break }
 
         let waiter = Task {
-            await controller.acquire(leaseB)
+            await controller.withHold(for: leaseB) { $0 }
         }
         waiter.cancel()
         #expect(await waiter.value == false)
-        #expect(log.all.isEmpty)
 
-        controller.release(leaseA)
-        #expect(log.all.isEmpty)
+        release.continuation.finish()
+        await holderTask.value
+
+        let bAdmitted = await controller.withHold(for: leaseB) { $0 }
+        #expect(bAdmitted)
     }
 }

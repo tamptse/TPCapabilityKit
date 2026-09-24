@@ -3,17 +3,16 @@ import Foundation
 /// Lifecycle tracker for scheduled tasks.
 ///
 /// Transition contract (Settlement decides per ADR-0001/0004 — single reviewable
-/// decision in the Settlement table (`TaskScheduler+Settlement.swift`); guards below are safety no-ops only):
+/// decision in the Settlement table (`TaskScheduler+Path.swift`); guards below are safety no-ops only):
 /// - pending → active via `activate()`.
-/// - active → completed via `complete(with:)`; active → failed via `fail(with:)`.
-/// - Any non-terminal (pending, active) → expired via `expire()`; terminal
-///   states reject `activate`/`complete`/`fail`/`expire` as no-ops.
+/// - active → completed/failed/expired via `terminalize(_:)`; terminal
+///   states reject `activate`/`terminalize` as no-ops.
 /// - `beginRetry()` resets to pending with cleared result and `retryCount + 1`.
-/// Only `expire()` accepts pending: cancel-of-pending settles through the same
+/// Only `.expired` accepts pending: cancel-of-pending settles through the same
 /// expired path (`TaskScheduler.settle(_:as:)` row transition), so
-/// `complete`/`fail` staying active-only is intentional, not a missing case.
+/// completed/failed staying active-only is intentional, not a missing case.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
-///   (`activate`, `complete`, `fail`, `expire`, `beginRetry`) are `internal`
+///   (`activate`, `terminalize`, `beginRetry`) are `internal`
 ///   and only called by `TaskScheduler` which coordinates access via its
 ///   own lock. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
@@ -74,30 +73,29 @@ public final class Lease: @unchecked Sendable {
         activatedAt = Date()
     }
 
-    /// Marks the lease as completed with a result.
-    /// Legal only from active; pending and terminal states are no-ops per the contract above.
-    func complete(with result: Any?) {
-        guard isActive else { return }
-        self.result = result
-        state = .completed
-        completedAt = Date()
+    enum Terminal {
+        case completed(Any?)
+        case failed(Error)
+        case expired
     }
 
-    /// Marks the lease as failed with an error.
-    /// Legal only from active; pending and terminal states are no-ops per the contract above.
-    func fail(with error: Error) {
-        guard isActive else { return }
-        state = .failed(error)
-        completedAt = Date()
-    }
-
-    /// Marks the lease as expired (timeout reached).
-    /// Legal from any non-terminal state; terminal states are no-ops.
-    /// Pending is accepted here so cancel-of-pending can settle via Settlement.
-    func expire() {
-        guard !isTerminal else { return }
-        state = .expired
-        completedAt = Date()
+    /// Sole terminal writer; Settlement is the only caller.
+    func terminalize(_ terminal: Terminal) {
+        switch terminal {
+        case .completed(let result):
+            guard isActive else { return }
+            self.result = result
+            state = .completed
+            completedAt = Date()
+        case .failed(let error):
+            guard isActive else { return }
+            state = .failed(error)
+            completedAt = Date()
+        case .expired:
+            guard !isTerminal else { return }
+            state = .expired
+            completedAt = Date()
+        }
     }
 
     /// Whether retry budget remains (`retryCount < task.maxRetries`).
@@ -129,7 +127,7 @@ public final class Lease: @unchecked Sendable {
 
     /// Whether the lease is currently active.
     /// Internal so Settlement can route failures for pending leases to expiry
-    /// (`fail()` below is active-only by contract).
+    /// (completed/failed are active-only by contract).
     var isActive: Bool {
         if case .active = state { return true }
         return false
