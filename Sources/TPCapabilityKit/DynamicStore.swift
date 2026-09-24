@@ -84,14 +84,12 @@ public final class DynamicStore: @unchecked Sendable {
     ///   - pluginId: Unique identifier of the target plugin.
     ///   - capabilities: Set of capabilities the plugin provides.
     func registerCapability(for pluginId: String, capabilities: Set<Capability>) {
-        guard validatePluginId(pluginId) else { return }
         registry.register(for: pluginId, capabilities: capabilities)
     }
 
     /// Unregisters all capabilities for a plugin identifier.
     /// - Parameter pluginId: Unique identifier of the target plugin.
     func unregisterCapability(for pluginId: String) {
-        guard validatePluginId(pluginId) else { return }
         registry.unregister(for: pluginId)
     }
 
@@ -106,7 +104,6 @@ public final class DynamicStore: @unchecked Sendable {
     /// - Parameter pluginId: Unique identifier of the target plugin.
     /// - Returns: Set of capabilities, or empty if plugin has none registered.
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
-        guard validatePluginId(pluginId) else { return [] }
         return registry.queryCapabilities(for: pluginId)
     }
 
