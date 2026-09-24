@@ -1,30 +1,6 @@
 import Foundation
 
 extension TaskScheduler {
-    enum Decision {
-        case retry
-        case complete(Any?)
-        case fail
-        case expire
-    }
-}
-
-/// Single terminal decision per ADR-0001/0004; Settlement owns retry budget,
-/// void policy, and waiter preservation while `terminalize` stays a safety no-op.
-func decide(lease: Lease, outcome: TaskScheduler.Settlement) -> TaskScheduler.Decision {
-    switch outcome {
-    case .completed(let result):
-        if result == nil, lease.canRetry { return .retry }
-        if result != nil { return .complete(result) }
-        return lease.isActive ? .fail : .expire
-    case .failed:
-        return lease.isActive ? .fail : .expire
-    case .expired, .cancelled:
-        return .expire
-    }
-}
-
-extension TaskScheduler {
     private enum Place: Sendable {
         case pending
         case parked
@@ -232,6 +208,7 @@ extension TaskScheduler {
             return (row.waiters, row.waiter)
         }
 
+        // Priority FIFO order only; place and counts live in rows/snapshot.
         private struct OrderIndex: Sendable {
             private static let dequeueOrder = TaskPriority.allCases.sorted(by: >)
 

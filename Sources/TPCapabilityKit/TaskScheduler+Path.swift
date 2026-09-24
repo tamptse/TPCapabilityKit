@@ -86,6 +86,9 @@ extension TaskScheduler {
     /// `gateAdmitted`. The hold exits when the activation scope ends, regardless
     /// of whether settlement retried, completed, failed, or expired.
     private func activate(_ lease: Lease, deadline: Deadline) async {
+        // TOCTOU window: this entry check vs the post-admission re-check in
+        // gateAdmitted across the hold suspension below; the entry exit is
+        // review-only per the ActivationGateTests admission.
         guard isAvailable(for: lease.task) else {
             settle(lease, as: .failed)
             return
@@ -136,6 +139,13 @@ extension TaskScheduler {
         case failed
         case expired
         case cancelled
+    }
+
+    enum Decision {
+        case retry
+        case complete(Any?)
+        case fail
+        case expire
     }
 
     func settle(_ lease: Lease, result: Any?, timedOut: Bool, execution: (@Sendable () async -> Any?)?) async {
@@ -196,3 +206,18 @@ extension TaskScheduler {
 
 /// Internal error type for task execution failures.
 private struct TaskExecutionError: Error, Sendable {}
+
+/// Single terminal decision per ADR-0001/0004; Settlement owns retry budget,
+/// void policy, and waiter preservation while `terminalize` stays a safety no-op.
+func decide(lease: Lease, outcome: TaskScheduler.Settlement) -> TaskScheduler.Decision {
+    switch outcome {
+    case .completed(let result):
+        if result == nil, lease.canRetry { return .retry }
+        if result != nil { return .complete(result) }
+        return lease.isActive ? .fail : .expire
+    case .failed:
+        return lease.isActive ? .fail : .expire
+    case .expired, .cancelled:
+        return .expire
+    }
+}
