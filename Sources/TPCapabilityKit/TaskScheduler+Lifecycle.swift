@@ -95,8 +95,7 @@ extension TaskScheduler {
 
         /// Single writer for the Lease lifecycle: the Lease mutation and the
         /// row mutation happen together here under the scheduler lock, entered
-        /// through one liveness query. Production callers use this; the
-        /// per-move methods below delegate to it.
+        /// through one liveness query.
         mutating func transition(for lease: Lease, to target: Transition) -> TransitionResult? {
             guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
                 return nil
@@ -187,25 +186,6 @@ extension TaskScheduler {
         func execution(for lease: Lease) -> (@Sendable () async -> Any?)? {
             guard let row = rows[lease.task.id], row.lease === lease else { return nil }
             return row.execution
-        }
-
-        mutating func tryActivate(for lease: Lease) -> Bool {
-            if case .activated = transition(for: lease, to: .activate) {
-                return true
-            }
-            return false
-        }
-
-        mutating func applyRetry(
-            for lease: Lease,
-            execution: (@Sendable () async -> Any?)?
-        ) {
-            _ = transition(for: lease, to: .retry(execution))
-        }
-
-        mutating func takeTerminal(for lease: Lease) -> (waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)? {
-            guard let row = takeRow(for: lease) else { return nil }
-            return (row.waiters, row.waiter)
         }
 
         // Priority FIFO order only; place and counts live in rows/snapshot.

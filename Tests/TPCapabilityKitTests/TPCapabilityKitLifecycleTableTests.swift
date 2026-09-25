@@ -25,7 +25,7 @@ struct LifecycleTableTests {
         #expect(store.beginPark(for: lease) == true)
         #expect(store.beginPark(for: lease) == false)
 
-        _ = store.takeTerminal(for: lease)
+        _ = store.transition(for: lease, to: .terminal(.expired))
         #expect(store.counts.pending == 0)
         #expect(store.counts.queued == 0)
         #expect(store.counts.parked == 0)
