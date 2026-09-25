@@ -217,9 +217,12 @@ public final class DynamicStore: @unchecked Sendable {
         scheduling.current(owner: self)
     }
 
+    internal var schedulingGenerations: StoreSchedulingGenerations {
+        scheduling
+    }
+
     internal func enableDeterministicTime() {
-        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        scheduling.enableDeterministicTime()
+        scheduling.enableDeterministicTime(owner: self)
     }
 
     internal func advanceTime(by delta: TimeInterval) async {
@@ -439,7 +442,10 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     /// gate: precede-first-use is checked against the pruned count in exactly
     /// one place, enable-once and virtual-only inside the time module. The
     /// Store keeps thin spelling-only delegation.
-    func enableDeterministicTime() {
+    /// Fresh-instance plus precede-first-use collapse to one adjacent gate
+    /// beside the pruned count; the facade forwards here so both seams agree.
+    func enableDeterministicTime(owner: DynamicStore) {
+        precondition(owner !== DynamicStore.shared, "deterministic time only on fresh instances")
         precondition(generationCount == 0, "enableDeterministicTime must precede first schedule")
         clock.enableDeterministic()
     }
