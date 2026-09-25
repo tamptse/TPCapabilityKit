@@ -172,13 +172,6 @@ extension TaskScheduler {
         case cancelled
     }
 
-    enum Decision {
-        case retry
-        case completed(Any?)
-        case failed
-        case expired
-    }
-
     func settle(_ lease: Lease, result: Any?, timedOut: Bool, execution: (@Sendable () async -> Any?)?) async {
         if timedOut {
             settle(lease, as: .expired)
@@ -187,27 +180,16 @@ extension TaskScheduler {
         settle(lease, as: .completed(result), execution: execution)
     }
 
-    /// Single terminal decision per ADR-0001/0004; Settlement owns retry budget,
-    /// void policy, and waiter preservation while `terminalize` stays a safety no-op.
-    private func decide(lease: Lease, outcome: Settlement) -> Decision {
-        switch outcome {
-        case .completed(let result):
-            if result == nil, lease.canRetry { return .retry }
-            if result != nil { return .completed(result) }
-            return lease.isActive ? .failed : .expired
-        case .failed:
-            return lease.isActive ? .failed : .expired
-        case .expired, .cancelled:
-            return .expired
-        }
-    }
-
-    /// The single row-transition step of the same path: budget check, row
-    /// transition (retry re-queue vs terminal removal), waiter
-    /// delivery/cancellation, and retry re-pump. Decides outcome and delivers
-    /// waiters but never releases the slot — the activation scope-exit `defer`
-    /// owns the single release. Cancel settles via the expired
-    /// path with no Lease state-shape change.
+    /// The single row-transition step of the same path: outcome decision and
+    /// row transition read as one locked block. Retry budget check, void
+    /// policy (nil result with budget retries; nil without budget fails when
+    /// active else expires), retry re-queue reusing the same Lease identity,
+    /// waiter delivery/cancellation, and retry re-pump all live here.
+    /// Failed outcomes drop the execution error and mint a fresh one once,
+    /// here. `cancelled` maps to `.expired` once, here, with no Lease
+    /// state-shape change. Waiters are preserved across retry and delivered
+    /// exactly once at terminal. Never releases the slot — the activation
+    /// scope-exit owns the single release.
     func settle(_ lease: Lease, as outcome: Settlement, execution: (@Sendable () async -> Any?)? = nil) {
         var waiters: [(Lease) -> Void] = []
         var waiterToCancel: Task<Void, Never>?
@@ -215,14 +197,24 @@ extension TaskScheduler {
         var didRetry = false
         lock.withLock {
             let target: LifecycleStore.Transition
-            switch decide(lease: lease, outcome: outcome) {
-            case .retry:
-                target = .retry(execution)
+            switch outcome {
             case .completed(let result):
-                target = .terminal(.completed(result))
+                if result == nil, lease.canRetry {
+                    target = .retry(execution)
+                } else if result != nil {
+                    target = .terminal(.completed(result))
+                } else if lease.isActive {
+                    target = .terminal(.failed(TaskExecutionError()))
+                } else {
+                    target = .terminal(.expired)
+                }
             case .failed:
-                target = .terminal(.failed(TaskExecutionError()))
-            case .expired:
+                if lease.isActive {
+                    target = .terminal(.failed(TaskExecutionError()))
+                } else {
+                    target = .terminal(.expired)
+                }
+            case .expired, .cancelled:
                 target = .terminal(.expired)
             }
             guard let applied = lifecycleStore.transition(for: lease, to: target) else { return }
