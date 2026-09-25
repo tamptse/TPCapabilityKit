@@ -37,5 +37,32 @@ extension TaskScheduler {
                 return first
             }
         }
+
+        func raceValue(operation: @Sendable @escaping () async -> Any?) async -> Any?? {
+            let timeout = self.timeout
+            let clock = self.clock
+            struct Box: @unchecked Sendable {
+                let value: Any?
+            }
+            return await withTaskGroup(of: Box?.self) { group in
+                group.addTask {
+                    let value = await operation()
+                    return Box(value: value)
+                }
+                group.addTask {
+                    await clock.sleep(timeout)
+                    return nil
+                }
+                guard let first = await group.next() else {
+                    group.cancelAll()
+                    return nil
+                }
+                group.cancelAll()
+                guard let box = first else {
+                    return nil
+                }
+                return .some(box.value)
+            }
+        }
     }
 }
