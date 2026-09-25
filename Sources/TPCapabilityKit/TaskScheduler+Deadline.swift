@@ -21,21 +21,11 @@ extension TaskScheduler {
         }
 
         func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
-            let timeout = self.timeout
-            let clock = self.clock
-            return await withTaskGroup(of: Bool.self) { group in
-                group.addTask(operation: operation)
-                group.addTask {
-                    await clock.sleep(timeout)
-                    return false
-                }
-                guard let first = await group.next() else {
-                    group.cancelAll()
-                    return false
-                }
-                group.cancelAll()
-                return first
+            let raced = await raceValue(operation: { await operation() })
+            guard let value = raced else {
+                return false
             }
+            return (value as? Bool) ?? false
         }
 
         func raceValue(operation: @Sendable @escaping () async -> Any?) async -> Any?? {
