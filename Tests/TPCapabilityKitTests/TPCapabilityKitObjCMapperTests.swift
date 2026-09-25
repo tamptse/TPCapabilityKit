@@ -362,3 +362,59 @@ struct ObjcTaskDescriptorTests {
         #expect(!wrapped.hasExplicitTimeout)
     }
 }
+
+struct ObjcTimeoutRoundTripTests {
+    @Test func lossyDisplayPromotesWithoutFlagButPreservesWithFlag() {
+        let pin = ObjcTimeout.pinnedDefault
+        let wrapped = ObjcTaskDescriptor(
+            underlying: TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: nil)
+        )
+        #expect(wrapped.underlying.timeout == nil)
+        #expect(wrapped.timeout == pin)
+        #expect(!wrapped.hasExplicitTimeout)
+
+        let fromDisplayAlone = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: wrapped.timeout)
+        #expect(fromDisplayAlone.underlying.timeout == pin)
+        #expect(fromDisplayAlone.hasExplicitTimeout)
+        #expect(fromDisplayAlone.timeout == pin)
+
+        let preservingWire = wrapped.hasExplicitTimeout ? wrapped.timeout : -1
+        let fromFlag = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: preservingWire)
+        #expect(fromFlag.underlying.timeout == nil)
+        #expect(!fromFlag.hasExplicitTimeout)
+        #expect(fromFlag.timeout == pin)
+
+        for wire in [60.0, pin] {
+            let explicit = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: wire)
+            #expect(explicit.underlying.timeout == wire)
+            #expect(explicit.hasExplicitTimeout)
+            let rebuilt = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: explicit.timeout)
+            #expect(rebuilt.underlying.timeout == wire)
+            #expect(rebuilt.hasExplicitTimeout)
+            let rebuiltFlagged = ObjcTaskDescriptor(
+                capabilities: ["heavyTask"],
+                timeout: explicit.hasExplicitTimeout ? explicit.timeout : -1
+            )
+            #expect(rebuiltFlagged.underlying.timeout == wire)
+            #expect(rebuiltFlagged.hasExplicitTimeout)
+        }
+    }
+
+    @Test func singleStoredTimeoutTruthAtRest() {
+        let pin = ObjcTimeout.pinnedDefault
+        let cases = [
+            ObjcTaskDescriptor(capabilities: ["heavyTask"]),
+            ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1),
+            ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: 60.0),
+            ObjcTaskDescriptor(
+                underlying: TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: nil)
+            ),
+        ]
+        for descriptor in cases {
+            #expect(descriptor.timeout == (descriptor.underlying.timeout ?? pin))
+            #expect(descriptor.hasExplicitTimeout == (descriptor.underlying.timeout != nil))
+        }
+        let mirror = Mirror(reflecting: cases[0])
+        #expect(!mirror.children.contains(where: { $0.label == "storedTimeout" }))
+    }
+}

@@ -6,7 +6,7 @@ import TPCapabilityKit
 /// The @objc boundary spells timeout as a non-optional TimeInterval (negative
 /// means unspecified). An omitted call arrives as the pin literal, which
 /// collapses to explicit on purpose per ADR-0020: downstream only distinguishes
-/// nil from non-nil, so explicit 30.0 and omitted read identically.
+/// nil from non-nil, so explicit pin and omitted read identically.
 @usableFromInline enum ObjcTimeout: Sendable {
     case unspecified
     case explicit(TimeInterval)
@@ -14,6 +14,9 @@ import TPCapabilityKit
     /// Pinned compat default carried as explicit for omitted wire. Literal on
     /// purpose: it must never follow a reconfigured Swift default. Deadline
     /// construction stays the sole Swift resolver for nil timeouts.
+    /// Display is lossy: absent displays as this pin, so rebuilding from display
+    /// alone promotes to explicit pin; honor hasExplicitTimeout (absent travels
+    /// as wire-negative) to preserve the distinction.
     @usableFromInline static let pinnedDefault: TimeInterval = 30.0
 
     /// Single statement of ObjC timeout compat: wire-negative means unspecified
