@@ -76,10 +76,16 @@ extension TaskScheduler {
         // Displaced lease terminalizes here with its row removal; waiters plus
         // park waiter return for outside-lock delivery and cancel. Slot
         // stale-evict stays after on its own lock, never nested.
+        struct EvictObligation: Sendable {
+            let taskId: String
+            let owner: ObjectIdentifier
+        }
+
         struct ExchangeResult {
             let displaced: Lease?
             let waiters: [(Lease) -> Void]
             let waiter: Task<Void, Never>?
+            let evict: EvictObligation?
         }
 
         mutating func exchange(
@@ -90,18 +96,19 @@ extension TaskScheduler {
             if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal {
                 guard let taken = takeRow(for: row.lease) else {
                     insert(lease: lease, execution: execution, waiters: waiters)
-                    return ExchangeResult(displaced: nil, waiters: [], waiter: nil)
+                    return ExchangeResult(displaced: nil, waiters: [], waiter: nil, evict: nil)
                 }
                 taken.lease.terminalize(.expired)
                 insert(lease: lease, execution: execution, waiters: waiters)
                 return ExchangeResult(
                     displaced: taken.lease,
                     waiters: taken.waiters,
-                    waiter: taken.waiter
+                    waiter: taken.waiter,
+                    evict: EvictObligation(taskId: lease.task.id, owner: ObjectIdentifier(lease))
                 )
             }
             insert(lease: lease, execution: execution, waiters: waiters)
-            return ExchangeResult(displaced: nil, waiters: [], waiter: nil)
+            return ExchangeResult(displaced: nil, waiters: [], waiter: nil, evict: nil)
         }
 
         func lease(for id: String) -> Lease? {
@@ -198,7 +205,7 @@ extension TaskScheduler {
         }
 
         enum ScheduleWaitRendezvousOutcome {
-            case parked(displaced: Lease?, waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)
+            case parked(displaced: Lease?, waiters: [(Lease) -> Void], waiter: Task<Void, Never>?, evict: EvictObligation?)
             case settledEarly(Lease)
         }
 
@@ -215,7 +222,7 @@ extension TaskScheduler {
                         return .settledEarly(lease)
                     }
                     if lease.isTerminal { return .settledEarly(lease) }
-                    return .parked(displaced: nil, waiters: [], waiter: nil)
+                    return .parked(displaced: nil, waiters: [], waiter: nil, evict: nil)
                 }
                 taken.lease.terminalize(.expired)
                 insert(lease: lease, execution: execution, waiters: [waiter])
@@ -223,14 +230,14 @@ extension TaskScheduler {
                     return .settledEarly(lease)
                 }
                 if lease.isTerminal { return .settledEarly(lease) }
-                return .parked(displaced: taken.lease, waiters: taken.waiters, waiter: taken.waiter)
+                return .parked(displaced: taken.lease, waiters: taken.waiters, waiter: taken.waiter, evict: EvictObligation(taskId: lease.task.id, owner: ObjectIdentifier(lease)))
             }
             insert(lease: lease, execution: execution, waiters: [waiter])
             guard let fresh = rows[lease.task.id], fresh.lease === lease else {
                 return .settledEarly(lease)
             }
             if lease.isTerminal { return .settledEarly(lease) }
-            return .parked(displaced: nil, waiters: [], waiter: nil)
+            return .parked(displaced: nil, waiters: [], waiter: nil, evict: nil)
         }
 
         enum FusedParkOutcome: Sendable {

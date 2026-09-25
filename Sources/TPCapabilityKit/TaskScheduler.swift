@@ -89,9 +89,14 @@ public final class TaskScheduler: @unchecked Sendable {
                 waiter(displaced)
             }
         }
-        concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
+        drainEviction(exchanged.evict)
 
         return lease
+    }
+
+    private func drainEviction(_ obligation: LifecycleStore.EvictObligation?) {
+        guard let obligation else { return }
+        concurrencyController.removeWaiter(taskId: obligation.taskId, owner: obligation.owner, match: .stale)
     }
 
     /// Schedules a task and waits for its result.
@@ -126,17 +131,16 @@ public final class TaskScheduler: @unchecked Sendable {
                 )
             }
             switch outcome {
-            case .parked(let displaced, let waiters, let waiter):
+            case .parked(let displaced, let waiters, let waiter, let evict):
                 if let displaced {
                     waiter?.cancel()
                     for waiter in waiters {
                         waiter(displaced)
                     }
                 }
-                concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
+                drainEviction(evict)
                 Task { await self.processPendingTasks() }
             case .settledEarly(let settled):
-                concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
                 resume(with: settled)
             }
         }
