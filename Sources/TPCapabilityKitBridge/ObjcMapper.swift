@@ -7,14 +7,14 @@ import TPCapabilityKit
 /// means unspecified). An omitted call arrives as the pin literal, which
 /// collapses to explicit on purpose per ADR-0020: downstream only distinguishes
 /// nil from non-nil, so explicit 30.0 and omitted read identically.
-enum ObjcTimeout: Sendable {
+@usableFromInline enum ObjcTimeout: Sendable {
     case unspecified
     case explicit(TimeInterval)
 
     /// Pinned compat default carried as explicit for omitted wire. Literal on
     /// purpose: it must never follow a reconfigured Swift default. Deadline
     /// construction stays the sole Swift resolver for nil timeouts.
-    static let pinnedDefault: TimeInterval = 30.0
+    @usableFromInline static let pinnedDefault: TimeInterval = 30.0
 
     /// Single statement of ObjC timeout compat: wire-negative means unspecified
     /// (nil, scheduler default applies at Deadline construction); every
@@ -64,9 +64,6 @@ enum ObjcTimeout: Sendable {
 
 /// Single mapping point between Objective-C primitives and Swift domain types.
 @usableFromInline enum ObjcMapper {
-    /// Compat spelling of the pin literal, owned by `ObjcTimeout`.
-    @usableFromInline static let omittedTimeout: TimeInterval = ObjcTimeout.pinnedDefault
-
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
     }

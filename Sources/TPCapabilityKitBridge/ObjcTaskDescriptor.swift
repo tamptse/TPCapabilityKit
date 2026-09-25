@@ -43,7 +43,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     @objc public convenience init(
         capabilities: [String],
         priority: Int = 2,
-        timeout: TimeInterval = ObjcMapper.omittedTimeout,
+        timeout: TimeInterval = ObjcTimeout.pinnedDefault,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
@@ -73,7 +73,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         clientId: String,
         capabilities: [String],
         priority: Int = 2,
-        timeout: TimeInterval = ObjcMapper.omittedTimeout,
+        timeout: TimeInterval = ObjcTimeout.pinnedDefault,
         maxRetries: Int = 0,
         metadata: [String: String] = [:]
     ) {
