@@ -74,6 +74,12 @@ public final class Lease: @unchecked Sendable {
         activatedAt = Date()
     }
 
+    /// Single terminal vocabulary for the Lease lifecycle, owned here.
+    /// Tasks reuses it via `TaskScheduler.Terminal` (typealias, no duplicate).
+    /// `Settlement` (Tasks input) shares this spelling for its terminal cases;
+    /// `cancelled` stays input-only and maps to `.expired` at the single settle
+    /// site. `Settlement.failed` carries no `Error`; the single transition
+    /// mints the fresh execution error when applying `.failed`.
     enum Terminal {
         case completed(Any?)
         case failed(Error)

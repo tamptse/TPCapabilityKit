@@ -158,6 +158,13 @@ extension TaskScheduler {
 
     // MARK: - Settlement (internal step of the same path)
 
+    /// Tasks-side alias to the single terminal vocabulary owned by Lease.
+    /// No duplicate terminal enum lives here.
+    typealias Terminal = Lease.Terminal
+
+    /// Settlement input vocabulary. Terminal cases share the unified
+    /// `Terminal` spelling; `cancelled` is input-only and maps to `.expired`
+    /// at the single settle site with no Lease shape change.
     enum Settlement {
         case completed(Any?)
         case failed
@@ -167,9 +174,9 @@ extension TaskScheduler {
 
     enum Decision {
         case retry
-        case complete(Any?)
-        case fail
-        case expire
+        case completed(Any?)
+        case failed
+        case expired
     }
 
     func settle(_ lease: Lease, result: Any?, timedOut: Bool, execution: (@Sendable () async -> Any?)?) async {
@@ -186,12 +193,12 @@ extension TaskScheduler {
         switch outcome {
         case .completed(let result):
             if result == nil, lease.canRetry { return .retry }
-            if result != nil { return .complete(result) }
-            return lease.isActive ? .fail : .expire
+            if result != nil { return .completed(result) }
+            return lease.isActive ? .failed : .expired
         case .failed:
-            return lease.isActive ? .fail : .expire
+            return lease.isActive ? .failed : .expired
         case .expired, .cancelled:
-            return .expire
+            return .expired
         }
     }
 
@@ -211,11 +218,11 @@ extension TaskScheduler {
             switch decide(lease: lease, outcome: outcome) {
             case .retry:
                 target = .retry(execution)
-            case .complete(let result):
+            case .completed(let result):
                 target = .terminal(.completed(result))
-            case .fail:
+            case .failed:
                 target = .terminal(.failed(TaskExecutionError()))
-            case .expire:
+            case .expired:
                 target = .terminal(.expired)
             }
             guard let applied = lifecycleStore.transition(for: lease, to: target) else { return }
