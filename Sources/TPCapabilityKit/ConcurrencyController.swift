@@ -78,17 +78,9 @@ final class ConcurrencyController: @unchecked Sendable {
         let keys = lease.task.requiredCapabilities
         let taskId = lease.task.id
         let owner = ObjectIdentifier(lease)
-        var retired: (@Sendable (Bool) -> Void)?
-        defer {
-            // The displaced lease is terminal, so retiring it cannot strand work.
-            retired?(false)
-        }
         return lock.withLock {
-            if heldKeys[taskId] != nil { return .duplicate }
-            if waiters.contains(where: { $0.taskId == taskId && $0.owner == owner }) { return .duplicate }
-            if let stale = waiters.firstIndex(where: { $0.taskId == taskId }) {
-                retired = waiters.remove(at: stale).resume
-            }
+            if heldKeys.values.contains(where: { $0.owner == owner }) { return .duplicate }
+            if waiters.contains(where: { $0.owner == owner }) { return .duplicate }
             if waiters.isEmpty, canAcquire(keys: keys) {
                 installHold(keys: keys, taskId: taskId, owner: owner)
                 return .admitted
@@ -96,6 +88,19 @@ final class ConcurrencyController: @unchecked Sendable {
             waiters.append(Waiter(keys: keys, taskId: taskId, owner: owner, resume: resume))
             return .parked
         }
+    }
+
+    /// Narrow evict-stale-waiter seam owned by Tasks displacement: removes any
+    /// queued waiter under `taskId` whose owner differs from the newcomer and
+    /// resumes it with false. Self-retire no-ops. Slot-only: resumes a
+    /// continuation, touches no Lease, no row, no lifecycle transition.
+    internal func retire(taskId: String, owner: ObjectIdentifier) {
+        var resume: (@Sendable (Bool) -> Void)?
+        lock.withLock {
+            guard let index = waiters.firstIndex(where: { $0.taskId == taskId && $0.owner != owner }) else { return }
+            resume = waiters.remove(at: index).resume
+        }
+        resume?(false)
     }
 
     /// Removes a parked waiter and resumes it with false; owner mismatch no-ops

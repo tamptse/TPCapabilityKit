@@ -88,6 +88,9 @@ public final class TaskScheduler: @unchecked Sendable {
         if let displaced {
             settle(displaced, as: .expired)
         }
+        // Settle-first keeps the retire resume-false on an already-terminal
+        // Lease; each step crosses one lock, never nested.
+        concurrencyController.retire(taskId: task.id, owner: ObjectIdentifier(lease))
 
         lock.withLock {
             lifecycleStore.insert(

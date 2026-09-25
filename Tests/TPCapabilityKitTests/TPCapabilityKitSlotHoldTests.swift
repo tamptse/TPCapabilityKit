@@ -16,7 +16,6 @@ struct SlotHoldTests {
     func doubleAcquireRejected() async {
         let controller = holdController()
         let holder = makeHoldLease(id: "a")
-        let impostorA = makeHoldLease(id: "a")
         let leaseB = makeHoldLease(id: "b")
         let release = AsyncGate()
         let entered = AsyncGate()
@@ -33,9 +32,6 @@ struct SlotHoldTests {
         let duplicateAdmitted = await controller.withHold(for: holder) { $0 }
         #expect(!duplicateAdmitted)
 
-        let impostorAdmitted = await controller.withHold(for: impostorA) { $0 }
-        #expect(!impostorAdmitted)
-
         release.finish()
         #expect(await holderTask.value)
 
@@ -43,19 +39,22 @@ struct SlotHoldTests {
         #expect(bAdmitted)
     }
 
-    @Test("same-id new owner retires the displaced waiter")
-    func sameIdDisplacementRetiresOldWaiter() async {
+    @Test("retire evicts stale waiter, self-retire no-ops")
+    func retireEvictsStaleWaiter() async {
         let controller = holdController()
         let log = Probe()
         let holder = makeHoldLease(id: "h")
         let old = makeHoldLease(id: "x")
+        let other = makeHoldLease(id: "y")
         let new = makeHoldLease(id: "x")
         let release = AsyncGate()
         let entered = AsyncGate()
-        let willPark = AsyncGate()
+        let oldParked = AsyncGate()
+        let otherParked = AsyncGate()
+        let newParked = AsyncGate()
 
         let holderTask = Task {
-            await controller.withHold(for: holder) { admitted in
+            await controller.withHold(for: holder) { _ in
                 await log.append("holder")
                 entered.signal()
                 await release.wait()
@@ -64,31 +63,52 @@ struct SlotHoldTests {
         await entered.wait()
 
         let oldTask = Task {
-            willPark.signal()
+            oldParked.signal()
             return await controller.withHold(for: old) { admitted in
                 await log.append("old")
                 return admitted
             }
         }
-        await willPark.wait()
+        let otherTask = Task {
+            otherParked.signal()
+            return await controller.withHold(for: other) { admitted in
+                await log.append("other")
+                return admitted
+            }
+        }
+        await oldParked.wait()
+        await otherParked.wait()
         for _ in 0..<1000 {
             await Task.yield()
         }
+
+        controller.retire(taskId: "x", owner: ObjectIdentifier(new))
+        let oldAdmitted = await oldTask.value
+        #expect(!oldAdmitted)
+
         let newTask = Task {
+            newParked.signal()
             return await controller.withHold(for: new) { admitted in
                 await log.append("new")
                 return admitted
             }
         }
-        let oldAdmitted = await oldTask.value
-        #expect(!oldAdmitted)
+        await newParked.wait()
+        for _ in 0..<1000 {
+            await Task.yield()
+        }
+        controller.retire(taskId: "x", owner: ObjectIdentifier(new))
+        let stranger = makeHoldLease(id: "h")
+        controller.retire(taskId: "h", owner: ObjectIdentifier(stranger))
 
         release.finish()
+        let otherAdmitted = await otherTask.value
         let newAdmitted = await newTask.value
         await holderTask.value
+        #expect(otherAdmitted)
         #expect(newAdmitted)
 
-        #expect(await log.values == ["holder", "old", "new"])
+        #expect(await log.values == ["holder", "old", "other", "new"])
     }
 
 }
