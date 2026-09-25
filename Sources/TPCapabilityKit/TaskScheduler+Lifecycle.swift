@@ -72,6 +72,38 @@ extension TaskScheduler {
             move(from: old, to: .pending)
         }
 
+        // Single locked displace-plus-insert so no half-displaced id is observable.
+        // Displaced lease terminalizes here with its row removal; waiters plus
+        // park waiter return for outside-lock delivery and cancel. Slot
+        // stale-evict stays after on its own lock, never nested.
+        struct ExchangeResult {
+            let displaced: Lease?
+            let waiters: [(Lease) -> Void]
+            let waiter: Task<Void, Never>?
+        }
+
+        mutating func exchange(
+            lease: Lease,
+            execution: (@Sendable () async -> Any?)?,
+            waiters: [(Lease) -> Void]
+        ) -> ExchangeResult {
+            if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal {
+                guard let taken = takeRow(for: row.lease) else {
+                    insert(lease: lease, execution: execution, waiters: waiters)
+                    return ExchangeResult(displaced: nil, waiters: [], waiter: nil)
+                }
+                taken.lease.terminalize(.expired)
+                insert(lease: lease, execution: execution, waiters: waiters)
+                return ExchangeResult(
+                    displaced: taken.lease,
+                    waiters: taken.waiters,
+                    waiter: taken.waiter
+                )
+            }
+            insert(lease: lease, execution: execution, waiters: waiters)
+            return ExchangeResult(displaced: nil, waiters: [], waiter: nil)
+        }
+
         func nonTerminalLease(for id: String) -> Lease? {
             guard let row = rows[id], !row.lease.isTerminal else { return nil }
             return row.lease
