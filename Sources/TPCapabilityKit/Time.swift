@@ -8,8 +8,8 @@ import Foundation
 /// `sleep` is the single seam the waiter and the executor share through
 /// `Deadline`: virtual sleep parks on the deterministic registry until
 /// `advance` expires it. Advancing wakes only expired waiters, never loses or
-/// duplicates a wakeup, and `waitForWaiters` preserves the advance/wait
-/// rendezvous tests synchronize on.
+/// duplicates a wakeup, and `waitForWaiters` preserves the adapter gate the
+/// advance/wait rendezvous tests synchronize on.
 final class Clock: @unchecked Sendable {
     private let lock = NSLock()
     private var virtual: VirtualTime?
@@ -44,7 +44,7 @@ final class Clock: @unchecked Sendable {
     func waitForWaiters(count expected: Int) async {
         let parked: VirtualTime? = lock.withLock { virtual }
         precondition(parked != nil, "deterministic time not enabled")
-        await parked!.waitForWaiters(count: expected)
+        await parked!.awaitWaiterRegistered(count: expected)
     }
 
     func advance(by delta: TimeInterval) async {
@@ -95,7 +95,7 @@ private final class VirtualTime: @unchecked Sendable {
         }
     }
 
-    func waitForWaiters(count expected: Int) async {
+    func awaitWaiterRegistered(count expected: Int) async {
         let deadline = Date().addingTimeInterval(5.0)
         while Date() < deadline {
             if lock.withLock({ waiters.count }) >= expected { return }
@@ -106,7 +106,7 @@ private final class VirtualTime: @unchecked Sendable {
     }
 
     func advance(by delta: TimeInterval) async {
-        await waitForWaiters(count: 1)
+        await awaitWaiterRegistered(count: 1)
         var expired: [CheckedContinuation<Void, Never>] = []
         lock.withLock {
             now += delta

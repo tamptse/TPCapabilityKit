@@ -8,20 +8,6 @@ extension TaskScheduler {
     /// directly. See the time module (`Time.swift`) for the sleep seam.
     struct Deadline: Sendable {
 
-        /// Result write for the execution race; the loser is ignored by the race outcome.
-        private final class OneShot<T>: @unchecked Sendable {
-            private let lock = NSLock()
-            private var value: T?
-
-            func store(_ newValue: T?) {
-                lock.withLock { value = newValue }
-            }
-
-            func load() -> T? {
-                lock.withLock { value }
-            }
-        }
-
         let timeout: TimeInterval
         private let clock: Clock
 
@@ -46,18 +32,6 @@ extension TaskScheduler {
                 group.cancelAll()
                 return first
             }
-        }
-
-        func runExecution(
-            _ operation: @Sendable @escaping () async -> Any?
-        ) async -> (won: Bool, value: Any?) {
-            let box = OneShot<Any?>()
-            let won = await race {
-                let value = await operation()
-                box.store(value)
-                return true
-            }
-            return (won, won ? (box.load() ?? nil) : nil)
         }
     }
 }
