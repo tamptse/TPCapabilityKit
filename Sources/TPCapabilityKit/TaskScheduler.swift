@@ -103,9 +103,10 @@ public final class TaskScheduler: @unchecked Sendable {
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async throws -> T
     ) async -> T? {
-        let lease = enqueue(task, execution: {
+        let lease = Lease(task: task)
+        let execution: @Sendable () async -> Any? = {
             return try? await taskExecution()
-        }, completion: nil)
+        }
 
         return await withCheckedContinuation { continuation in
             func resume(with settled: Lease) {
@@ -117,20 +118,27 @@ public final class TaskScheduler: @unchecked Sendable {
                 }
             }
 
-            let settledEarly: Lease? = lock.withLock {
-                // Invariant: every row replacement settles our lease first
-                // (displacement settles the old lease before the new row takes
-                // the id; terminalize removes the row), so a mismatched row
-                // means our lease is already settled — return it, never append
-                // to another lease's waiter list.
-                lifecycleStore.appendScheduleWaiter(for: lease, waiter: { resume(with: $0) })
+            let outcome = lock.withLock {
+                lifecycleStore.scheduleWaitRendezvous(
+                    lease: lease,
+                    execution: execution,
+                    waiter: { resume(with: $0) }
+                )
             }
-            if let settled = settledEarly {
+            switch outcome {
+            case .parked(let displaced, let waiters, let waiter):
+                if let displaced {
+                    waiter?.cancel()
+                    for waiter in waiters {
+                        waiter(displaced)
+                    }
+                }
+                concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
+                Task { await self.processPendingTasks() }
+            case .settledEarly(let settled):
+                concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
                 resume(with: settled)
-                return
             }
-
-            Task { await self.processPendingTasks() }
         }
     }
 
