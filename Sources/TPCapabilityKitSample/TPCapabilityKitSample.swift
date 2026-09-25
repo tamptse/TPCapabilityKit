@@ -133,33 +133,17 @@ final class SampleObjcPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
 // MARK: - 4. Demonstrative Usage Example
 
 enum TPCapabilityKitSample {
-    
-    /// Demonstrates registering plugins, publishing state, and decoupled cross-plugin observation.
-    static func runExample() {
-        print("=== TPCapabilityKit Sample Usage Start ===")
-        
-        let store = DynamicStore.shared
-        let bridge = ObjcStoreBridge.shared
 
-        // Create plugins
+    static func runStateExample(store: DynamicStore) {
+        var cancellables = Set<AnyCancellable>()
         let profilePlugin = UserProfilePlugin()
         let chatPlugin = ChatPlugin()
-        let objcPlugin = SampleObjcPlugin()
-        let backgroundPlugin = BackgroundTaskPlugin()
-        let networkPlugin = NetworkPlugin()
 
         // 1. Order-Agnostic: ChatPlugin starts and observes UserProfilePlugin BEFORE UserProfilePlugin starts
         store.register(plugin: chatPlugin)
-        
+
         // 2. Register UserProfilePlugin
         store.register(plugin: profilePlugin)
-
-        // 3. Register ObjC plugin via bridge
-        bridge.register(plugin: objcPlugin)
-
-        // 4. Register capability plugins - capabilities auto-registered
-        store.register(plugin: backgroundPlugin)
-        store.register(plugin: networkPlugin)
 
         // 5. Synchronous Read
         if let currentProfile = store.getState(pluginId: "UserProfilePlugin", type: UserProfileState.self) {
@@ -168,23 +152,6 @@ enum TPCapabilityKitSample {
 
         // 6. Update state on profile plugin -> triggers observers reactively
         profilePlugin.updateUserProfile(name: "Tran Van B", isVIP: false)
-
-        // 7. Query capabilities
-        let canRunHeavy = store.queryCapability(.heavyTask)
-        let canRunLight = store.queryCapability(.lightTask)
-        let canAccessNetwork = store.queryCapability(.networkAccess)
-        print("[Capability Query] Heavy: \(canRunHeavy), Light: \(canRunLight), Network: \(canAccessNetwork)")
-
-        // 8. Reactive capability observation
-        var cancellables = Set<AnyCancellable>()
-        store.observeCapability(.heavyTask)
-            .sink { available in
-                print("[Capability Observation] heavyTask available: \(available)")
-            }
-            .store(in: &cancellables)
-
-        // 9. Unregister a capability plugin
-        store.unregister(plugin: backgroundPlugin)
 
         // 10. Remove state and observe nil notification
         // Note: observeState uses compactMap which filters nil values,
@@ -200,6 +167,113 @@ enum TPCapabilityKitSample {
         print("[removeState] Current value after update: \(String(describing: receivedAfterRemove))")
         store.removeState(for: "TempPlugin")
         print("[removeState] Subject removed, future updates create fresh subject")
+
+        store.unregister(plugin: profilePlugin)
+        store.unregister(plugin: chatPlugin)
+        store.removeState(for: "TempPlugin")
+        cancellables.removeAll()
+    }
+
+    static func runCapabilityExample(store: DynamicStore) {
+        var cancellables = Set<AnyCancellable>()
+        let backgroundPlugin = BackgroundTaskPlugin()
+        let networkPlugin = NetworkPlugin()
+
+        // 4. Register capability plugins - capabilities auto-registered
+        store.register(plugin: backgroundPlugin)
+        store.register(plugin: networkPlugin)
+
+        // 7. Query capabilities
+        let canRunHeavy = store.queryCapability(.heavyTask)
+        let canRunLight = store.queryCapability(.lightTask)
+        let canAccessNetwork = store.queryCapability(.networkAccess)
+        print("[Capability Query] Heavy: \(canRunHeavy), Light: \(canRunLight), Network: \(canAccessNetwork)")
+
+        // 8. Reactive capability observation
+        store.observeCapability(.heavyTask)
+            .sink { available in
+                print("[Capability Observation] heavyTask available: \(available)")
+            }
+            .store(in: &cancellables)
+
+        // 9. Unregister a capability plugin
+        store.unregister(plugin: backgroundPlugin)
+
+        store.unregister(plugin: networkPlugin)
+        cancellables.removeAll()
+    }
+
+    static func runSchedulingExample(store: DynamicStore) {
+        // 19. Centralized Task Scheduling - Swift API
+        print("\n--- Task Scheduling Examples ---")
+
+        // Schedule a task with capability matching and priority
+        let scheduleDescriptor = TaskDescriptor(
+            requiredCapabilities: [.heavyTask],
+            priority: .high,
+            timeout: 10.0,
+            maxRetries: 2,
+            metadata: ["source": "sample"]
+        )
+
+        // Schedule and wait for result
+        Task {
+            let result: String? = await store.scheduleTaskAndWait(scheduleDescriptor) {
+                print("[scheduleTaskAndWait] Executing heavy task...")
+                return "HeavyTaskResult"
+            }
+            print("[scheduleTaskAndWait] Result: \(String(describing: result))")
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        // Schedule with completion handler
+        let lease = store.scheduleTask(scheduleDescriptor) {
+            print("[scheduleTask] Executing in background...")
+        } completion: { lease in
+            switch lease.state {
+            case .completed:
+                print("[scheduleTask] Completed with result: \(String(describing: lease.result))")
+            case .failed:
+                print("[scheduleTask] Failed")
+            case .expired:
+                print("[scheduleTask] Expired (timeout)")
+            default:
+                print("[scheduleTask] State: \(lease.state)")
+            }
+        }
+        print("[scheduleTask] Lease ID: \(lease.task.id)")
+
+        // Check pending/active counts
+        print("[Scheduler] Pending: \(store.pendingTaskCount), Active: \(store.activeTaskCount)")
+
+        // Cancel a task
+        store.cancelTask(taskId: lease.task.id)
+        print("[Scheduler] Cancelled task: \(lease.task.id)")
+
+        // 20. Tuning with Configuration
+        print("\n--- Configuration Example ---")
+
+        // Variation is via values, not a protocol. Configure once at startup,
+        // before scheduling: configureScheduler resets the scheduler.
+        store.configureScheduler(TaskScheduler.Configuration(
+            defaultTimeout: 10.0,
+            maxPerCapability: 2,
+            maxGlobal: 8
+        ))
+        print("[Configuration] Applied custom timeout/limits via configureScheduler")
+        store.configureScheduler(.default)
+        print("[Configuration] Restored defaults")
+    }
+
+    static func runObjCBridgeExample(store: DynamicStore, bridge: ObjcStoreBridge) {
+        let objcPlugin = SampleObjcPlugin()
+        let networkPlugin = NetworkPlugin()
+        store.register(plugin: networkPlugin)
+
+        // 3. Register ObjC plugin via bridge.
+        // No Bridge unregister seam exists, so SampleObjcPlugin stays registered
+        // on the shared store after the sample (documented leak, not worked around).
+        bridge.register(plugin: objcPlugin)
 
         // 13. ObjC subscription lifecycle
         var objcReceivedAfterCancel = false
@@ -270,69 +344,9 @@ enum TPCapabilityKitSample {
         })
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
 
-        // 19. Centralized Task Scheduling - Swift API
-        print("\n--- Task Scheduling Examples ---")
-        
-        // Schedule a task with capability matching and priority
-        let scheduleDescriptor = TaskDescriptor(
-            requiredCapabilities: [.heavyTask],
-            priority: .high,
-            timeout: 10.0,
-            maxRetries: 2,
-            metadata: ["source": "sample"]
-        )
-        
-        // Schedule and wait for result
-        Task {
-            let result: String? = await store.scheduleTaskAndWait(scheduleDescriptor) {
-                print("[scheduleTaskAndWait] Executing heavy task...")
-                return "HeavyTaskResult"
-            }
-            print("[scheduleTaskAndWait] Result: \(String(describing: result))")
-        }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        
-        // Schedule with completion handler
-        let lease = store.scheduleTask(scheduleDescriptor) {
-            print("[scheduleTask] Executing in background...")
-        } completion: { lease in
-            switch lease.state {
-            case .completed:
-                print("[scheduleTask] Completed with result: \(String(describing: lease.result))")
-            case .failed:
-                print("[scheduleTask] Failed")
-            case .expired:
-                print("[scheduleTask] Expired (timeout)")
-            default:
-                print("[scheduleTask] State: \(lease.state)")
-            }
-        }
-        print("[scheduleTask] Lease ID: \(lease.task.id)")
-        
-        // Check pending/active counts
-        print("[Scheduler] Pending: \(store.pendingTaskCount), Active: \(store.activeTaskCount)")
-        
-        // Cancel a task
-        store.cancelTask(taskId: lease.task.id)
-        print("[Scheduler] Cancelled task: \(lease.task.id)")
-        
-        // 20. Tuning with Configuration
-        print("\n--- Configuration Example ---")
-
-        // Variation is via values, not a protocol. Configure once at startup,
-        // before scheduling: configureScheduler resets the scheduler.
-        store.configureScheduler(TaskScheduler.Configuration(
-            defaultTimeout: 10.0,
-            maxPerCapability: 2,
-            maxGlobal: 8
-        ))
-        print("[Configuration] Applied custom timeout/limits via configureScheduler")
-        store.configureScheduler(.default)
-        print("[Configuration] Restored defaults")
-        
         // 21. ObjC Bridge - Task Scheduling
         print("\n--- ObjC Task Scheduling ---")
-        
+
         let objcDescriptor = ObjcTaskDescriptor(
             capabilities: ["heavyTask"],
             priority: 3,  // .high
@@ -340,7 +354,7 @@ enum TPCapabilityKitSample {
             maxRetries: 1,
             metadata: ["source": "objc-sample"]
         )
-        
+
         // Schedule via ObjC bridge
         let objcLease = bridge.taskScheduler.schedule(objcDescriptor) {
             print("[ObjC scheduleTask] Executing...")
@@ -364,11 +378,20 @@ enum TPCapabilityKitSample {
         // Check counts via ObjC bridge
         print("[ObjC] Pending: \(bridge.taskScheduler.pendingCount), Active: \(bridge.taskScheduler.activeCount)")
 
-        // Cleanup
-        store.unregister(plugin: profilePlugin)
-        store.unregister(plugin: chatPlugin)
         store.unregister(plugin: networkPlugin)
-        cancellables.removeAll()
+    }
+
+    /// Demonstrates registering plugins, publishing state, and decoupled cross-plugin observation.
+    static func runExample() {
+        print("=== TPCapabilityKit Sample Usage Start ===")
+
+        let store = DynamicStore.shared
+        let bridge = ObjcStoreBridge.shared
+
+        runStateExample(store: store)
+        runCapabilityExample(store: store)
+        runSchedulingExample(store: store)
+        runObjCBridgeExample(store: store, bridge: bridge)
 
         print("=== TPCapabilityKit Sample Usage End ===")
     }

@@ -3,7 +3,7 @@ import Foundation
 /// Priority levels for scheduled tasks.
 /// Higher priority tasks are dequeued before lower priority tasks.
 /// Within the same priority, tasks are processed FIFO.
-public enum TaskPriority: Int, Comparable, Sendable, CustomStringConvertible {
+public enum TaskPriority: Int, Comparable, CaseIterable, Sendable, CustomStringConvertible {
     case background = 0
     case low = 1
     case normal = 2
@@ -22,11 +22,5 @@ public enum TaskPriority: Int, Comparable, Sendable, CustomStringConvertible {
 
     public static func < (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
         lhs.rawValue < rhs.rawValue
-    }
-}
-
-extension TaskPriority: CaseIterable {
-    public static var allCases: [TaskPriority] {
-        [.background, .low, .normal, .high, .critical]
     }
 }
