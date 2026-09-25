@@ -126,30 +126,15 @@ extension TaskScheduler {
             lifecycleStore.execution(for: lease)
         }
 
-        final class ExecutionBox: @unchecked Sendable {
-            private let boxLock = NSLock()
-            private var slot: Any?? = nil
-            func store(_ value: Any?) {
-                boxLock.withLock { slot = .some(value) }
-            }
-            func load() -> Any?? {
-                boxLock.withLock { slot }
-            }
+        let raced = await deadline.raceValue {
+            await taskExecution?()
         }
-        let box = ExecutionBox()
-        let won = await deadline.race {
-            let value = await taskExecution?()
-            box.store(value)
-            return true
-        }
-        let result: Any?
-        if won {
-            result = box.load() ?? nil
-        } else {
-            result = nil
+        guard let racedValue = raced else {
+            await settle(lease, result: nil, timedOut: true, execution: taskExecution)
+            return
         }
 
-        await settle(lease, result: result, timedOut: !won, execution: taskExecution)
+        await settle(lease, result: racedValue, timedOut: false, execution: taskExecution)
     }
 
     // MARK: - Settlement (internal step of the same path)
