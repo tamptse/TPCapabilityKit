@@ -110,12 +110,16 @@ extension TaskScheduler {
 
         enum Transition {
             case activate
+            case dequeueToParked
+            case wake
             case retry((@Sendable () async -> Any?)?)
             case terminal(Lease.Terminal)
         }
 
         enum TransitionResult {
             case activated
+            case parked
+            case woken
             case retried
             case terminal(waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)
         }
@@ -124,17 +128,36 @@ extension TaskScheduler {
         /// row mutation happen together here under the scheduler lock, entered
         /// through one liveness query.
         mutating func transition(for lease: Lease, to target: Transition) -> TransitionResult? {
-            guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
-                return nil
-            }
             switch target {
+            case .dequeueToParked:
+                guard var row = rows[lease.task.id], row.lease === lease else {
+                    return nil
+                }
+                move(from: row.place, to: .parked)
+                row.place = .parked
+                rows[lease.task.id] = row
+                return .parked
+            case .wake:
+                guard var row = rows[lease.task.id], row.lease === lease else {
+                    return nil
+                }
+                row.waiting = false
+                row.waiter = nil
+                rows[lease.task.id] = row
+                return .woken
             case .activate:
+                guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
+                    return nil
+                }
                 move(from: row.place, to: .active)
                 lease.activate()
                 row.place = .active
                 rows[lease.task.id] = row
                 return .activated
             case .retry(let execution):
+                guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
+                    return nil
+                }
                 lease.beginRetry()
                 move(from: row.place, to: .pending)
                 row.place = .pending
@@ -145,6 +168,9 @@ extension TaskScheduler {
                 order.enqueue(id: lease.task.id, priority: lease.task.priority)
                 return .retried
             case .terminal(let terminal):
+                guard !lease.isTerminal, let row = rows[lease.task.id], row.lease === lease else {
+                    return nil
+                }
                 guard let taken = takeRow(for: lease) else { return nil }
                 lease.terminalize(terminal)
                 return .terminal(waiters: taken.waiters, waiter: taken.waiter)
@@ -180,7 +206,7 @@ extension TaskScheduler {
         // Factory form is the single park seam so no Task exists before the
         // single row write. Factory must not suspend; caller holds the
         // scheduler lock across the call.
-        // Wake clears here; terminal takes the row in transition(.terminal).
+        // Wake clears in transition(.wake); terminal takes the row in transition(.terminal).
         mutating func park(for lease: Lease, makeWaiter: () -> Task<Void, Never>) -> FusedParkOutcome {
             guard var row = rows[lease.task.id], row.lease === lease else {
                 return .alreadyTerminal
@@ -198,21 +224,11 @@ extension TaskScheduler {
             return .parked
         }
 
-        mutating func wakeParked(for lease: Lease) {
-            guard var row = rows[lease.task.id], row.lease === lease else { return }
-            row.waiting = false
-            row.waiter = nil
-            rows[lease.task.id] = row
-        }
-
         mutating func dequeueNext() -> Lease? {
             while let id = order.dequeue() {
-                if var row = rows[id] {
-                    move(from: row.place, to: .parked)
-                    row.place = .parked
-                    rows[id] = row
-                    return row.lease
-                }
+                guard let row = rows[id] else { continue }
+                guard transition(for: row.lease, to: .dequeueToParked) != nil else { continue }
+                return row.lease
             }
             return nil
         }

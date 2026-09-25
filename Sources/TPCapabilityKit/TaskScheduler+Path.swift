@@ -37,8 +37,8 @@ extension TaskScheduler {
             lease.task,
             deadline: deadline
         )
-        lock.withLock {
-            lifecycleStore.wakeParked(for: lease)
+        _ = lock.withLock {
+            lifecycleStore.transition(for: lease, to: .wake)
         }
 
         guard !lease.isTerminal else { return }
@@ -202,7 +202,7 @@ extension TaskScheduler {
             }
             guard let applied = lifecycleStore.transition(for: lease, to: target) else { return }
             switch applied {
-            case .activated:
+            case .activated, .parked, .woken:
                 return
             case .retried:
                 didRetry = true
