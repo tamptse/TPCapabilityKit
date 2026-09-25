@@ -81,8 +81,7 @@ final class ConcurrencyController: @unchecked Sendable {
         return lock.withLock {
             if heldKeys.values.contains(where: { $0.owner == owner }) { return .duplicate }
             if waiters.contains(where: { $0.owner == owner }) { return .duplicate }
-            if waiters.isEmpty, canAcquire(keys: keys) {
-                installHold(keys: keys, taskId: taskId, owner: owner)
+            if waiters.isEmpty, tryInstall(keys: keys, taskId: taskId, owner: owner) {
                 return .admitted
             }
             waiters.append(Waiter(keys: keys, taskId: taskId, owner: owner, resume: resume))
@@ -132,9 +131,8 @@ final class ConcurrencyController: @unchecked Sendable {
             for cap in keys {
                 capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
             }
-            if let head = waiters.first, canAcquire(keys: head.keys) {
+            if let head = waiters.first, tryInstall(keys: head.keys, taskId: head.taskId, owner: head.owner) {
                 waiters.removeFirst()
-                installHold(keys: head.keys, taskId: head.taskId, owner: head.owner)
                 toResume = head.resume
             }
         }
@@ -143,7 +141,8 @@ final class ConcurrencyController: @unchecked Sendable {
 
     // MARK: - Private Helpers
 
-    private func canAcquire(keys: Set<Capability>) -> Bool {
+    /// Atomic check-and-install; call only with `lock` held.
+    private func tryInstall(keys: Set<Capability>, taskId: String, owner: ObjectIdentifier) -> Bool {
         if let maxGlobal = maxGlobal {
             guard globalSlots < maxGlobal else { return false }
         }
@@ -152,15 +151,11 @@ final class ConcurrencyController: @unchecked Sendable {
                 guard (capabilitySlots[cap] ?? 0) < maxPerCap else { return false }
             }
         }
-        return true
-    }
-
-    /// Installs the hold; callers hold `lock` and checked `canAcquire` first.
-    private func installHold(keys: Set<Capability>, taskId: String, owner: ObjectIdentifier) {
         globalSlots += 1
         for cap in keys {
             capabilitySlots[cap, default: 0] += 1
         }
         heldKeys[taskId] = (keys, owner)
+        return true
     }
 }
