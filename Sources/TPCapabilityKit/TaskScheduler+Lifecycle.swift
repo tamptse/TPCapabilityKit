@@ -197,6 +197,42 @@ extension TaskScheduler {
             return nil
         }
 
+        enum ScheduleWaitRendezvousOutcome {
+            case parked(displaced: Lease?, waiters: [(Lease) -> Void], waiter: Task<Void, Never>?)
+            case settledEarly(Lease)
+        }
+
+        mutating func scheduleWaitRendezvous(
+            lease: Lease,
+            execution: (@Sendable () async -> Any?)?,
+            waiter: @escaping (Lease) -> Void
+        ) -> ScheduleWaitRendezvousOutcome {
+            if lease.isTerminal { return .settledEarly(lease) }
+            if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal {
+                guard let taken = takeRow(for: row.lease) else {
+                    insert(lease: lease, execution: execution, waiters: [waiter])
+                    guard let fresh = rows[lease.task.id], fresh.lease === lease else {
+                        return .settledEarly(lease)
+                    }
+                    if lease.isTerminal { return .settledEarly(lease) }
+                    return .parked(displaced: nil, waiters: [], waiter: nil)
+                }
+                taken.lease.terminalize(.expired)
+                insert(lease: lease, execution: execution, waiters: [waiter])
+                guard let fresh = rows[lease.task.id], fresh.lease === lease else {
+                    return .settledEarly(lease)
+                }
+                if lease.isTerminal { return .settledEarly(lease) }
+                return .parked(displaced: taken.lease, waiters: taken.waiters, waiter: taken.waiter)
+            }
+            insert(lease: lease, execution: execution, waiters: [waiter])
+            guard let fresh = rows[lease.task.id], fresh.lease === lease else {
+                return .settledEarly(lease)
+            }
+            if lease.isTerminal { return .settledEarly(lease) }
+            return .parked(displaced: nil, waiters: [], waiter: nil)
+        }
+
         enum FusedParkOutcome: Sendable {
             case parked
             case refusedAlreadyWaiting
