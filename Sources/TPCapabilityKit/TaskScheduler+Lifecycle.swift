@@ -104,11 +104,6 @@ extension TaskScheduler {
             return ExchangeResult(displaced: nil, waiters: [], waiter: nil)
         }
 
-        func nonTerminalLease(for id: String) -> Lease? {
-            guard let row = rows[id], !row.lease.isTerminal else { return nil }
-            return row.lease
-        }
-
         func lease(for id: String) -> Lease? {
             rows[id]?.lease
         }
