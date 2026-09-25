@@ -286,29 +286,45 @@ final class StoreState: @unchecked Sendable {
     private var creationSequence: UInt64 = 0
     private let creationClock = CurrentValueSubject<UInt64, Never>(0)
 
-    private enum CreationRendezvous {
-        case existing(CurrentValueSubject<Any?, Never>)
-        case created(CurrentValueSubject<Any?, Never>, UInt64)
-        case pending(UInt64)
-    }
-
-    private func creationRendezvous(pluginId: String, createIfMissing: Bool) -> CreationRendezvous {
-        lock.withLock {
+    // State creation rendezvous: single lookup-or-await-creation transition.
+    // Late-subscriber proof in one place: `creationClock.send(notice)` precedes
+    // `subject.send(newState)` so no `filter`-gated waiter can sleep through its
+    // subject; `filter { $0 > after }` replays the latest notice via
+    // CurrentValueSubject so a create racing the await still wakes; per-notice
+    // index re-check keeps id A notices from resolving id B waiters and never
+    // resurrects a removed subject; `Deferred` re-runs lookup so a
+    // subscribe-racing-create lands on existing instead of parking stale.
+    // Locked work is index/counter read-or-insert only; both publishes emit
+    // after unlock. Removal stays out of band: it deletes the index entry and
+    // completes the detached subject, so sleepers only wake for a matching entry.
+    private func lookupOrAwaitCreation(
+        pluginId: String,
+        createIfMissing: Bool
+    ) -> AnyPublisher<CurrentValueSubject<Any?, Never>, Never> {
+        let snapshot = lock.withLock { () -> (
+            subject: CurrentValueSubject<Any?, Never>?,
+            notice: UInt64?,
+            after: UInt64
+        ) in
             if let existing = subjects[pluginId] {
-                return .existing(existing)
+                return (existing, nil, 0)
             }
             if createIfMissing {
                 let created = CurrentValueSubject<Any?, Never>(nil)
                 subjects[pluginId] = created
                 creationSequence &+= 1
-                return .created(created, creationSequence)
+                return (created, creationSequence, 0)
             }
-            return .pending(creationSequence)
+            return (nil, nil, creationSequence)
         }
-    }
-
-    private func awaitCreation(pluginId: String, after: UInt64) -> AnyPublisher<CurrentValueSubject<Any?, Never>, Never> {
-        creationClock
+        if let subject = snapshot.subject {
+            if let notice = snapshot.notice {
+                creationClock.send(notice)
+            }
+            return Just(subject).eraseToAnyPublisher()
+        }
+        let after = snapshot.after
+        return creationClock
             .filter { $0 > after }
             .map { [weak self] _ -> CurrentValueSubject<Any?, Never>? in
                 guard let self else { return nil }
@@ -321,15 +337,9 @@ final class StoreState: @unchecked Sendable {
 
     func update<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        switch creationRendezvous(pluginId: pluginId, createIfMissing: true) {
-        case .existing(let subject):
-            subject.send(newState)
-        case .created(let subject, let notice):
-            creationClock.send(notice)
-            subject.send(newState)
-        case .pending(_):
-            assertionFailure("State creation rendezvous produced no subject for a writer")
-        }
+        let subscription = lookupOrAwaitCreation(pluginId: pluginId, createIfMissing: true)
+            .sink { subject in subject.send(newState) }
+        _ = subscription
     }
 
     func get<T>(pluginId: String, type: T.Type) -> T? {
@@ -367,17 +377,10 @@ final class StoreState: @unchecked Sendable {
             guard let self else {
                 return Empty(completeImmediately: true).eraseToAnyPublisher()
             }
-            switch self.creationRendezvous(pluginId: pluginId, createIfMissing: false) {
-            case .existing(let subject), .created(let subject, _):
-                return subject
-                    .compactMap { $0 as? T }
-                    .eraseToAnyPublisher()
-            case .pending(let after):
-                return self.awaitCreation(pluginId: pluginId, after: after)
-                    .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
-                    .switchToLatest()
-                    .eraseToAnyPublisher()
-            }
+            return self.lookupOrAwaitCreation(pluginId: pluginId, createIfMissing: false)
+                .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
+                .switchToLatest()
+                .eraseToAnyPublisher()
         }
         .eraseToAnyPublisher()
     }
