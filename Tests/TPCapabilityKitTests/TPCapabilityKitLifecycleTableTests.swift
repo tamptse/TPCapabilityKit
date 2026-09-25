@@ -4,31 +4,213 @@ import Foundation
 
 @Suite("Lifecycle Table Single Owner Tests (path internal mechanics + Tasks seam)")
 struct LifecycleTableTests {
-    private func makeLease(id: String = UUID().uuidString, priority: TaskPriority = .normal) -> Lease {
-        Lease(task: TaskDescriptor(id: id, requiredCapabilities: [], priority: priority))
+    @Test("parked reachable through public seam with counts agreeing and no execution")
+    func parkedReachable() async {
+        let store = DynamicStore()
+        store.enableDeterministicTime()
+        let missing = Capability.custom("parkReachable_\(UUID().uuidString)")
+        let executions = Probe()
+        let deliveries = Probe()
+        let done = AsyncGate()
+        let descriptor = TaskDescriptor(requiredCapabilities: [missing], timeout: 10.0)
+        let lease = store.scheduleTask(descriptor, task: {
+            await executions.inc()
+        }, completion: { _ in
+            Task {
+                await deliveries.inc()
+                done.signal()
+            }
+        })
+
+        await store.waitForDeterministicWaiters(count: 1)
+        #expect(!lease.isTerminal)
+        #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 0)
+        #expect(await executions.count == 0)
+        #expect(await deliveries.count == 0)
+
+        store.cancelTask(taskId: descriptor.id)
+        await done.wait()
+
+        #expect(lease.state == .expired)
+        #expect(lease.isTerminal)
+        #expect(await deliveries.count == 1)
+        #expect(await executions.count == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
-    @Test("dequeue parks exactly once, second beginPark is false")
-    func doubleParkImpossible() {
-        var store = TaskScheduler.LifecycleStore()
-        let lease = makeLease()
-        store.insert(lease: lease, execution: nil, waiters: [])
+    @Test("double schedule same id keeps single row with displaced delivery and no duplicate waiter")
+    func doubleScheduleKeepsSingleRow() async {
+        let store = DynamicStore()
+        store.enableDeterministicTime()
+        let missing = Capability.custom("doublePark_\(UUID().uuidString)")
+        let id = "double-park_\(UUID().uuidString)"
+        let executions = Probe()
+        let firstDeliveries = Probe()
+        let firstDone = AsyncGate()
+        let first = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 10.0)
+        let firstLease = store.scheduleTask(first, task: {
+            await executions.inc()
+        }, completion: { finished in
+            Task {
+                await firstDeliveries.record(finished)
+                firstDone.signal()
+            }
+        })
 
-        let first = store.dequeueNext()
-        #expect(first?.task.id == lease.task.id)
-        #expect(store.counts.queued == 0)
-        #expect(store.counts.parked == 1)
-        #expect(store.counts.pending == 1)
+        await store.waitForDeterministicWaiters(count: 1)
+        #expect(store.pendingTaskCount == 1)
+        #expect(!firstLease.isTerminal)
 
-        #expect(store.dequeueNext() == nil)
+        let secondDeliveries = Probe()
+        let secondDone = AsyncGate()
+        let second = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 10.0)
+        let secondLease = store.scheduleTask(second, task: {
+            await executions.inc()
+        }, completion: { finished in
+            Task {
+                await secondDeliveries.record(finished)
+                secondDone.signal()
+            }
+        })
 
-        #expect(store.beginPark(for: lease) == true)
-        #expect(store.beginPark(for: lease) == false)
+        await firstDone.wait()
+        #expect(firstLease.isTerminal)
+        #expect(firstLease.state == .expired)
+        #expect(await firstDeliveries.count == 1)
+        #expect(!secondLease.isTerminal)
+        #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 0)
+        for _ in 0..<50 { await Task.yield() }
+        #expect(store.pendingTaskCount == 1)
+        #expect(!secondLease.isTerminal)
 
-        _ = store.transition(for: lease, to: .terminal(.expired))
-        #expect(store.counts.pending == 0)
-        #expect(store.counts.queued == 0)
-        #expect(store.counts.parked == 0)
+        store.cancelTask(taskId: id)
+        await secondDone.wait()
+
+        #expect(secondLease.state == .expired)
+        #expect(await secondDeliveries.count == 1)
+        #expect(await executions.count == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
+
+    @Test("cancel-while-parked lands expired once with waiter cancelled and reschedule works")
+    func cancelWhileParkedPin() async {
+        let store = DynamicStore()
+        store.enableDeterministicTime()
+        let missing = Capability.custom("cancelParked_\(UUID().uuidString)")
+        let id = "cancel-parked_\(UUID().uuidString)"
+        let executions = Probe()
+        let deliveries = Probe()
+        let done = AsyncGate()
+        let descriptor = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 10.0)
+        let lease = store.scheduleTask(descriptor, task: {
+            await executions.inc()
+        }, completion: { finished in
+            Task {
+                await deliveries.record(finished)
+                done.signal()
+            }
+        })
+
+        await store.waitForDeterministicWaiters(count: 1)
+        #expect(!lease.isTerminal)
+        #expect(store.pendingTaskCount == 1)
+
+        store.cancelTask(taskId: id)
+        await done.wait()
+
+        #expect(lease.state == .expired)
+        #expect(await deliveries.count == 1)
+        #expect(await deliveries.states == [.expired])
+        #expect(await executions.count == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+
+        let secondDone = AsyncGate()
+        let secondDeliveries = Probe()
+        let second = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 10.0)
+        let secondLease = store.scheduleTask(second, task: {
+            await executions.inc()
+        }, completion: { finished in
+            Task {
+                await secondDeliveries.record(finished)
+                secondDone.signal()
+            }
+        })
+
+        await store.waitForDeterministicWaiters(count: 1)
+        #expect(!secondLease.isTerminal)
+        #expect(store.pendingTaskCount == 1)
+
+        store.cancelTask(taskId: id)
+        await secondDone.wait()
+
+        #expect(secondLease.state == .expired)
+        #expect(await secondDeliveries.count == 1)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
+
+    @Test("wake clears to activation and re-park behaves with no residual waiter")
+    func wakeClearsPin() async {
+        let (store, pluginId) = makeStoreWithCap([], deterministic: true, prefix: "wakeClear")
+        defer { store.unregisterCapability(for: pluginId) }
+        let missing = Capability.custom("wakeClear_\(UUID().uuidString)")
+        let id = "wake-clear_\(UUID().uuidString)"
+        let executions = Probe()
+        let deliveries = Probe()
+        let done = AsyncGate()
+        let descriptor = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 30.0)
+        let lease = store.scheduleTask(descriptor, task: {
+            await executions.inc()
+        }, completion: { finished in
+            Task {
+                await deliveries.record(finished)
+                done.signal()
+            }
+        })
+
+        await store.waitForDeterministicWaiters(count: 1)
+        #expect(!lease.isTerminal)
+        #expect(store.pendingTaskCount == 1)
+
+        store.registerCapability(for: pluginId, capabilities: [missing])
+        await done.wait()
+
+        #expect(lease.state == .completed)
+        #expect(await executions.count == 1)
+        #expect(await deliveries.count == 1)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+
+        store.unregisterCapability(for: pluginId)
+        let reparkDone = AsyncGate()
+        let reparkDeliveries = Probe()
+        let repark = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 30.0)
+        let reparkLease = store.scheduleTask(repark, task: {
+            await executions.inc()
+        }, completion: { finished in
+            Task {
+                await reparkDeliveries.record(finished)
+                reparkDone.signal()
+            }
+        })
+
+        await store.waitForDeterministicWaiters(count: 1)
+        #expect(!reparkLease.isTerminal)
+        #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 0)
+
+        store.cancelTask(taskId: id)
+        await reparkDone.wait()
+
+        #expect(reparkLease.state == .expired)
+        #expect(await reparkDeliveries.count == 1)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test("terminal removal cleans order, same id reschedules through Tasks seam")

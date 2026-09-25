@@ -144,26 +144,6 @@ extension TaskScheduler {
             return nil
         }
 
-        mutating func beginPark(for lease: Lease) -> Bool {
-            mutateParkRow(for: lease) { row in
-                guard !row.waiting else { return false }
-                row.waiting = true
-                return true
-            } ?? false
-        }
-
-        mutating func setParkWaiter(for lease: Lease, waiter: Task<Void, Never>) -> Bool {
-            mutateParkRow(for: lease) { $0.waiter = waiter }
-            return lease.isTerminal
-        }
-
-        mutating func clearParkWait(for lease: Lease) {
-            mutateParkRow(for: lease) {
-                $0.waiting = false
-                $0.waiter = nil
-            }
-        }
-
         enum FusedParkOutcome: Sendable {
             case parked
             case refusedAlreadyWaiting
@@ -215,13 +195,6 @@ extension TaskScheduler {
             row.waiting = false
             row.waiter = nil
             rows[lease.task.id] = row
-        }
-
-        private mutating func mutateParkRow<T>(for lease: Lease, _ body: (inout LifecycleRow) -> T) -> T? {
-            guard var row = rows[lease.task.id], row.lease === lease else { return nil }
-            let result = body(&row)
-            rows[lease.task.id] = row
-            return result
         }
 
         mutating func dequeueNext() -> Lease? {
