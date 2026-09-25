@@ -8,14 +8,14 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     @objc public var priority: Int { underlying.priority.rawValue }
 
-    /// Collapsed timeout reading: the stored value when explicit, otherwise
+    /// Collapsed timeout reading: the stored optional when present, otherwise
     /// the pinned compat default. `hasExplicitTimeout` tells the two apart;
-    /// both read directly off the one stored timeout form.
+    /// both derive from the single stored optional.
     @objc public var timeout: TimeInterval {
-        storedTimeout.display
+        underlying.timeout ?? ObjcTimeout.pinnedDefault
     }
 
-    @objc public var hasExplicitTimeout: Bool { storedTimeout.isExplicit }
+    @objc public var hasExplicitTimeout: Bool { underlying.timeout != nil }
 
     @objc public var maxRetries: Int { underlying.maxRetries }
 
@@ -25,10 +25,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     @objc public var metadata: [String: String] { underlying.metadata }
 
-    /// The underlying Swift TaskDescriptor.
+    /// The underlying Swift TaskDescriptor holding the single stored timeout truth.
     public let underlying: TaskDescriptor
-
-    private let storedTimeout: ObjcTimeout
 
     /// Creates a new task descriptor. Timeout compat follows the single
     /// timeout-form-owned fork (see `ObjcTimeout.resolve`).
@@ -96,7 +94,6 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         metadata: [String: String]
     ) {
         let stored = ObjcTimeout.resolve(wire: wire)
-        self.storedTimeout = stored
         self.underlying = ObjcMapper.makeDescriptor(
             id: id,
             capabilities: capabilities,
@@ -109,7 +106,6 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     }
 
     internal init(underlying: TaskDescriptor) {
-        self.storedTimeout = ObjcTimeout.fromStored(underlying.timeout)
         self.underlying = underlying
         super.init()
     }
