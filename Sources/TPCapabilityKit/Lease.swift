@@ -3,7 +3,7 @@ import Foundation
 /// Lifecycle tracker for scheduled tasks.
 ///
 /// Transition contract (Settlement decides per ADR-0001/0004 — single reviewable
-/// decision in the Settlement table (`TaskScheduler+Path.swift`); guards below are safety no-ops only):
+/// decision in the fused settle step (`TaskScheduler+Path.swift`); guards below are safety no-ops only):
 /// - pending → active via `activate()`.
 /// - active → completed/failed/expired via `terminalize(_:)`; terminal
 ///   states reject `activate`/`terminalize` as no-ops.
