@@ -6,6 +6,10 @@ extension TaskScheduler {
     /// shared by the waiter and the executor. Both draw expiry from the
     /// injected time instance, so neither computes timeouts nor builds races
     /// directly. See the time module (`Time.swift`) for the sleep seam.
+    ///
+    /// Stays a named type: the timeout-contract suite constructs it directly
+    /// for resolve-once verification, Path is its sole flow reader, and the
+    /// registry receives the race as a value without naming this type.
     struct Deadline: Sendable {
 
         let timeout: TimeInterval
