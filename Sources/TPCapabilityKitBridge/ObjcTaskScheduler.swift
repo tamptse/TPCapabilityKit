@@ -41,6 +41,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// Schedules a task and waits for result via completion handler.
+    /// Shares the one `waitThenRun` delivery core with `runWhenAvailable`.
     /// Delivers the result on the specified queue, or the main queue when omitted.
     @objc public func scheduleAndWait(
         _ descriptor: ObjcTaskDescriptor,
@@ -74,8 +75,8 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
 
     /// Check-and-run entry (the facade two-entry table on
     /// `DynamicStore.runIfAvailable`: sync fire). Stays synchronous because
-    /// `@objc` cannot await; bypasses Lease, slot admission, and Deadline by
-    /// contract.
+    /// `@objc` cannot await. Sync-fire half of the contract stated beside
+    /// `waitThenRun`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -88,6 +89,13 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// The one delivery core for every value-returning wait behind the view.
+    ///
+    /// Contract (stated once for the whole scheduling door): sync fire
+    /// (`runIfAvailable`) bypasses Lease, slot admission, and Deadline, while
+    /// every value-returning wait (`scheduleAndWait`, `runWhenAvailable`)
+    /// funnels through this core — one descriptor-build plus `ObjcDelivery`
+    /// queue-hop path — so the two wait spellings agree with sync fire by
+    /// construction.
     private func waitThenRun(
         descriptor: TaskDescriptor,
         queue: DispatchQueue?,
