@@ -8,6 +8,7 @@ extension TaskScheduler {
             guard !nextLease.isTerminal else { continue }
             let deadline = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
 
+            // Entry early exit; the availability gate beside activate decides.
             guard isAvailable(for: nextLease.task) else {
                 parkLeaseForCapabilities(nextLease, deadline: deadline)
                 continue
@@ -50,10 +51,8 @@ extension TaskScheduler {
         await activate(lease, deadline: deadline)
     }
 
-    /// Single capability wait owned by Tasks: one timeout shared by the whole
-    /// set across immediate and queued execution, preserved across retry.
-    /// Point-in-time availability for entry and gate checks; waiting itself
-    /// delegates to the registry seam below.
+    /// Point-in-time availability query for the entries and the gate below.
+    /// Waiting itself delegates to the registry seam below.
     private func isAvailable(for task: TaskDescriptor) -> Bool {
         guard let store else { return false }
         return task.requiredCapabilities.allSatisfy { store.queryCapability($0) }
@@ -77,14 +76,9 @@ extension TaskScheduler {
     /// ObjC live-view tests may still call `Lease.activate()` directly to
     /// exercise the ObjcLease reflection.
     ///
-    /// Reads as one flow with one scoped hold: entry availability settles failed,
-    /// admission refusal returns silently, and post-admission gates decide via
-    /// `gateAdmitted`. The hold exits when the activation scope ends, regardless
-    /// of whether settlement retried, completed, failed, or expired.
+    /// Entry early exit defers to the availability gate below.
     private func activate(_ lease: Lease, deadline: Deadline) async {
-        // TOCTOU window: this entry check vs the post-admission re-check in
-        // gateAdmitted across the hold suspension below; the entry exit is
-        // review-only per the ActivationGateTests admission.
+        // Entry early exit; the availability gate below decides.
         guard isAvailable(for: lease.task) else {
             settle(lease, as: .failed)
             return
@@ -102,7 +96,15 @@ extension TaskScheduler {
         }
     }
 
-    /// Decides only; settling stays in `activate`, so this never terminalizes.
+    /// Availability gate: terminal refusal, availability re-check, and row
+    /// activation read as one decide-then-apply path with settling kept in
+    /// `activate`, so this never terminalizes.
+    ///
+    /// Hold-suspension window stated once here: entry checks are review-only
+    /// early exits, the post-admission re-check decides, and admission refusal
+    /// returns silently without settling. The hold exits when the activation
+    /// scope ends, regardless of whether settlement retried, completed,
+    /// failed, or expired.
     private enum ActivationGate: Sendable, Equatable {
         case proceed
         case failed
