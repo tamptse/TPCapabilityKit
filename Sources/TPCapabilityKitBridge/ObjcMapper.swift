@@ -67,14 +67,6 @@ enum ObjcTimeout: Sendable {
     /// Compat spelling of the pin literal, owned by `ObjcTimeout`.
     @usableFromInline static let omittedTimeout: TimeInterval = ObjcTimeout.pinnedDefault
 
-    static func displayTimeout(for timeout: ObjcTimeout) -> TimeInterval {
-        timeout.display
-    }
-
-    static func hasExplicitTimeout(for timeout: ObjcTimeout) -> Bool {
-        timeout.isExplicit
-    }
-
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
     }
