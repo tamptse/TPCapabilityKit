@@ -76,29 +76,20 @@ public final class TaskScheduler: @unchecked Sendable {
     ) -> Lease {
         let lease = Lease(task: task)
 
-        // Same-id concurrent scheduling is unsupported: a non-terminal row for
-        // this id belongs to an in-flight lease, so settle it first (expired —
-        // the only outcome the Lease contract accepts from pending — so its
-        // waiters are delivered exactly once, its waiter Task cancelled, its
-        // slot released) before the new row takes the id. A terminal row needs
-        // no settle, so sequential reuse after terminal keeps working.
-        let displaced: Lease? = lock.withLock {
-            lifecycleStore.nonTerminalLease(for: task.id)
-        }
-        if let displaced {
-            settle(displaced, as: .expired)
-        }
-        // Settle-first keeps the stale-evict resume-false on an already-terminal
-        // Lease; each step crosses one lock, never nested.
-        concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
-
-        lock.withLock {
-            lifecycleStore.insert(
+        let exchanged = lock.withLock {
+            lifecycleStore.exchange(
                 lease: lease,
                 execution: execution,
                 waiters: completion.map { [$0] } ?? []
             )
         }
+        if let displaced = exchanged.displaced {
+            exchanged.waiter?.cancel()
+            for waiter in exchanged.waiters {
+                waiter(displaced)
+            }
+        }
+        concurrencyController.removeWaiter(taskId: task.id, owner: ObjectIdentifier(lease), match: .stale)
 
         return lease
     }
