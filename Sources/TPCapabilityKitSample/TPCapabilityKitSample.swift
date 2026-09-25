@@ -322,13 +322,13 @@ enum TPCapabilityKitSample {
         }
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
 
-        // 16. ObjC Bridge - runTask
-        if let objcResult = bridge.runTask(capability: "heavyTask", task: {
+        // 16. ObjC Bridge - sync fire through the single scheduling door (view)
+        if let objcResult = bridge.taskScheduler.runIfAvailable(capability: "heavyTask", task: {
             return NSString(string: "ObjCHeavyResult")
         }) {
-            print("[ObjC runTask] result: \(objcResult)")
+            print("[ObjC runIfAvailable] result: \(objcResult)")
         } else {
-            print("[ObjC runTask] heavyTask not available")
+            print("[ObjC runIfAvailable] heavyTask not available")
         }
 
         // 17. ObjC Bridge - queryCapability
@@ -336,11 +336,11 @@ enum TPCapabilityKitSample {
         let canNetwork = bridge.queryCapability("networkAccess")
         print("[ObjC queryCapability] heavy: \(canHeavy), network: \(canNetwork)")
 
-        // 18. ObjC Bridge - runTaskWhenAvailable with completion handler
-        bridge.runTaskWhenAvailable(capability: "networkAccess", timeout: 2.0, task: {
+        // 18. ObjC Bridge - wait-then-run through the single scheduling door (view)
+        bridge.taskScheduler.runWhenAvailable(capability: "networkAccess", timeout: 2.0, task: {
             return NSString(string: "ObjCNetworkData")
         }, completion: { result in
-            print("[ObjC runTaskWhenAvailable] result: \(String(describing: result))")
+            print("[ObjC runWhenAvailable] result: \(String(describing: result))")
         })
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
 

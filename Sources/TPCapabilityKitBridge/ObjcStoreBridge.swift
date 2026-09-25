@@ -98,16 +98,14 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     // MARK: - Task Execution APIs
 
-    /// Check-and-run entry for @objc callers (the facade two-entry table on
-    /// `DynamicStore.runIfAvailable`: sync fire). Delegates to the
-    /// `taskScheduler` view's sync fast-path. Stays synchronous because
-    /// `@objc` cannot await; blocking the calling thread on a semaphore would
-    /// risk deadlock. Bypasses Lease, slot admission, and Deadline by contract;
-    /// for wait-then-run use `runTaskWhenAvailable`.
+    /// Deprecated forwarder to the single scheduling door
+    /// (`taskScheduler.runIfAvailable`). Holds no scheduling policy of its own:
+    /// sync-vs-wait agreement is stated once beside the view's delivery core.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
     /// - Returns: The task result, or nil if capability is not available.
+    @available(*, deprecated, message: "Use taskScheduler.runIfAvailable — the taskScheduler live view is the single scheduling door.")
     @objc public func runTask(
         capability: String,
         task: () -> NSObject
@@ -115,12 +113,10 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         taskScheduler.runIfAvailable(capability: capability, task: task)
     }
 
-    /// Schedule-and-wait entry for @objc callers (the facade two-entry table:
-    /// async, the one waiter). Delegates to the
-    /// `taskScheduler` view, which owns descriptor building, timeout compat,
-    /// queue hopping, and defaults with one delivery story. Delivers the
-    /// result on the specified queue, or the main queue when omitted.
-    /// Timeout compat follows the single mapper-owned fork (see `ObjcTimeout.resolve`).
+    /// Deprecated forwarder to the single scheduling door
+    /// (`taskScheduler.runWhenAvailable`). Holds no scheduling policy of its
+    /// own: descriptor building, timeout compat, queue hopping, and defaults
+    /// live only in the view behind the single delivery core.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Negative means
@@ -128,6 +124,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     ///   - queue: Queue for callback delivery. Pass `nil` for main queue.
     ///   - task: The task closure to execute. Must return an NSObject.
     ///   - completion: Called on specified queue with the result, or nil if timeout.
+    @available(*, deprecated, message: "Use taskScheduler.runWhenAvailable — the taskScheduler live view is the single scheduling door.")
     @objc public func runTaskWhenAvailable(
         capability: String,
         timeout: TimeInterval,
