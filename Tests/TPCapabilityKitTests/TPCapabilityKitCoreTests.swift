@@ -227,34 +227,6 @@ struct TPCapabilityKitCoreTests {
         #expect(store.queryCapability(.heavyTask))
     }
 
-    @Test func runVsScheduleEquivalence() async {
-        struct CapPlugin: AppPlugin {
-            let id: String
-            var capabilities: Set<Capability> { [.heavyTask] }
-            func start(with store: DynamicStore) {}
-        }
-
-        let store = DynamicStore()
-        store.register(plugin: CapPlugin(id: "Equiv_\(UUID().uuidString)"))
-
-        let immediate = await store.runTask(requiring: .heavyTask) { "ok" }
-        let waiting = await store.runTaskWhenAvailable(capability: .heavyTask, timeout: 1.0) { "ok" }
-        let scheduled = await store.scheduleTaskAndWait(
-            TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 1.0)
-        ) { "ok" }
-        #expect(immediate == "ok")
-        #expect(waiting == "ok")
-        #expect(scheduled == "ok")
-
-        let missing = Capability.custom("Missing_\(UUID().uuidString)")
-        let immediateMiss = await store.runTask(requiring: missing) { "ok" }
-        #expect(immediateMiss == nil)
-        let scheduledMiss = await store.scheduleTaskAndWait(
-            TaskDescriptor(requiredCapabilities: [missing], timeout: 0.2)
-        ) { "ok" }
-        #expect(scheduledMiss == nil)
-    }
-
     @Test func sampleUsageRunsCleanly() {
         TPCapabilityKitSample.runExample()
     }

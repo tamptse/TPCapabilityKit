@@ -6,29 +6,28 @@ import Foundation
 struct TPCapabilityKitSharedSlotDomainTests {
     @Test("reconfigure under slot pressure keeps total admission within limit")
     func reconfigureKeepsTotalAdmissionWithinLimit() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1))
         let cap = Capability.custom("sharedSlot_\(UUID().uuidString)")
-        let pluginId = "SharedSlot_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [cap])
+        let (store, pluginId) = makeStoreWithCap(
+            [cap],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1),
+            deterministic: true,
+            prefix: "SharedSlot"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let blockerDone = AsyncStream<Void>.makeStream()
-        let secondDone = AsyncStream<Void>.makeStream()
-        actor Executions {
-            var count = 0
-            func increment() { count += 1 }
-        }
-        let executions = Executions()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let blockerDone = AsyncGate()
+        let secondDone = AsyncGate()
+        let executions = Probe()
 
         let blocker = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(blocker, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
-        }, completion: { _ in blockerDone.continuation.yield() })
+            started.signal()
+            await release.wait()
+        }, completion: { _ in blockerDone.signal() })
 
-        for await _ in started.stream { break }
+        await started.wait()
         #expect(store.activeTaskCount == 1)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1))
@@ -36,17 +35,20 @@ struct TPCapabilityKitSharedSlotDomainTests {
 
         let second = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(second, task: {
-            await executions.increment()
-        }, completion: { _ in secondDone.continuation.yield() })
+            await executions.inc()
+        }, completion: { _ in secondDone.signal() })
 
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 1 && store.activeTaskCount == 1 { break }
+            await Task.yield()
+        }
         #expect(await executions.count == 0)
         #expect(store.activeTaskCount == 1)
         #expect(store.pendingTaskCount == 1)
 
-        release.continuation.finish()
-        for await _ in blockerDone.stream { break }
-        for await _ in secondDone.stream { break }
+        release.finish()
+        await blockerDone.wait()
+        await secondDone.wait()
         #expect(await executions.count == 1)
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)

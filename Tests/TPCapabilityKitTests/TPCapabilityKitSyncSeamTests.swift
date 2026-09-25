@@ -47,19 +47,6 @@ struct SyncSeamTests {
         #expect(storeMiss == nil && bridgeMiss == nil)
     }
 
-    @Test func swiftSyncNilExactlyWhenWaiterTimesOut() async {
-        let store = makeStore()
-        let missing = Capability.custom("SyncSeamTimeout_\(UUID().uuidString)")
-
-        let syncResult: String? = store.runIfAvailable(requiring: missing) { "ShouldNotRun" }
-        #expect(syncResult == nil)
-
-        let waited: String? = await store.scheduleTaskAndWait(
-            TaskDescriptor(requiredCapabilities: [missing], timeout: 0.2)
-        ) { "ShouldNotRun" }
-        #expect(waited == nil)
-    }
-
     @Test func emptyPluginIdIsNoOpOnBothPaths() {
         let store = makeStore()
         store.registerCapability(for: "", capabilities: [.heavyTask])

@@ -9,22 +9,22 @@ import Foundation
 /// fire by definition skips Lease, slot admission, and Deadline.
 struct FireAgreementTests {
     @Test func missingCapabilityAgreesNil() async {
-        let store = DynamicStore()
+        let (store, _) = makeStoreWithCap([], deterministic: true, prefix: "FireMissing")
         let missing = Capability.custom("FireMissing_\(UUID().uuidString)")
 
         let syncResult: String? = store.runIfAvailable(requiring: missing) { "ShouldNotRun" }
         #expect(syncResult == nil)
 
-        let waited: String? = await store.scheduleTaskAndWait(
+        async let waited: String? = store.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 0.2)
         ) { "ShouldNotRun" }
-        #expect(waited == nil)
+        await store.waitForDeterministicWaiters(count: 1)
+        await store.advanceTime(by: 0.2)
+        #expect(await waited == nil)
     }
 
     @Test func availableCapabilityAgreesValue() async {
-        let store = DynamicStore()
-        let pluginId = "FireAgree_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], deterministic: true, prefix: "FireAgree")
         defer { store.unregisterCapability(for: pluginId) }
 
         #expect(store.runIfAvailable(requiring: .heavyTask) { "ok" } == "ok")
@@ -36,10 +36,8 @@ struct FireAgreementTests {
     }
 
     @Test func waiterConvenienceAgreesWithScheduleAndWait() async {
-        let store = DynamicStore()
-        let pluginId = "FireConvenience_\(UUID().uuidString)"
         let cap = Capability.custom("fireConvenience_\(UUID().uuidString)")
-        store.registerCapability(for: pluginId, capabilities: [cap])
+        let (store, pluginId) = makeStoreWithCap([cap], deterministic: true, prefix: "FireConvenience")
         defer { store.unregisterCapability(for: pluginId) }
 
         let waited: String? = await store.scheduleTaskAndWait(
@@ -52,28 +50,27 @@ struct FireAgreementTests {
     }
 
     @Test func slotPressureSyncFireRunsWhileScheduledWaitParks() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 5.0, maxPerCapability: 5, maxGlobal: 1))
-        let pluginId = "FireSlot_\(UUID().uuidString)"
         let cap = Capability.custom("fireSlot_\(UUID().uuidString)")
-        store.registerCapability(for: pluginId, capabilities: [cap])
+        let (store, pluginId) = makeStoreWithCap(
+            [cap],
+            configuration: .init(defaultTimeout: 5.0, maxPerCapability: 5, maxGlobal: 1),
+            deterministic: true,
+            prefix: "FireSlot"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let blockerDone = AsyncStream<Void>.makeStream()
-        actor Executions {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let executions = Executions()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let blockerDone = AsyncGate()
+        let executions = Probe()
 
         let blocker = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(blocker, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
-        }, completion: { _ in blockerDone.continuation.yield() })
+            started.signal()
+            await release.wait()
+        }, completion: { _ in blockerDone.signal() })
 
-        for await _ in started.stream { break }
+        await started.wait()
         #expect(store.activeTaskCount == 1)
 
         let syncResult = store.runIfAvailable(requiring: cap) { "Immediate" }
@@ -87,16 +84,16 @@ struct FireAgreementTests {
                 return "Gated"
             }
         }
-        let gate = Date().addingTimeInterval(5.0)
-        while store.pendingTaskCount != 1 && Date() < gate {
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 1 { break }
             await Task.yield()
         }
         #expect(store.pendingTaskCount == 1)
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        for _ in 0..<50 { await Task.yield() }
         #expect(await executions.count == 0)
 
-        release.continuation.finish()
-        for await _ in blockerDone.stream { break }
+        release.finish()
+        await blockerDone.wait()
         let gatedResult: String? = await gatedTask.value
         #expect(gatedResult == "Gated")
         #expect(await executions.count == 1)

@@ -81,13 +81,15 @@ struct TPCapabilityKitRegistryWaitTests {
             registry.unregister(for: pluginB)
         }
 
+        let waiting = AsyncGate()
         Task {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            await waiting.wait()
             registry.register(for: pluginA, capabilities: [capA])
             registry.register(for: pluginB, capabilities: [capB])
         }
         let result = await registry.waitForAll([capA, capB]) { operation in
-            await operation()
+            waiting.signal()
+            return await operation()
         }
         #expect(result == true)
     }

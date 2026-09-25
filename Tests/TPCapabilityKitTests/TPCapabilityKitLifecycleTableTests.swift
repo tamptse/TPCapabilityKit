@@ -34,65 +34,51 @@ struct LifecycleTableTests {
     @Test("terminal removal cleans order, same id reschedules through Tasks seam")
     func cancelThenRescheduleSameId() async {
         let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
+        let scheduler = makeScheduler(store: store)
         let missing = Capability.custom("lifecycleTable_\(UUID().uuidString)")
         let id = "lifecycle-reuse_\(UUID().uuidString)"
 
-        let firstDone = AsyncStream<Void>.makeStream()
+        let firstDone = AsyncGate()
         let first = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 10.0)
         let firstLease = scheduler.schedule(first, taskExecution: {}, completion: { _ in
-            firstDone.continuation.yield()
+            firstDone.signal()
         })
 
-        #expect(await scheduler.waitForCounts(parked: 1))
-        #expect(scheduler.parkedCount == 1)
-        #expect(scheduler.queuedCount == 0)
         #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.activeCount == 0)
+        #expect(!firstLease.isTerminal)
 
         scheduler.cancel(taskId: id)
-        for await _ in firstDone.stream { break }
+        await firstDone.wait()
 
         #expect(firstLease.isTerminal)
         #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.queuedCount == 0)
-        #expect(scheduler.parkedCount == 0)
+        #expect(scheduler.activeCount == 0)
 
-        let secondDone = AsyncStream<Void>.makeStream()
+        let secondDone = AsyncGate()
         let second = TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 10.0)
         let secondLease = scheduler.schedule(second, taskExecution: {}, completion: { _ in
-            secondDone.continuation.yield()
+            secondDone.signal()
         })
 
-        #expect(await scheduler.waitForCounts(parked: 1))
-        #expect(scheduler.parkedCount == 1)
         #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.activeCount == 0)
         #expect(!secondLease.isTerminal)
 
         scheduler.cancel(taskId: id)
-        for await _ in secondDone.stream { break }
+        await secondDone.wait()
 
         #expect(secondLease.isTerminal)
         #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.queuedCount == 0)
-        #expect(scheduler.parkedCount == 0)
         #expect(scheduler.activeCount == 0)
     }
 
     @Test("retry re-queue restores pending through Store facade")
     func retryRestoresPending() async {
-        let store = DynamicStore()
-        let pluginId = "lifecycleRetry_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "lifecycleRetry")
         defer { store.unregisterCapability(for: pluginId) }
 
-        actor Attempts {
-            var count = 0
-            func next() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct Flaky: Error {}
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 1)
         let result = await store.scheduleTaskAndWait(task) { () async throws -> String in

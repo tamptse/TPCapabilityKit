@@ -9,32 +9,28 @@ struct CancelTests {
         let store = DynamicStore()
         store.enableDeterministicTime()
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
-        actor Counter {
-            var completions = 0
-            func inc() { completions += 1 }
-        }
-        let counter = Counter()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
+        let counter = Probe()
 
         let descriptor = TaskDescriptor(requiredCapabilities: [])
         let lease = store.scheduleTask(descriptor, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
         }, completion: { _ in
             Task {
                 await counter.inc()
-                done.continuation.yield()
+                done.signal()
             }
         })
 
-        for await _ in started.stream { break }
+        await started.wait()
         store.cancelTask(taskId: lease.task.id)
-        for await _ in done.stream { break }
-        release.continuation.finish()
+        await done.wait()
+        release.finish()
 
-        #expect(await counter.completions == 1)
+        #expect(await counter.count == 1)
         #expect(lease.isTerminal)
         #expect(lease.state == .expired)
         #expect(store.pendingTaskCount == 0)
@@ -43,24 +39,17 @@ struct CancelTests {
 
     @Test("cancel active task expires lease and calls completion")
     func cancelActiveTask() async {
-        let store = DynamicStore()
-        store.enableDeterministicTime()
-        let pluginId = "CancelActive_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            deterministic: true,
+            prefix: "CancelActive"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
-        actor State {
-            var calls = 0
-            var terminal: Bool?
-            func record(_ lease: Lease) {
-                calls += 1
-                terminal = lease.isTerminal
-            }
-        }
-        let state = State()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
+        let state = Probe()
 
         let descriptor = TaskDescriptor(
             requiredCapabilities: [.heavyTask],
@@ -68,60 +57,57 @@ struct CancelTests {
         )
 
         let lease = store.scheduleTask(descriptor, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
         }, completion: { finished in
             Task {
                 await state.record(finished)
-                done.continuation.yield()
+                done.signal()
             }
         })
 
-        for await _ in started.stream { break }
+        await started.wait()
         store.cancelTask(taskId: lease.task.id)
-        for await _ in done.stream { break }
-        release.continuation.finish()
+        await done.wait()
+        release.finish()
 
         #expect(lease.state == .expired)
         #expect(lease.isTerminal)
-        #expect(await state.calls == 1)
-        #expect(await state.terminal == true)
+        #expect(await state.count == 1)
+        #expect(await state.lastLease?.isTerminal == true)
     }
 
     @Test("cancel parked-at-active task settles expired exactly once")
     func cancelParkedActiveDeliversOnce() async {
-        let store = DynamicStore()
-        store.enableDeterministicTime()
-        let pluginId = "ParkActive_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            deterministic: true,
+            prefix: "ParkActive"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
-        actor Counter {
-            var completions = 0
-            func inc() { completions += 1 }
-        }
-        let counter = Counter()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
+        let counter = Probe()
 
         let descriptor = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)
         let lease = store.scheduleTask(descriptor, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
         }, completion: { _ in
             Task {
                 await counter.inc()
-                done.continuation.yield()
+                done.signal()
             }
         })
 
-        for await _ in started.stream { break }
+        await started.wait()
         store.cancelTask(taskId: descriptor.id)
-        for await _ in done.stream { break }
-        release.continuation.finish()
+        await done.wait()
+        release.finish()
 
-        #expect(await counter.completions == 1)
+        #expect(await counter.count == 1)
         #expect(lease.isTerminal)
         #expect(lease.state == .expired)
         #expect(store.pendingTaskCount == 0)
@@ -130,24 +116,26 @@ struct CancelTests {
 
     @Test("storm acquire and cancel drains slots to zero")
     func stormAcquireCancelDrainsSlots() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 30.0, maxPerCapability: 10, maxGlobal: 5))
-        store.enableDeterministicTime()
-        let pluginId = "Storm_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 10, maxGlobal: 5),
+            deterministic: true,
+            prefix: "Storm"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
         let total = 20
         var leases: [Lease] = []
         for _ in 0..<total {
             let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)
             leases.append(store.scheduleTask(task, task: {
-                started.continuation.yield()
-                for await _ in release.stream { break }
+                started.signal()
+                await release.wait()
             }, completion: { _ in
-                done.continuation.yield()
+                done.signal()
             }))
         }
 
@@ -155,7 +143,7 @@ struct CancelTests {
         for lease in leases {
             store.cancelTask(taskId: lease.task.id)
         }
-        release.continuation.finish()
+        release.finish()
 
         var finished = 0
         for await _ in done.stream {

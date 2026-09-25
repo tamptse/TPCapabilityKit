@@ -6,97 +6,77 @@ import Foundation
 struct PathLocalityTests {
     @Test("park withdraw cancel retry share one path with single delivery and freed slot")
     func parkWithdrawCancelRetryLocality() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1))
         let cap = Capability.custom("PathLocality_\(UUID().uuidString)")
-        let pluginId = "PathLocality_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [cap])
+        let (store, pluginId) = makeStoreWithCap(
+            [cap],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1),
+            deterministic: true,
+            prefix: "PathLocality"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        actor Executions {
-            var count = 0
-            func increment() { count += 1 }
-        }
-        let executions = Executions()
-        actor Deliveries {
-            var calls = 0
-            var states: [Lease.State] = []
-            func record(_ lease: Lease) {
-                calls += 1
-                states.append(lease.state)
-            }
-        }
-        let deliveries = Deliveries()
+        let executions = Probe()
+        let deliveries = Probe()
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let blockerDone = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let blockerDone = AsyncGate()
         let blocker = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(blocker, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
-        }, completion: { _ in blockerDone.continuation.yield() })
-        for await _ in started.stream { break }
+            started.signal()
+            await release.wait()
+        }, completion: { _ in blockerDone.signal() })
+        await started.wait()
 
-        let targetDone = AsyncStream<Void>.makeStream()
+        let targetDone = AsyncGate()
         let target = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         let targetLease = store.scheduleTask(target, task: {
-            await executions.increment()
+            await executions.inc()
         }, completion: { finished in
             Task {
                 await deliveries.record(finished)
-                targetDone.continuation.yield()
+                targetDone.signal()
             }
         })
 
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        for _ in 0..<50 { await Task.yield() }
         store.unregisterCapability(for: pluginId)
-        release.continuation.finish()
-        for await _ in blockerDone.stream { break }
-        for await _ in targetDone.stream { break }
+        release.finish()
+        await blockerDone.wait()
+        await targetDone.wait()
 
         #expect(targetLease.state == .expired)
         #expect(await executions.count == 0)
-        #expect(await deliveries.calls == 1)
+        #expect(await deliveries.count == 1)
         #expect(await deliveries.states == [.expired])
 
         store.registerCapability(for: pluginId, capabilities: [cap])
 
         let missing = Capability.custom("PathLocalityParked_\(UUID().uuidString)")
-        let parkedDone = AsyncStream<Void>.makeStream()
-        actor ParkedDeliveries {
-            var calls = 0
-            func record() { calls += 1 }
-        }
-        let parkedDeliveries = ParkedDeliveries()
+        let parkedDone = AsyncGate()
+        let parkedDeliveries = Probe()
         let parked = TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0)
         let parkedLease = store.scheduleTask(parked, task: {
-            await executions.increment()
+            await executions.inc()
         }, completion: { _ in
             Task {
-                await parkedDeliveries.record()
-                parkedDone.continuation.yield()
+                await parkedDeliveries.inc()
+                parkedDone.signal()
             }
         })
 
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        await store.waitForDeterministicWaiters(count: 1)
         #expect(!parkedLease.isTerminal)
         #expect(store.pendingTaskCount == 1)
         store.cancelTask(taskId: parked.id)
-        for await _ in parkedDone.stream { break }
+        await parkedDone.wait()
 
         #expect(parkedLease.state == .expired)
-        #expect(await parkedDeliveries.calls == 1)
+        #expect(await parkedDeliveries.count == 1)
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
 
-        actor Attempts {
-            var count = 0
-            func next() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct Flaky: Error {}
         let retryTask = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0, maxRetries: 1)
         let result = await store.scheduleTaskAndWait(retryTask) { () async throws -> String in

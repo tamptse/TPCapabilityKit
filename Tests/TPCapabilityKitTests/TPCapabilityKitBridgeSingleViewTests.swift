@@ -1,5 +1,6 @@
+@preconcurrency import Foundation
+import Combine
 import Testing
-import Foundation
 @testable import TPCapabilityKit
 @testable import TPCapabilityKitBridge
 
@@ -18,39 +19,6 @@ struct BridgeSingleViewTests {
         let pluginId = "SingleView_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [capability])
         return pluginId
-    }
-
-    @Test func viewWaitThenRunDeliversResultWhenAvailable() async {
-        let (store, bridge) = makeBridge()
-        let pluginId = register(.heavyTask, on: store)
-        defer { store.unregisterCapability(for: pluginId) }
-
-        await withCheckedContinuation { continuation in
-            bridge.taskScheduler.runWhenAvailable(
-                capability: "heavyTask", timeout: 1.0, queue: nil,
-                task: { NSString(string: "ViewWait") },
-                completion: { result in
-                    #expect((result as? String) == "ViewWait")
-                    continuation.resume()
-                }
-            )
-        }
-    }
-
-    @Test func viewWaitThenRunReturnsNilWhenUnavailable() async {
-        let (_, bridge) = makeBridge()
-        let uniqueCap = "singleViewMissing_\(UUID().uuidString)"
-
-        await withCheckedContinuation { continuation in
-            bridge.taskScheduler.runWhenAvailable(
-                capability: uniqueCap, timeout: 0.1, queue: nil,
-                task: { NSString(string: "ShouldNotRun") },
-                completion: { result in
-                    #expect(result == nil)
-                    continuation.resume()
-                }
-            )
-        }
     }
 
     @Test func bridgeWaitThenRunAgreesWithViewScheduleAndWait() async {
@@ -247,53 +215,508 @@ struct BridgeSingleViewTests {
         let view = bridge.taskScheduler
 
         let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 5.0)
-        let done = AsyncStream<Void>.makeStream()
+        let done = AsyncGate()
         let lease = view.schedule(descriptor, task: {}, completion: { _ in
-            done.continuation.yield()
+            done.signal()
         })
 
         view.cancel(taskId: descriptor.id)
 
-        for await _ in done.stream { break }
+        await done.wait()
         #expect(lease.underlying.isTerminal)
-        #expect(lease.state != .pending || lease.underlying.isTerminal)
+        #expect(lease.state == .expired)
         #expect(view.pendingCount == 0)
         #expect(view.activeCount == 0)
     }
+}
 
-    @Test func descriptorDisplayCollapsesToStoredOrPinnedDefault() {
-        let pinned = TaskScheduler.Configuration.default.defaultTimeout
+struct TPCapabilityKitObjCBridgeTests {
 
-        let omitted = ObjcTaskDescriptor(capabilities: ["heavyTask"])
-        #expect(omitted.underlying.timeout == pinned)
-        #expect(omitted.hasExplicitTimeout)
-        #expect(omitted.timeout == pinned)
+    final class MockObjcPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
+        let id: String
+        var isStarted = false
 
-        let negative = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
-        #expect(negative.underlying.timeout == nil)
-        #expect(!negative.hasExplicitTimeout)
-        #expect(negative.timeout == pinned)
-
-        let explicit = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: 60.0)
-        #expect(explicit.underlying.timeout == 60.0)
-        #expect(explicit.hasExplicitTimeout)
-        #expect(explicit.timeout == 60.0)
-
-        let swiftNil = ObjcTaskDescriptor(underlying: TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: nil))
-        #expect(!swiftNil.hasExplicitTimeout)
-        #expect(swiftNil.timeout == pinned)
-    }
-
-    @Test func priorityCoercionExplicitAtView() {
-        for rawValue in [99, -1, 5, -100] {
-            let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: rawValue)
-            #expect(descriptor.underlying.priority == .normal)
-            #expect(descriptor.priority == TaskPriority.normal.rawValue)
-            #expect(descriptor.priority == descriptor.underlying.priority.rawValue)
+        init(id: String = "ObjcPluginA") {
+            self.id = id
+            super.init()
         }
 
-        let critical = ObjcTaskDescriptor(capabilities: ["heavyTask"], priority: 4)
-        #expect(critical.underlying.priority == .critical)
-        #expect(critical.priority == critical.underlying.priority.rawValue)
+        func start(with store: ObjcStoreBridge) {
+            isStarted = true
+            store.updateState(pluginId: id, newState: NSString(string: "ObjcInitialState"))
+        }
+    }
+
+    @Test func objcBridge() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcBridge_\(UUID().uuidString)"
+        let objcPlugin = MockObjcPlugin(id: pluginId)
+
+        bridge.register(plugin: objcPlugin)
+        #expect(objcPlugin.isStarted)
+
+        let fetchedState = bridge.getState(pluginId: pluginId) as? String
+        #expect(fetchedState == "ObjcInitialState")
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "ObjcNewState"))
+        let updatedState = bridge.getState(pluginId: pluginId) as? String
+        #expect(updatedState == "ObjcNewState")
+    }
+
+    @Test func objcSubscribeAndCancel() {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "SubPlugin_\(UUID().uuidString)"
+        var receivedState: NSObject?
+
+        let cancellable = bridge.subscribe(pluginId: pluginId, queue: nil) { state in
+            receivedState = state
+        }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "SubValue"))
+
+        let deadline = Date().addingTimeInterval(0.2)
+        while receivedState == nil && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        #expect(receivedState as? String == "SubValue")
+        cancellable.cancel()
+    }
+
+    @Test func objcSubscribeOnCustomQueue() {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "CustomQueuePlugin_\(UUID().uuidString)"
+        var receivedState: NSObject?
+        let lock = NSLock()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        let customQueue = DispatchQueue(label: "test.custom.queue")
+        let cancellable = bridge.subscribe(pluginId: pluginId, queue: customQueue) { state in
+            lock.lock()
+            receivedState = state
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "CustomQueueValue"))
+
+        _ = semaphore.wait(timeout: .now() + 1.0)
+
+        lock.lock()
+        let result = receivedState as? String
+        lock.unlock()
+
+        #expect(result == "CustomQueueValue")
+        cancellable.cancel()
+    }
+
+    @Test func objcSubscribeCancelStopsDelivery() {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "CancelStopPlugin_\(UUID().uuidString)"
+        var receivedValues: [String] = []
+
+        let cancellable = bridge.subscribe(pluginId: pluginId) { state in
+            if let str = state as? String {
+                receivedValues.append(str)
+            }
+        }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "BeforeCancel"))
+
+        let deadline1 = Date().addingTimeInterval(0.2)
+        while receivedValues.isEmpty && Date() < deadline1 {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        #expect(receivedValues.last == "BeforeCancel")
+
+        cancellable.cancel()
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "AfterCancel"))
+        let deadline2 = Date().addingTimeInterval(0.3)
+        let _ = deadline2
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+
+        #expect(receivedValues.last == "BeforeCancel")
+        #expect(!receivedValues.contains("AfterCancel"))
+    }
+
+    @Test func objcRunTaskWhenAvailable() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcRunTaskCap_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let result = bridge.runTask(capability: "heavyTask") {
+            NSString(string: "TaskResult")
+        }
+        #expect((result as? String) == "TaskResult")
+    }
+
+    @Test func objcRunTaskWhenNotAvailable() {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let uniqueCap = "missingCap_\(UUID().uuidString)"
+
+        let result = bridge.runTask(capability: uniqueCap) {
+            NSString(string: "ShouldNotRun")
+        }
+        #expect(result == nil)
+    }
+
+    @Test func objcQueryCapability() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcQueryCap_\(UUID().uuidString)"
+        let uniqueCap = "queryCap_\(UUID().uuidString)"
+
+        store.registerCapability(for: pluginId, capabilities: [.custom(uniqueCap)])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        #expect(bridge.queryCapability(uniqueCap) == true)
+    }
+
+    @Test func objcPluginIsCapabilityConsumerOnly() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcConsumer_\(UUID().uuidString)"
+        let objcPlugin = MockObjcPlugin(id: pluginId)
+
+        bridge.register(plugin: objcPlugin)
+        #expect(objcPlugin.isStarted)
+
+        #expect(store.queryCapabilities(for: pluginId).isEmpty)
+        #expect(bridge.queryCapability("heavyTask") == false)
+    }
+
+    @Test func objcRunTaskWhenAvailableNegativeTimeoutMeansDefault() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcNegTimeout_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        await withCheckedContinuation { continuation in
+            bridge.runTaskWhenAvailable(capability: "heavyTask", timeout: -1, queue: nil, task: {
+                return NSString(string: "NegativeMeansDefault")
+            }, completion: { result in
+                #expect((result as? String) == "NegativeMeansDefault")
+                continuation.resume()
+            })
+        }
+    }
+}
+
+private final class DeliveryFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didRun = false
+    private var wasMain = false
+
+    func record(wasMain isMain: Bool) {
+        lock.withLock {
+            didRun = true
+            wasMain = isMain
+        }
+    }
+
+    var snapshot: (didRun: Bool, wasMain: Bool) {
+        lock.withLock { (didRun, wasMain) }
+    }
+}
+
+private final class QueueIdentity: @unchecked Sendable {
+    let key = DispatchSpecificKey<Bool>()
+}
+
+struct BridgeDeliveryPolicyTests {
+    private func firstValue<T: Sendable>(from stream: AsyncStream<T>, timeout seconds: Double) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask {
+                for await value in stream { return value }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return nil
+            }
+            var result: T? = nil
+            for await value in group {
+                if let value {
+                    result = value
+                }
+                break
+            }
+            group.cancelAll()
+            return result
+        }
+    }
+
+    @Test func bridgeSubscribeNilDeliversOnMain() {
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "DeliveryPolicy_\(UUID().uuidString)"
+        let flag = DeliveryFlag()
+        let cancellable = bridge.subscribe(pluginId: pluginId, queue: nil) { _ in
+            flag.record(wasMain: Thread.isMainThread)
+        }
+        defer { cancellable.cancel() }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "Main"))
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if flag.snapshot.didRun { break }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        let snapshot = flag.snapshot
+        #expect(snapshot.didRun)
+        #expect(snapshot.wasMain)
+    }
+
+    @Test func bridgeSubscribeDeliversOnGivenQueue() async {
+        struct Observation: Sendable {
+            let onQueue: Bool
+            let isMain: Bool
+        }
+
+        let bridge = ObjcStoreBridge(store: DynamicStore())
+        let pluginId = "DeliveryPolicy_\(UUID().uuidString)"
+        let queue = DispatchQueue(label: "bridge.subscribe.policy.\(UUID().uuidString)")
+        let identity = QueueIdentity()
+        queue.setSpecific(key: identity.key, value: true)
+
+        let gated = AsyncStream<Observation>.makeStream()
+        let cancellable = bridge.subscribe(pluginId: pluginId, queue: queue) { _ in
+            gated.continuation.yield(Observation(
+                onQueue: DispatchQueue.getSpecific(key: identity.key) == true,
+                isMain: Thread.isMainThread
+            ))
+            gated.continuation.finish()
+        }
+        defer { cancellable.cancel() }
+
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "Custom"))
+
+        let result = await firstValue(from: gated.stream, timeout: 2.0)
+        #expect(result != nil)
+        #expect(result?.onQueue == true)
+        #expect(result?.isMain == false)
+    }
+
+    @Test func bridgeCapabilitySubscribeDeliversOnGivenQueue() async {
+        struct Observation: Sendable {
+            let onQueue: Bool
+            let isMain: Bool
+        }
+
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "deliveryCap_\(UUID().uuidString)"
+        let queue = DispatchQueue(label: "bridge.capability.policy.\(UUID().uuidString)")
+        let identity = QueueIdentity()
+        queue.setSpecific(key: identity.key, value: true)
+
+        let gated = AsyncStream<Observation>.makeStream()
+        let cancellable = bridge.subscribeCapability(uniqueCap, queue: queue) { _ in
+            gated.continuation.yield(Observation(
+                onQueue: DispatchQueue.getSpecific(key: identity.key) == true,
+                isMain: Thread.isMainThread
+            ))
+            gated.continuation.finish()
+        }
+        defer { cancellable.cancel() }
+
+        let result = await firstValue(from: gated.stream, timeout: 2.0)
+        #expect(result != nil)
+        #expect(result?.onQueue == true)
+        #expect(result?.isMain == false)
+    }
+
+    @Test func viewWaitDeliversOnGivenQueue() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "DeliveryPolicyWait_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let queue = DispatchQueue(label: "bridge.wait.policy.\(UUID().uuidString)")
+        let key = DispatchSpecificKey<Bool>()
+        queue.setSpecific(key: key, value: true)
+
+        await withCheckedContinuation { continuation in
+            bridge.taskScheduler.runWhenAvailable(
+                capability: "heavyTask", timeout: 1.0, queue: queue,
+                task: { NSString(string: "CustomQueue") },
+                completion: { result in
+                    #expect(DispatchQueue.getSpecific(key: key) == true)
+                    #expect((result as? String) == "CustomQueue")
+                    continuation.resume()
+                }
+            )
+        }
+    }
+}
+
+struct ObjcStoreBridgeSchedulingTests {
+    @Test func objcScheduleWithoutCapability() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "missingCap_\(UUID().uuidString)"
+
+        let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 0.1)
+
+        await withCheckedContinuation { continuation in
+            bridge.taskScheduler.scheduleAndWait(descriptor, task: {
+                NSString(string: "ShouldNotRun")
+            }, completion: { result in
+                #expect(result == nil)
+                continuation.resume()
+            })
+        }
+    }
+
+    @Test func taskSchedulerIsLiveView() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+
+        let scheduler1 = bridge.taskScheduler
+        let scheduler2 = bridge.taskScheduler
+
+        #expect(scheduler1.pendingCount == store.pendingTaskCount)
+        #expect(scheduler2.pendingCount == store.pendingTaskCount)
+        #expect(scheduler1.activeCount == store.activeTaskCount)
+        #expect(scheduler2.activeCount == store.activeTaskCount)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
+
+    @Test func bridgeSchedulingDelegatesToSinglePath() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "singlePathCap_\(UUID().uuidString)"
+
+        let descriptor = ObjcTaskDescriptor(capabilities: [uniqueCap], timeout: 5.0)
+        let done = AsyncGate()
+        let lease = bridge.taskScheduler.schedule(descriptor, task: {
+        }, completion: { _ in
+            done.signal()
+        })
+
+        bridge.taskScheduler.cancel(taskId: descriptor.id)
+
+        await done.wait()
+        #expect(lease.underlying.isTerminal)
+        #expect(bridge.taskScheduler.pendingCount == store.pendingTaskCount)
+        #expect(bridge.taskScheduler.activeCount == store.activeTaskCount)
+    }
+
+    @Test func cancelByClientIdWorks() async {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let uniqueCap = "clientIdCancelCap_\(UUID().uuidString)"
+        let clientId = "client-cancel-\(UUID().uuidString)"
+
+        let descriptor = ObjcTaskDescriptor(clientId: clientId, capabilities: [uniqueCap], timeout: 5.0)
+        #expect(descriptor.id == clientId)
+
+        let done = AsyncGate()
+        let lease = bridge.taskScheduler.schedule(descriptor, task: {
+        }, completion: { _ in
+            done.signal()
+        })
+
+        bridge.taskScheduler.cancel(taskId: clientId)
+
+        await done.wait()
+        #expect(lease.underlying.isTerminal)
+        #expect(lease.taskId == clientId)
+    }
+}
+
+struct ObjcLeaseTests {
+    @Test func stateTransitions() {
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let lease = Lease(task: task)
+        let objcLease = ObjcLease(underlying: lease)
+
+        #expect(objcLease.state == .pending)
+        #expect(objcLease.underlying.state == .pending)
+
+        lease.activate()
+        #expect(lease.state == .active)
+        #expect(objcLease.underlying.activatedAt != nil)
+
+        lease.terminalize(.completed("result"))
+        #expect(lease.state == .completed)
+        #expect(objcLease.underlying.completedAt != nil)
+        #expect(objcLease.underlying.result as? String == "result")
+    }
+
+    @Test func failureState() {
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let lease = Lease(task: task)
+        let objcLease = ObjcLease(underlying: lease)
+
+        lease.activate()
+        struct TestError: Error {}
+        lease.terminalize(.failed(TestError()))
+
+        if case .failed = lease.state {
+        } else {
+            Issue.record("Expected failed state")
+        }
+        #expect(objcLease.underlying.isTerminal)
+    }
+
+    @Test func underlyingProperty() {
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let lease = Lease(task: task)
+        let objcLease = ObjcLease(underlying: lease)
+
+        #expect(objcLease.underlying === lease)
+    }
+
+    @Test func liveViewReadsStateWithoutSync() {
+        let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
+        let lease = Lease(task: task)
+        let objcLease = ObjcLease(underlying: lease)
+
+        #expect(objcLease.state == .pending)
+
+        lease.activate()
+
+        #expect(objcLease.state == .active)
+
+        lease.terminalize(.completed("result"))
+
+        #expect(objcLease.state == .completed)
+        #expect(objcLease.result as? String == "result")
+    }
+}
+
+struct ObjcFastPathAgreementTests {
+    @Test func bridgeRunTaskAgreesWithSchedulerFastPath() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "ObjcFastPathDeleg_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let viaScheduler = bridge.taskScheduler.runIfAvailable(capability: "heavyTask") {
+            NSString(string: "Delegated")
+        }
+        let viaBridge = bridge.runTask(capability: "heavyTask") {
+            NSString(string: "Delegated")
+        }
+        #expect((viaScheduler as? String) == "Delegated")
+        #expect((viaBridge as? String) == "Delegated")
+
+        let missingCap = "fastPathDelegMissing_\(UUID().uuidString)"
+        #expect(bridge.taskScheduler.runIfAvailable(capability: missingCap) {
+            NSString(string: "ShouldNotRun")
+        } == nil)
+        #expect(bridge.runTask(capability: missingCap) {
+            NSString(string: "ShouldNotRun")
+        } == nil)
     }
 }

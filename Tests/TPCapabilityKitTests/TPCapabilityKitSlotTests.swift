@@ -6,11 +6,8 @@ import Foundation
 struct ScopedSlotTests {
     @Test("completed tasks drain slots synchronously via public counts")
     func completedDrainsSynchronously() async {
-        let store = DynamicStore()
-        let pluginId = "SlotDrain_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "SlotDrain")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let total = 10
         await withTaskGroup(of: Void.self) { group in
@@ -18,94 +15,85 @@ struct ScopedSlotTests {
                 group.addTask {
                     await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
                         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
-                        scheduler.schedule(task, taskExecution: {}, completion: { _ in done.resume() })
+                        store.scheduleTask(task, task: {}, completion: { _ in done.resume() })
                     }
                 }
             }
         }
 
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test("cancel active drains slot exactly once via public counts")
     func cancelActiveDrainsExactlyOnce() async {
-        let store = DynamicStore()
-        let pluginId = "SlotCancel_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "SlotCancel")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
-        actor Counter {
-            var completions = 0
-            func inc() { completions += 1 }
-        }
-        let counter = Counter()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
+        let counter = Probe()
 
         let descriptor = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
-        scheduler.schedule(descriptor, taskExecution: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+        store.scheduleTask(descriptor, task: {
+            started.signal()
+            await release.wait()
         }, completion: { _ in
             Task {
                 await counter.inc()
-                done.continuation.yield()
+                done.signal()
             }
         })
 
-        for await _ in started.stream { break }
-        scheduler.cancel(taskId: descriptor.id)
-        for await _ in done.stream { break }
-        release.continuation.finish()
+        await started.wait()
+        store.cancelTask(taskId: descriptor.id)
+        await done.wait()
+        release.finish()
 
-        #expect(await counter.completions == 1)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(await counter.count == 1)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test("late unregister during slot contention never executes")
     func lateUnregisterNeverExecutes() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 5.0, maxPerCapability: 5, maxGlobal: 1))
-        store.enableDeterministicTime()
-        let pluginId = "SlotGate_\(UUID().uuidString)"
         let cap = Capability.custom("slotGate_\(UUID().uuidString)")
-        store.registerCapability(for: pluginId, capabilities: [cap])
+        let (store, pluginId) = makeStoreWithCap(
+            [cap],
+            configuration: .init(defaultTimeout: 5.0, maxPerCapability: 5, maxGlobal: 1),
+            deterministic: true,
+            prefix: "SlotGate"
+        )
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let blockerDone = AsyncStream<Void>.makeStream()
-        let gatedDone = AsyncStream<Void>.makeStream()
-        actor Executions {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let executions = Executions()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let blockerDone = AsyncGate()
+        let gatedDone = AsyncGate()
+        let executions = Probe()
 
         let blocker = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(blocker, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
-        }, completion: { _ in blockerDone.continuation.yield() })
+            started.signal()
+            await release.wait()
+        }, completion: { _ in blockerDone.signal() })
 
-        for await _ in started.stream { break }
+        await started.wait()
 
         let gated = TaskDescriptor(requiredCapabilities: [cap], timeout: 5.0, maxRetries: 0)
         let gatedLease = store.scheduleTask(gated, task: {
             Task {
                 await executions.inc()
             }
-        }, completion: { _ in gatedDone.continuation.yield() })
+        }, completion: { _ in gatedDone.signal() })
 
         store.unregisterCapability(for: pluginId)
-        release.continuation.finish()
+        release.finish()
 
-        for await _ in blockerDone.stream { break }
+        await blockerDone.wait()
         await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 5.0)
-        for await _ in gatedDone.stream { break }
+        await gatedDone.wait()
 
         #expect(await executions.count == 0)
         #expect(gatedLease.state == .expired)
@@ -115,102 +103,97 @@ struct ScopedSlotTests {
 
     @Test("cancel during slot-acquire suspension never executes")
     func cancelDuringAcquireNeverExecutes() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 5.0, maxPerCapability: 5, maxGlobal: 1))
-        store.enableDeterministicTime()
-        let pluginId = "SlotCancelFlight_\(UUID().uuidString)"
         let cap = Capability.custom("slotCancelFlight_\(UUID().uuidString)")
-        store.registerCapability(for: pluginId, capabilities: [cap])
+        let (store, pluginId) = makeStoreWithCap(
+            [cap],
+            configuration: .init(defaultTimeout: 5.0, maxPerCapability: 5, maxGlobal: 1),
+            deterministic: true,
+            prefix: "SlotCancelFlight"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let blockerDone = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let blockerDone = AsyncGate()
 
         let blocker = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(blocker, task: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
-        }, completion: { _ in blockerDone.continuation.yield() })
+            started.signal()
+            await release.wait()
+        }, completion: { _ in blockerDone.signal() })
 
-        for await _ in started.stream { break }
+        await started.wait()
         #expect(store.activeTaskCount == 1)
 
         let gated = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0, maxRetries: 0)
-        let gatedDone = AsyncStream<Void>.makeStream()
-        actor GatedState {
-            var executions = 0
-            var terminal: Lease.State?
-            func recordExec() { executions += 1 }
-            func recordTerminal(_ state: Lease.State) { terminal = state }
-        }
-        let gatedState = GatedState()
+        let gatedDone = AsyncGate()
+        let gatedState = Probe()
         let gatedLease = store.scheduleTask(gated, task: {
             Task {
-                await gatedState.recordExec()
+                await gatedState.inc()
             }
         }, completion: { finished in
             Task {
-                await gatedState.recordTerminal(finished.state)
-                gatedDone.continuation.yield()
+                await gatedState.record(finished)
+                gatedDone.signal()
             }
         })
 
         #expect(store.pendingTaskCount == 1)
         store.cancelTask(taskId: gated.id)
-        release.continuation.finish()
+        release.finish()
 
-        for await _ in gatedDone.stream { break }
-        #expect(await gatedState.executions == 0)
-        #expect(await gatedState.terminal == .expired)
+        await gatedDone.wait()
+        #expect(await gatedState.count == 1)
+        #expect(await gatedState.lastState == .expired)
         #expect(gatedLease.state == .expired)
-        for await _ in blockerDone.stream { break }
+        await blockerDone.wait()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
     }
 
-    @Test("standalone scheduler enforces its injected domain limits")
+    @Test("shared domain enforces limits through the Store facade")
     func injectedDomainLimitsEnforced() async {
-        let store = DynamicStore()
-        let pluginId = "SlotInjected_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
-            store: store,
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
             configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1),
-            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 1)
+            prefix: "SlotInjected"
         )
+        defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let blockerDone = AsyncStream<Void>.makeStream()
-        let secondDone = AsyncStream<Void>.makeStream()
-        scheduler.schedule(
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let blockerDone = AsyncGate()
+        let secondDone = AsyncGate()
+        let blockerLease = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
-            taskExecution: {
-                started.continuation.yield()
-                for await _ in release.stream { break }
+            task: {
+                started.signal()
+                await release.wait()
             },
-            completion: { _ in blockerDone.continuation.yield() }
+            completion: { _ in blockerDone.signal() }
         )
-        for await _ in started.stream { break }
+        await started.wait()
 
-        scheduler.schedule(
+        let secondLease = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
-            taskExecution: {},
-            completion: { _ in secondDone.continuation.yield() }
+            task: {},
+            completion: { _ in secondDone.signal() }
         )
 
-        let gate = Date().addingTimeInterval(5.0)
-        while (scheduler.pendingCount != 1 || scheduler.activeCount != 1) && Date() < gate {
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 1 && store.activeTaskCount == 1 { break }
             await Task.yield()
         }
-        #expect(scheduler.pendingCount == 1)
-        #expect(scheduler.activeCount == 1)
+        #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 1)
 
-        release.continuation.finish()
-        for await _ in blockerDone.stream { break }
-        for await _ in secondDone.stream { break }
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        release.finish()
+        await blockerDone.wait()
+        await secondDone.wait()
+        #expect(blockerLease.state == .completed)
+        #expect(secondLease.state == .completed)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 }

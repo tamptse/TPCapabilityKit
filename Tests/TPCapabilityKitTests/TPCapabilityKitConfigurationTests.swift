@@ -7,25 +7,27 @@ import Foundation
 struct ConfigurationTests {
     @Test("defaultTimeout varies expiry for default-timed tasks")
     func defaultTimeoutVariesExpiry() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
-        store.enableDeterministicTime()
-        let pluginId = "ConfigTimeout_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 0.2),
+            deterministic: true,
+            prefix: "ConfigTimeout"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
         async let result: String? = store.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [.heavyTask])
         ) {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
             return "should-expire"
         }
 
-        for await _ in started.stream { break }
+        await started.wait()
         await store.advanceTime(by: 0.2)
-        release.continuation.finish()
+        release.finish()
 
         #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)
@@ -33,14 +35,11 @@ struct ConfigurationTests {
 
     @Test("explicit 30.0 timeout is honored, not treated as default")
     func explicitDefaultValueHonored() async {
-        let store = DynamicStore()
-        let pluginId = "ConfigExplicit30_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "ConfigExplicit30")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
+        let scheduler = makeScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20),
-            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0)
@@ -53,14 +52,11 @@ struct ConfigurationTests {
 
     @Test("explicit timeout wins over defaultTimeout")
     func explicitTimeoutWins() async {
-        let store = DynamicStore()
-        let pluginId = "ConfigExplicit_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "ConfigExplicit")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
+        let scheduler = makeScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20),
-            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
+            configuration: .init(defaultTimeout: 0.2, maxPerCapability: 5, maxGlobal: 20)
         )
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
@@ -73,14 +69,11 @@ struct ConfigurationTests {
 
     @Test("custom limits still drain via public counts")
     func customLimitsDrain() async {
-        let store = DynamicStore()
-        let pluginId = "ConfigLimits_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "ConfigLimits")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
+        let scheduler = makeScheduler(
             store: store,
-            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 2),
-            concurrencyController: ConcurrencyController(maxPerCapability: 1, maxGlobal: 2)
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 2)
         )
 
         let total = 6
@@ -101,25 +94,27 @@ struct ConfigurationTests {
 
     @Test("store configuration varies default timeout")
     func storeConfigurationVariesTimeout() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
-        store.enableDeterministicTime()
-        let pluginId = "ConfigStore_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 0.2),
+            deterministic: true,
+            prefix: "ConfigStore"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
         async let result: String? = store.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [.heavyTask])
         ) {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
             return "should-expire"
         }
 
-        for await _ in started.stream { break }
+        await started.wait()
         await store.advanceTime(by: 0.2)
-        release.continuation.finish()
+        release.finish()
 
         #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)
@@ -128,9 +123,7 @@ struct ConfigurationTests {
 
     @Test("store configureScheduler preserves generations while varying limits")
     func storeConfigureVariesLimits() async {
-        let store = DynamicStore()
-        let pluginId = "ConfigStoreLimits_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "ConfigStoreLimits")
         defer { store.unregisterCapability(for: pluginId) }
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 2))
 
@@ -155,21 +148,23 @@ struct ConfigurationTests {
 
     @Test("bridge unspecified timeout follows scheduler default")
     func bridgeUnspecifiedFollowsDefault() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
-        store.enableDeterministicTime()
-        let pluginId = "ConfigBridgeUnspec_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 0.2),
+            deterministic: true,
+            prefix: "ConfigBridgeUnspec"
+        )
         defer { store.unregisterCapability(for: pluginId) }
         let bridge = ObjcStoreBridge(store: store)
 
         let descriptor = ObjcTaskDescriptor(capabilities: ["heavyTask"], timeout: -1)
         #expect(!descriptor.hasExplicitTimeout)
 
-        let started = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
         let gate = DispatchSemaphore(value: 0)
         await withCheckedContinuation { continuation in
             bridge.taskScheduler.scheduleAndWait(descriptor, task: {
-                started.continuation.yield()
+                started.signal()
                 gate.wait()
                 return NSString(string: "should-expire")
             }, completion: { result in
@@ -177,7 +172,7 @@ struct ConfigurationTests {
                 continuation.resume()
             })
             Task {
-                for await _ in started.stream { break }
+                await started.wait()
                 await store.advanceTime(by: 0.2)
                 gate.signal()
             }
@@ -187,9 +182,11 @@ struct ConfigurationTests {
 
     @Test("bridge explicit timeout honored over scheduler default")
     func bridgeExplicitHonored() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 0.2))
-        let pluginId = "ConfigBridgeExplicit_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 0.2),
+            prefix: "ConfigBridgeExplicit"
+        )
         defer { store.unregisterCapability(for: pluginId) }
         let bridge = ObjcStoreBridge(store: store)
 

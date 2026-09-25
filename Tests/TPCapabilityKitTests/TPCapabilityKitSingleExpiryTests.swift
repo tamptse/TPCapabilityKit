@@ -19,23 +19,24 @@ struct SingleExpiryTests {
         #expect(waiterStore.pendingTaskCount == 0)
         #expect(waiterStore.activeTaskCount == 0)
 
-        let execStore = DynamicStore()
-        execStore.enableDeterministicTime()
-        let pluginId = "SingleExpiryExec_\(UUID().uuidString)"
-        execStore.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (execStore, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            deterministic: true,
+            prefix: "SingleExpiryExec"
+        )
         defer { execStore.unregisterCapability(for: pluginId) }
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
         async let execResult: String? = execStore.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 0)
         ) {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
             return "should-expire"
         }
-        for await _ in started.stream { break }
+        await started.wait()
         await execStore.advanceTime(by: 5.0)
-        release.continuation.finish()
+        release.finish()
         #expect(await execResult == nil)
         #expect(execStore.pendingTaskCount == 0)
         #expect(execStore.activeTaskCount == 0)

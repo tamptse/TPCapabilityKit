@@ -45,129 +45,91 @@ struct TaskDescriptorTests {
 
 struct LeaseTests {
     @Test func scheduledTaskCompletesThroughSeam() async {
-        let store = DynamicStore()
-        let pluginId = "LeaseSeamComplete_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "LeaseSeamComplete")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
         let lease = await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
-            scheduler.schedule(task, taskExecution: {}, completion: { finished in
+            store.scheduleTask(task, task: {}, completion: { finished in
                 done.resume(returning: finished)
             })
         }
 
         #expect(lease.state == .completed)
         #expect(lease.isTerminal)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func throwingExecutionFailsThroughSeam() async {
-        let store = DynamicStore()
-        let pluginId = "LeaseSeamFail_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "LeaseSeamFail")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
-        actor Attempts {
-            var count = 0
-            func next() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct Boom: Error {}
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 0)
-        let result: String? = await scheduler.scheduleAndWait(task) { () async throws -> String in
+        let result: String? = await store.scheduleTaskAndWait(task) { () async throws -> String in
             await attempts.next()
             throw Boom()
         }
 
         #expect(result == nil)
         #expect(await attempts.count == 1)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func retryBudgetExhaustsThroughSeam() async {
-        let store = DynamicStore()
-        let pluginId = "LeaseSeamBudget_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "LeaseSeamBudget")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
-        actor Attempts {
-            var count = 0
-            func next() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct AlwaysFails: Error {}
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 2)
-        let result: String? = await scheduler.scheduleAndWait(task) { () async throws -> String in
+        let result: String? = await store.scheduleTaskAndWait(task) { () async throws -> String in
             await attempts.next()
             throw AlwaysFails()
         }
 
         #expect(result == nil)
         #expect(await attempts.count == 3)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func cancelPendingSettlesExpiredThroughSeam() async {
-        let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
+        let (store, _) = makeStoreWithCap([], prefix: "LeaseSeamCancel")
 
-        actor Counter {
-            var completions = 0
-            func inc() { completions += 1 }
-        }
-        let counter = Counter()
+        let counter = Probe()
         let task = TaskDescriptor(
             requiredCapabilities: [.custom("LeaseSeamCancel_\(UUID().uuidString)")],
             timeout: 5.0
         )
         let lease = await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
-            scheduler.schedule(task, taskExecution: {}, completion: { finished in
+            store.scheduleTask(task, task: {}, completion: { finished in
                 Task {
                     await counter.inc()
                     done.resume(returning: finished)
                 }
             })
-            scheduler.cancel(taskId: task.id)
+            store.cancelTask(taskId: task.id)
         }
 
-        #expect(await counter.completions == 1)
+        #expect(await counter.count == 1)
         #expect(lease.state == .expired)
         #expect(lease.isTerminal)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func flakyExecutionRecoversThroughSeam() async {
-        let store = DynamicStore()
-        let pluginId = "LeaseSeamRetry_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "LeaseSeamRetry")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
-        actor Attempts {
-            var count = 0
-            func next() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct FirstFails: Error {}
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 1)
-        let result = await scheduler.scheduleAndWait(task) { () async throws -> String in
+        let result = await store.scheduleTaskAndWait(task) { () async throws -> String in
             let n = await attempts.next()
             if n == 1 { throw FirstFails() }
             return "recovered"
@@ -175,136 +137,110 @@ struct LeaseTests {
 
         #expect(result == "recovered")
         #expect(await attempts.count == 2)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 }
 
 struct ConcurrencyControllerTests {
     @Test func acquireAndRelease() async {
-        let store = DynamicStore()
-        let pluginId = "ControllerAcquire_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "ControllerAcquire")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
         let lease = await withCheckedContinuation { (done: CheckedContinuation<Lease, Never>) in
-            scheduler.schedule(task, taskExecution: {}, completion: { finished in
+            store.scheduleTask(task, task: {}, completion: { finished in
                 done.resume(returning: finished)
             })
         }
 
         #expect(lease.state == .completed)
         #expect(lease.isTerminal)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func doubleReleaseIsSafe() async {
-        let store = DynamicStore()
-        let pluginId = "ControllerIdempotent_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
-            store: store,
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
             configuration: TaskScheduler.Configuration(maxPerCapability: 2, maxGlobal: 1),
-            concurrencyController: ConcurrencyController(maxPerCapability: 2, maxGlobal: 1)
+            prefix: "ControllerIdempotent"
         )
+        defer { store.unregisterCapability(for: pluginId) }
 
         let id = "idempotent_\(UUID().uuidString)"
         let first = TaskDescriptor(id: id, requiredCapabilities: [.heavyTask], timeout: 5.0)
-        let firstResult = await scheduler.scheduleAndWait(first) { "first" }
+        let firstResult = await store.scheduleTaskAndWait(first) { "first" }
         #expect(firstResult == "first")
-        scheduler.cancel(taskId: id)
-        scheduler.cancel(taskId: id)
-        scheduler.cancel(taskId: "unknown")
+        store.cancelTask(taskId: id)
+        store.cancelTask(taskId: id)
+        store.cancelTask(taskId: "unknown")
 
-        let secondResult: String? = await scheduler.scheduleAndWait(first) { "second" }
+        let secondResult: String? = await store.scheduleTaskAndWait(first) { "second" }
         #expect(secondResult == "second")
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func respectsGlobalLimit() async {
-        let store = DynamicStore()
-        let pluginId = "ControllerGlobal_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
-            store: store,
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
             configuration: TaskScheduler.Configuration(maxPerCapability: 10, maxGlobal: 2),
-            concurrencyController: ConcurrencyController(maxPerCapability: 10, maxGlobal: 2)
+            prefix: "ControllerGlobal"
         )
+        defer { store.unregisterCapability(for: pluginId) }
 
-        actor Probe {
-            var current = 0
-            var maxSeen = 0
-            func enter() {
-                current += 1
-                maxSeen = max(maxSeen, current)
-            }
-            func exit() { current -= 1 }
-        }
         let probe = Probe()
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let parkedDone = AsyncStream<Void>.makeStream()
-        actor Completions {
-            var count = 0
-            var expiredId: String?
-            func record(_ lease: Lease) {
-                count += 1
-                if lease.state == .expired { expiredId = lease.task.id }
-            }
-        }
-        let completions = Completions()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let parkedDone = AsyncGate()
+        let completions = Probe()
 
         let holdA = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
         let holdB = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
         for hold in [holdA, holdB] {
-            scheduler.schedule(hold, taskExecution: {
+            store.scheduleTask(hold, task: {
                 await probe.enter()
-                started.continuation.yield()
-                for await _ in release.stream { break }
+                started.signal()
+                await release.wait()
                 await probe.exit()
             }, completion: { lease in
                 Task {
                     await completions.record(lease)
-                    parkedDone.continuation.yield()
+                    parkedDone.signal()
                 }
             })
         }
-        for await _ in started.stream { break }
-        for await _ in started.stream { break }
-        #expect(scheduler.activeCount == 2)
+        await started.wait()
+        await started.wait()
+        #expect(store.activeTaskCount == 2)
 
         let parkedId = "parked_\(UUID().uuidString)"
         let parked = TaskDescriptor(id: parkedId, requiredCapabilities: [.heavyTask], timeout: 10.0)
-        scheduler.schedule(parked, taskExecution: {
+        store.scheduleTask(parked, task: {
             await probe.enter()
             await probe.exit()
         }, completion: { lease in
             Task {
                 await completions.record(lease)
-                parkedDone.continuation.yield()
+                parkedDone.signal()
             }
         })
 
         let cancelledId = "cancelled_\(UUID().uuidString)"
         let cancelled = TaskDescriptor(id: cancelledId, requiredCapabilities: [.heavyTask], timeout: 10.0)
-        let cancelledLease = scheduler.schedule(cancelled, taskExecution: {}, completion: { lease in
+        let cancelledLease = store.scheduleTask(cancelled, task: {}, completion: { lease in
             Task {
                 await completions.record(lease)
-                parkedDone.continuation.yield()
+                parkedDone.signal()
             }
         })
-        scheduler.cancel(taskId: cancelledId)
-        for await _ in parkedDone.stream { break }
+        store.cancelTask(taskId: cancelledId)
+        await parkedDone.wait()
         #expect(cancelledLease.state == .expired)
         #expect(cancelledLease.isTerminal)
 
-        release.continuation.finish()
+        release.finish()
         for await _ in parkedDone.stream {
             if await completions.count == 4 { break }
         }
@@ -312,8 +248,8 @@ struct ConcurrencyControllerTests {
         #expect(await completions.count == 4)
         #expect(await completions.expiredId == cancelledId)
         #expect(await probe.maxSeen <= 2)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func respectsPerCapabilityLimit() async {
@@ -324,71 +260,47 @@ struct ConcurrencyControllerTests {
         // workload-wideners, not gates: they widen the overlap window so a broken
         // controller admitting 2 concurrently would surface as entry-activeCount>1
         // or maxSeen>1 (same falsifiability standard as the approved global test's
-        // maxSeen bound). No pre-release assertion reads scheduler queue counts:
+        // maxSeen bound). No pre-release assertion reads store queue counts:
         // schedule() spawns an unstructured Task that dequeues pending->parked
         // concurrently, so pendingCount here is timing-dependent (observed 0-1 in
         // solo runs); the deterministic pre-release proof is local lease count.
-        let store = DynamicStore()
-        let pluginId = "ControllerPerCap_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(
-            store: store,
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
             configuration: TaskScheduler.Configuration(maxPerCapability: 1, maxGlobal: 10),
-            concurrencyController: ConcurrencyController(maxPerCapability: 1, maxGlobal: 10)
+            prefix: "ControllerPerCap"
         )
+        defer { store.unregisterCapability(for: pluginId) }
 
-        actor Probe {
-            var current = 0
-            var maxSeen = 0
-            func enter() {
-                current += 1
-                maxSeen = max(maxSeen, current)
-            }
-            func exit() { current -= 1 }
-        }
         let probe = Probe()
-        actor Entries {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let entries = Entries()
-        actor EntryActiveCounts {
-            var values: [Int] = []
-            func append(_ value: Int) { values.append(value) }
-        }
-        let entryActiveCounts = EntryActiveCounts()
-        actor Completions {
-            var count = 0
-            func record() { count += 1 }
-        }
-        let completions = Completions()
+        let entries = Probe()
+        let entryActiveCounts = Probe()
+        let completions = Probe()
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let drained = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let drained = AsyncGate()
 
         let holder = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
-        scheduler.schedule(holder, taskExecution: {
+        store.scheduleTask(holder, task: {
             await probe.enter()
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
             await probe.exit()
         }, completion: { _ in
             Task {
-                await completions.record()
-                drained.continuation.yield()
+                await completions.inc()
+                drained.signal()
             }
         })
-        for await _ in started.stream { break }
-        #expect(scheduler.activeCount == 1)
+        await started.wait()
+        #expect(store.activeTaskCount == 1)
 
         let totalContenders = 3
         var contenderLeases: [Lease] = []
         for _ in 0..<totalContenders {
             let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 10.0)
-            let lease = scheduler.schedule(task, taskExecution: {
-                let seen = scheduler.activeCount
+            let lease = store.scheduleTask(task, task: {
+                let seen = store.activeTaskCount
                 await entryActiveCounts.append(seen)
                 await probe.enter()
                 await Task.yield()
@@ -398,48 +310,46 @@ struct ConcurrencyControllerTests {
                 await probe.exit()
             }, completion: { _ in
                 Task {
-                    await completions.record()
-                    drained.continuation.yield()
+                    await completions.inc()
+                    drained.signal()
                 }
             })
             contenderLeases.append(lease)
         }
         #expect(contenderLeases.count == totalContenders)
 
-        release.continuation.finish()
+        release.finish()
         for await _ in drained.stream {
             if await completions.count == totalContenders + 1 { break }
         }
 
         #expect(await entries.count == totalContenders)
-        #expect(await entryActiveCounts.values.count == totalContenders)
-        #expect(await entryActiveCounts.values.allSatisfy { $0 == 1 })
+        #expect(await entryActiveCounts.intValues.count == totalContenders)
+        #expect(await entryActiveCounts.intValues.allSatisfy { $0 == 1 })
         #expect(await probe.maxSeen <= 1)
         #expect(await completions.count == totalContenders + 1)
-        #expect(scheduler.pendingCount == 0)
-        #expect(scheduler.activeCount == 0)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 }
 
 struct TaskSchedulerTests {
     @Test func scheduleAndComplete() async {
-        let store = DynamicStore()
-        let pluginId = "SchedulerPlugin_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "SchedulerPlugin")
+        defer { store.unregisterCapability(for: pluginId) }
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask])
-        let result = await scheduler.scheduleAndWait(task) {
+        let result = await store.scheduleTaskAndWait(task) {
             return "ScheduledResult"
         }
 
         #expect(result == "ScheduledResult")
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func cancelTask() async {
-        let store = DynamicStore()
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
+        let (store, _) = makeStoreWithCap([], prefix: "SchedulerCancel")
 
         let task = TaskDescriptor(
             id: "cancelable",
@@ -447,73 +357,67 @@ struct TaskSchedulerTests {
             timeout: 5.0
         )
 
-        let done = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(task, taskExecution: {
-            // This should never execute
-        }, completion: { _ in done.continuation.yield() })
-        scheduler.cancel(taskId: task.id)
+        let done = AsyncGate()
+        let lease = store.scheduleTask(task, task: {
+        }, completion: { _ in done.signal() })
+        store.cancelTask(taskId: task.id)
 
-        for await _ in done.stream { break }
+        await done.wait()
         #expect(lease.isTerminal)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func capabilityRevocationDuringExecution() async {
-        let store = DynamicStore()
-        let pluginId = "TOCTOU_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "TOCTOU")
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(task, taskExecution: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
-        }, completion: { _ in done.continuation.yield() })
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
+        let lease = store.scheduleTask(task, task: {
+            started.signal()
+            await release.wait()
+        }, completion: { _ in done.signal() })
 
-        for await _ in started.stream { break }
+        await started.wait()
 
-        // Revoke capability while task is running
         store.unregisterCapability(for: pluginId)
-        release.continuation.finish()
+        release.finish()
 
-        for await _ in done.stream { break }
+        await done.wait()
 
-        // Task should still complete (revocation doesn't kill running tasks)
         #expect(lease.isTerminal)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func voidTaskCompletesWithoutRetry() async {
-        let store = DynamicStore()
-        let pluginId = "RetryPlugin_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "RetryPlugin")
         defer { store.unregisterCapability(for: pluginId) }
 
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
         let task = TaskDescriptor(
             requiredCapabilities: [.heavyTask],
             timeout: 5.0,
             maxRetries: 1
         )
 
-        let done = AsyncStream<Void>.makeStream()
-        let lease = scheduler.schedule(task, taskExecution: {
-        }, completion: { _ in done.continuation.yield() })
+        let done = AsyncGate()
+        let lease = store.scheduleTask(task, task: {
+        }, completion: { _ in done.signal() })
 
-        for await _ in done.stream { break }
+        await done.wait()
 
         #expect(lease.retryCount == 0)
         #expect(lease.state == .completed)
         #expect(lease.isTerminal)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test func retryPreservesWaiterThroughStoreFacade() async {
-        let store = DynamicStore()
-        let pluginId = "FacadeRetry_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "FacadeRetry")
         defer { store.unregisterCapability(for: pluginId) }
 
         let task = TaskDescriptor(
@@ -522,14 +426,7 @@ struct TaskSchedulerTests {
             maxRetries: 2
         )
 
-        actor Attempts {
-            var count = 0
-            func next() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct FlakyFailure: Error {}
 
         let result = await store.scheduleTaskAndWait(task) { () async throws -> String in
@@ -553,20 +450,16 @@ struct TaskSchedulerTests {
             ],
             timeout: 1.0
         )
-        let done = AsyncStream<Void>.makeStream()
-        actor Completions {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let completions = Completions()
+        let done = AsyncGate()
+        let completions = Probe()
         let lease = store.scheduleTask(task, task: {}, completion: { _ in
             Task {
                 await completions.inc()
-                done.continuation.yield()
+                done.signal()
             }
         })
         await store.advanceTime(by: 1.0)
-        for await _ in done.stream { break }
+        await done.wait()
 
         #expect(await completions.count == 1)
         #expect(lease.state == .expired)

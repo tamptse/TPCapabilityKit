@@ -28,28 +28,29 @@ struct StoreDeterminismTests {
 
     @Test("execution expiry pins expired with virtual time while blocked")
     func executionExpiryWithVirtualTime() async {
-        let store = DynamicStore()
-        store.enableDeterministicTime()
-        let pluginId = "DeterministicExec_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            deterministic: true,
+            prefix: "DeterministicExec"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
         let lease = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 0),
             task: {
-                started.continuation.yield()
-                for await _ in release.stream { break }
+                started.signal()
+                await release.wait()
             },
-            completion: { _ in done.continuation.yield() }
+            completion: { _ in done.signal() }
         )
 
-        for await _ in started.stream { break }
+        await started.wait()
         await store.advanceTime(by: 5.0)
-        for await _ in done.stream { break }
-        release.continuation.finish()
+        await done.wait()
+        release.finish()
 
         #expect(lease.state == .expired)
         #expect(lease.isTerminal)
@@ -59,40 +60,34 @@ struct StoreDeterminismTests {
 
     @Test("priority order pins high-before-low through Store counts and lease state")
     func priorityOrderHighBeforeLow() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 30.0, maxPerCapability: 10, maxGlobal: 1))
-        store.enableDeterministicTime()
-        let pluginId = "DeterministicPriority_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 10, maxGlobal: 1),
+            deterministic: true,
+            prefix: "DeterministicPriority"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        actor Order {
-            var values: [String] = []
-            func append(_ value: String) { values.append(value) }
-        }
-        let order = Order()
-        actor Completions {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let completions = Completions()
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let drained = AsyncStream<Void>.makeStream()
+        let order = Probe()
+        let completions = Probe()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let drained = AsyncGate()
 
         store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
             task: {
-                started.continuation.yield()
-                for await _ in release.stream { break }
+                started.signal()
+                await release.wait()
             },
             completion: { _ in
                 Task {
                     await completions.inc()
-                    drained.continuation.yield()
+                    drained.signal()
                 }
             }
         )
-        for await _ in started.stream { break }
+        await started.wait()
 
         let low = TaskDescriptor(requiredCapabilities: [.heavyTask], priority: .low, timeout: 30.0)
         let high = TaskDescriptor(requiredCapabilities: [.heavyTask], priority: .high, timeout: 30.0)
@@ -102,12 +97,12 @@ struct StoreDeterminismTests {
             }, completion: { _ in
                 Task {
                     await completions.inc()
-                    drained.continuation.yield()
+                    drained.signal()
                 }
             })
         }
 
-        release.continuation.finish()
+        release.finish()
         for await _ in drained.stream {
             if await completions.count == 3 { break }
         }
@@ -119,47 +114,36 @@ struct StoreDeterminismTests {
 
     @Test("slot serialization pins single active through Store counts and lease state")
     func slotSerializationSingleActive() async {
-        let store = DynamicStore(configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 10))
-        store.enableDeterministicTime()
-        let pluginId = "DeterministicSlot_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap(
+            [.heavyTask],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 10),
+            deterministic: true,
+            prefix: "DeterministicSlot"
+        )
         defer { store.unregisterCapability(for: pluginId) }
 
-        actor Probe {
-            var current = 0
-            var maxSeen = 0
-            func enter() {
-                current += 1
-                maxSeen = max(maxSeen, current)
-            }
-            func exit() { current -= 1 }
-        }
         let probe = Probe()
-        actor Completions {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let completions = Completions()
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let drained = AsyncStream<Void>.makeStream()
+        let completions = Probe()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let drained = AsyncGate()
 
         store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
             task: {
                 await probe.enter()
-                started.continuation.yield()
-                for await _ in release.stream { break }
+                started.signal()
+                await release.wait()
                 await probe.exit()
             },
             completion: { _ in
                 Task {
                     await completions.inc()
-                    drained.continuation.yield()
+                    drained.signal()
                 }
             }
         )
-        for await _ in started.stream { break }
+        await started.wait()
         #expect(store.activeTaskCount == 1)
 
         let totalContenders = 3
@@ -175,13 +159,13 @@ struct StoreDeterminismTests {
                 completion: { _ in
                     Task {
                         await completions.inc()
-                        drained.continuation.yield()
+                        drained.signal()
                     }
                 }
             )
         }
 
-        release.continuation.finish()
+        release.finish()
         for await _ in drained.stream {
             if await completions.count == totalContenders + 1 { break }
         }
@@ -221,12 +205,8 @@ struct StoreDeterminismTests {
         store.enableDeterministicTime()
         let cap = Capability.custom("deterministicGen_\(UUID().uuidString)")
 
-        let done = AsyncStream<Void>.makeStream()
-        actor Completions {
-            var count = 0
-            func inc() { count += 1 }
-        }
-        let completions = Completions()
+        let done = AsyncGate()
+        let completions = Probe()
 
         store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [cap], timeout: 5.0),
@@ -234,7 +214,7 @@ struct StoreDeterminismTests {
             completion: { _ in
                 Task {
                     await completions.inc()
-                    done.continuation.yield()
+                    done.signal()
                 }
             }
         )
@@ -249,7 +229,7 @@ struct StoreDeterminismTests {
             completion: { _ in
                 Task {
                     await completions.inc()
-                    done.continuation.yield()
+                    done.signal()
                 }
             }
         )

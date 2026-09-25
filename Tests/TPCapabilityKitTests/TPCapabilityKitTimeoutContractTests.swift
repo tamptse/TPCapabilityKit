@@ -3,17 +3,11 @@ import Foundation
 @testable import TPCapabilityKit
 @testable import TPCapabilityKitBridge
 
-private func contractImmediateClock() -> Clock {
-    let clock = Clock()
-    clock.enableDeterministic()
-    return clock
-}
-
 @Suite("Timeout Contract Tests")
 struct TimeoutContractTests {
     @Test("Swift nil timeout resolves to the configured default at Deadline construction")
     func swiftNilResolvesToConfiguredDefault() {
-        let clock = contractImmediateClock()
+        let clock = makeDeterministicClock()
         let configured: TimeInterval = 11.25
         let task = TaskDescriptor(
             requiredCapabilities: [.custom("TimeoutContractNil_\(UUID().uuidString)")]
@@ -59,7 +53,7 @@ struct TimeoutContractTests {
     func objcNegativeMeansUnspecifiedResolvesAtDeadline() {
         let cap = "TimeoutContractNegative_\(UUID().uuidString)"
         let configured: TimeInterval = 9.75
-        let clock = contractImmediateClock()
+        let clock = makeDeterministicClock()
 
         let descriptor = ObjcTaskDescriptor(capabilities: [cap], timeout: -1)
         #expect(descriptor.underlying.timeout == nil)
@@ -92,12 +86,11 @@ struct TimeoutContractTests {
     func waiterAndExecutorShareOneResolvedExpiry() async {
         let store = DynamicStore()
         let resolved: TimeInterval = 4.25
-        let clock = contractImmediateClock()
-        let scheduler = TaskScheduler(
+        let clock = makeDeterministicClock()
+        let scheduler = makeScheduler(
             store: store,
             configuration: .init(defaultTimeout: resolved, maxPerCapability: 5, maxGlobal: 20),
-            clock: clock,
-            concurrencyController: ConcurrencyController(maxPerCapability: 5, maxGlobal: 20)
+            clock: clock
         )
 
         let cap = Capability.custom("TimeoutContractShared_\(UUID().uuidString)")
@@ -110,15 +103,15 @@ struct TimeoutContractTests {
             func store(_ newValue: String) { value = newValue }
         }
         let produced = Produced()
-        let started = AsyncStream<Void>.makeStream()
-        let release = AsyncStream<Void>.makeStream()
-        let done = AsyncStream<Void>.makeStream()
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let done = AsyncGate()
         let lease = scheduler.schedule(task, taskExecution: {
-            started.continuation.yield()
-            for await _ in release.stream { break }
+            started.signal()
+            await release.wait()
             await produced.store("flipped-ok")
         }, completion: { _ in
-            done.continuation.yield()
+            done.signal()
         })
 
         await clock.waitForWaiters(count: 1)
@@ -127,12 +120,12 @@ struct TimeoutContractTests {
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }
 
-        for await _ in started.stream { break }
+        await started.wait()
 
         await clock.waitForWaiters(count: 1)
-        release.continuation.finish()
+        release.finish()
 
-        for await _ in done.stream { break }
+        await done.wait()
         #expect(lease.state == .completed)
         #expect(await produced.value == "flipped-ok")
     }

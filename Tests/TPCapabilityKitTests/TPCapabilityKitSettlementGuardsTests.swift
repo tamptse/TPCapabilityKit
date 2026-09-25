@@ -6,17 +6,11 @@ import Foundation
 struct SettlementGuardsTests {
     @Test("void completion with retries reuses same Lease and preserves waiter")
     func voidRetryReusesIdentity() async {
-        let store = DynamicStore()
-        let pluginId = "GuardsRetry_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "GuardsRetry")
         defer { store.unregisterCapability(for: pluginId) }
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 1)
-        actor Attempts {
-            var count = 0
-            func next() -> Int { count += 1; return count }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         struct Flaky: Error {}
 
         let result = await store.scheduleTaskAndWait(task) { () async throws -> String in
@@ -33,26 +27,19 @@ struct SettlementGuardsTests {
 
     @Test("schedule terminal delivers same Lease identity once")
     func scheduleDeliversSameIdentityOnce() async {
-        let store = DynamicStore()
-        let pluginId = "GuardsIdentity_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "GuardsIdentity")
         defer { store.unregisterCapability(for: pluginId) }
-        let scheduler = TaskScheduler(store: store, concurrencyController: ConcurrencyController())
+        let scheduler = makeScheduler(store: store)
 
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 1)
-        actor State {
-            var calls = 0
-            var delivered: Lease?
-            func record(_ lease: Lease) { calls += 1; delivered = lease }
-        }
-        let state = State()
+        let state = Probe()
         let returned: Lease = scheduler.schedule(task, taskExecution: {}, completion: { lease in
             Task { await state.record(lease) }
         })
-        while await state.calls == 0 { await Task.yield() }
+        while await state.count == 0 { await Task.yield() }
 
-        #expect(await state.calls == 1)
-        #expect(await state.delivered === returned)
+        #expect(await state.count == 1)
+        #expect(await state.lastLease === returned)
         #expect(returned.isTerminal)
         #expect(scheduler.pendingCount == 0)
         #expect(scheduler.activeCount == 0)
@@ -60,18 +47,12 @@ struct SettlementGuardsTests {
 
     @Test("void completion without retries fails exactly once")
     func voidNoRetryFailsOnce() async {
-        let store = DynamicStore()
-        let pluginId = "GuardsNoRetry_\(UUID().uuidString)"
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        let (store, pluginId) = makeStoreWithCap([.heavyTask], prefix: "GuardsNoRetry")
         defer { store.unregisterCapability(for: pluginId) }
 
         struct Boom: Error {}
         let task = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0, maxRetries: 0)
-        actor Attempts {
-            var count = 0
-            func next() -> Int { count += 1; return count }
-        }
-        let attempts = Attempts()
+        let attempts = Probe()
         let result: String? = await store.scheduleTaskAndWait(task) { () async throws -> String in
             await attempts.next()
             throw Boom()
@@ -89,24 +70,19 @@ struct SettlementGuardsTests {
         let missing = Capability.custom("GuardsPending_\(UUID().uuidString)")
         let descriptor = TaskDescriptor(requiredCapabilities: [missing], timeout: 10.0)
 
-        actor State {
-            var calls = 0
-            var terminal: Lease.State?
-            func record(_ lease: Lease) { calls += 1; terminal = lease.state }
-        }
-        let state = State()
-        let done = AsyncStream<Void>.makeStream()
+        let state = Probe()
+        let done = AsyncGate()
         let lease = store.scheduleTask(descriptor, task: {}, completion: { finished in
             Task {
                 await state.record(finished)
-                done.continuation.yield()
+                done.signal()
             }
         })
         store.cancelTask(taskId: descriptor.id)
-        for await _ in done.stream { break }
+        await done.wait()
 
-        #expect(await state.calls == 1)
-        #expect(await state.terminal == .expired)
+        #expect(await state.count == 1)
+        #expect(await state.lastState == .expired)
         #expect(lease.isTerminal)
         #expect(lease.state == .expired)
         #expect(store.pendingTaskCount == 0)
