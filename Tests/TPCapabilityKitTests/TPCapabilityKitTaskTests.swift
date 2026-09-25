@@ -53,7 +53,7 @@ struct TPCapabilityKitTaskTests {
 
     @Test func runTaskWhenAvailableWaitsForCapability() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let pluginId = "WaitCapPlugin_\(UUID().uuidString)"
         let uniqueCap = Capability.custom("waitCap_\(UUID().uuidString)")
 
@@ -69,7 +69,7 @@ struct TPCapabilityKitTaskTests {
             return result
         }
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
 
         // Now register the capability
         store.registerCapability(for: pluginId, capabilities: [uniqueCap])
@@ -81,13 +81,13 @@ struct TPCapabilityKitTaskTests {
 
     @Test func runTaskWhenAvailableTimesOut() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let uniqueCap = Capability.custom("timeoutCap_\(UUID().uuidString)")
 
         async let result = store.runTaskWhenAvailable(capability: uniqueCap, timeout: 0.1) {
             return "ShouldNotRun"
         }
-        await store.advanceTime(by: 0.1)
+        await store.schedulingGenerations.advanceTime(by: 0.1)
 
         #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)

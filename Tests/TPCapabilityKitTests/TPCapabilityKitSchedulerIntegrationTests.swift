@@ -19,7 +19,7 @@ struct DynamicStoreSchedulerIntegrationTests {
 
     @Test func scheduleTaskWithoutCapability() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
 
         async let result = store.scheduleTaskAndWait(
             TaskDescriptor(
@@ -30,7 +30,7 @@ struct DynamicStoreSchedulerIntegrationTests {
             return "ShouldNotRun"
         }
 
-        await store.advanceTime(by: 0.5)
+        await store.schedulingGenerations.advanceTime(by: 0.5)
 
         #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)

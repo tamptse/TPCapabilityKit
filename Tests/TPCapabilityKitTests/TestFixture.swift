@@ -10,7 +10,7 @@ func makeStoreWithCap(
 ) -> (store: DynamicStore, pluginId: String) {
     let store = DynamicStore(configuration: configuration)
     if deterministic {
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
     }
     let pluginId = "\(prefix)_\(UUID().uuidString)"
     if !caps.isEmpty {

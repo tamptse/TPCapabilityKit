@@ -7,14 +7,14 @@ struct SingleExpiryTests {
     @Test("waiter and execution timeouts agree through schedule-and-wait with virtual clock")
     func waiterAndExecutionShareSingleExpiry() async {
         let waiterStore = DynamicStore()
-        waiterStore.enableDeterministicTime()
+        waiterStore.schedulingGenerations.enableDeterministicTime(owner: waiterStore)
         let missing = Capability.custom("singleExpiryWaiter_\(UUID().uuidString)")
         async let waiterResult: String? = waiterStore.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 5.0)
         ) {
             return "should-not-run"
         }
-        await waiterStore.advanceTime(by: 5.0)
+        await waiterStore.schedulingGenerations.advanceTime(by: 5.0)
         #expect(await waiterResult == nil)
         #expect(waiterStore.pendingTaskCount == 0)
         #expect(waiterStore.activeTaskCount == 0)
@@ -35,7 +35,7 @@ struct SingleExpiryTests {
             return "should-expire"
         }
         await started.wait()
-        await execStore.advanceTime(by: 5.0)
+        await execStore.schedulingGenerations.advanceTime(by: 5.0)
         release.finish()
         #expect(await execResult == nil)
         #expect(execStore.pendingTaskCount == 0)

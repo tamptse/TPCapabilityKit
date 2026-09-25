@@ -65,7 +65,7 @@ struct PathLocalityTests {
             }
         })
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(!parkedLease.isTerminal)
         #expect(store.pendingTaskCount == 1)
         store.cancelTask(taskId: parked.id)

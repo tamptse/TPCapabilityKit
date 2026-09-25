@@ -21,7 +21,7 @@ struct ActivationGateTests {
             completion: { _ in done.signal() }
         )
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(!lease.isTerminal)
         #expect(lease.state == .pending)
         #expect(store.pendingTaskCount == 1)

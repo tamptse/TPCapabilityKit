@@ -91,8 +91,8 @@ struct ScopedSlotTests {
         release.finish()
 
         await blockerDone.wait()
-        await store.waitForDeterministicWaiters(count: 1)
-        await store.advanceTime(by: 5.0)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.advanceTime(by: 5.0)
         await gatedDone.wait()
 
         #expect(await executions.count == 0)

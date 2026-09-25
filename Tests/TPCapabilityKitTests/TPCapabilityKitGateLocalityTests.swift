@@ -65,7 +65,7 @@ struct GateLocalityTests {
             }
         )
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         store.cancelTask(taskId: lease.task.id)
         await done.wait()
         #expect(lease.isTerminal)

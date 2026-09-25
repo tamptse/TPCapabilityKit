@@ -168,7 +168,7 @@ struct WaiterThroughInterfaceTests {
     @Test("partial set stays parked until the whole set registers")
     func partialSetStaysParked() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let capA = Capability.custom("waiterIfaceA_\(UUID().uuidString)")
         let capB = Capability.custom("waiterIfaceB_\(UUID().uuidString)")
         let pluginA = "WaiterIfaceA_\(UUID().uuidString)"
@@ -184,7 +184,7 @@ struct WaiterThroughInterfaceTests {
             return "ready"
         }
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(store.pendingTaskCount == 1)
 
         store.registerCapability(for: pluginA, capabilities: [capA])
@@ -199,7 +199,7 @@ struct WaiterThroughInterfaceTests {
     @Test("unregister before completion keeps the waiter parked")
     func unregisterKeepsWaiterParked() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let cap = Capability.custom("waiterIfaceUnreg_\(UUID().uuidString)")
         let pluginId = "WaiterIfaceUnreg_\(UUID().uuidString)"
         defer { store.unregisterCapability(for: pluginId) }
@@ -210,7 +210,7 @@ struct WaiterThroughInterfaceTests {
             return "ready"
         }
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         store.registerCapability(for: pluginId, capabilities: [cap])
         store.unregisterCapability(for: pluginId)
         #expect(store.pendingTaskCount == 1)
@@ -237,14 +237,14 @@ struct WaiterThroughInterfaceTests {
     @Test("missing set expires on the single Deadline")
     func missingSetExpires() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let missing = Capability.custom("waiterIfaceMissing_\(UUID().uuidString)")
         async let result: String? = store.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 5.0)
         ) {
             return "should-not-run"
         }
-        await store.advanceTime(by: 5.0)
+        await store.schedulingGenerations.advanceTime(by: 5.0)
         #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
@@ -256,7 +256,7 @@ struct QueueAliasTests {
     @Test("parked task stays in pendingCount")
     func parkedStaysInPendingCount() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let task = TaskDescriptor(
             requiredCapabilities: [.custom("ParkCount_\(UUID().uuidString)")],
             timeout: 5.0

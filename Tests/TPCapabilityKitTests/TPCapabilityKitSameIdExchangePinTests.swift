@@ -158,7 +158,7 @@ struct SameIdExchangePinTests {
     @Test("cancel after overwrite lands on new row only with no absence")
     func cancelAfterOverwriteLandsOnNew() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let missing = Capability.custom("r6-cancel_\(UUID().uuidString)")
         let id = "r6-cancel_\(UUID().uuidString)"
 
@@ -172,7 +172,7 @@ struct SameIdExchangePinTests {
             }
         })
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(store.pendingTaskCount == 1)
         #expect(!oldLease.isTerminal)
 
@@ -212,7 +212,7 @@ struct SameIdExchangePinTests {
                 reuseDone.signal()
             }
         })
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(!reuseLease.isTerminal)
         #expect(store.pendingTaskCount == 1)
 
@@ -227,7 +227,7 @@ struct SameIdExchangePinTests {
     @Test("cancel before overwrite then reschedule works after terminal")
     func cancelBeforeOverwriteThenReschedule() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let missing = Capability.custom("r6-cancelbefore_\(UUID().uuidString)")
         let id = "r6-cancelbefore_\(UUID().uuidString)"
 
@@ -240,7 +240,7 @@ struct SameIdExchangePinTests {
                 firstDone.signal()
             }
         })
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         store.cancelTask(taskId: id)
         await firstDone.wait()
         #expect(firstLease.state == .expired)
@@ -256,7 +256,7 @@ struct SameIdExchangePinTests {
                 secondDone.signal()
             }
         })
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(!secondLease.isTerminal)
         #expect(store.pendingTaskCount == 1)
 
@@ -305,7 +305,7 @@ struct SameIdExchangePinTests {
     @Test("displaced parked waiter cancelled once and never runs after caps arrive")
     func displacedParkWaiterCancelledOnce() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let missing = Capability.custom("r6-park_\(UUID().uuidString)")
         let id = "r6-park_\(UUID().uuidString)"
         let pluginId = "r6-park_\(UUID().uuidString)"
@@ -323,7 +323,7 @@ struct SameIdExchangePinTests {
             }
         })
 
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(!oldLease.isTerminal)
         #expect(store.pendingTaskCount == 1)
 

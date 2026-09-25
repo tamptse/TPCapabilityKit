@@ -26,7 +26,7 @@ struct ConfigurationTests {
         }
 
         await started.wait()
-        await store.advanceTime(by: 0.2)
+        await store.schedulingGenerations.advanceTime(by: 0.2)
         release.finish()
 
         #expect(await result == nil)
@@ -113,7 +113,7 @@ struct ConfigurationTests {
         }
 
         await started.wait()
-        await store.advanceTime(by: 0.2)
+        await store.schedulingGenerations.advanceTime(by: 0.2)
         release.finish()
 
         #expect(await result == nil)
@@ -173,7 +173,7 @@ struct ConfigurationTests {
             })
             Task {
                 await started.wait()
-                await store.advanceTime(by: 0.2)
+                await store.schedulingGenerations.advanceTime(by: 0.2)
                 gate.signal()
             }
         }

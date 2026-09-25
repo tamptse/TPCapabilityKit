@@ -7,7 +7,7 @@ struct StoreDeterminismTests {
     @Test("timeout pins expired via lease state with virtual time")
     func timeoutPinsExpiredWithVirtualTime() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let cap = Capability.custom("deterministicTimeout_\(UUID().uuidString)")
 
         let done = AsyncStream<Void>.makeStream()
@@ -17,7 +17,7 @@ struct StoreDeterminismTests {
             completion: { _ in done.continuation.yield() }
         )
 
-        await store.advanceTime(by: 5.0)
+        await store.schedulingGenerations.advanceTime(by: 5.0)
         for await _ in done.stream { break }
 
         #expect(lease.state == .expired)
@@ -48,7 +48,7 @@ struct StoreDeterminismTests {
         )
 
         await started.wait()
-        await store.advanceTime(by: 5.0)
+        await store.schedulingGenerations.advanceTime(by: 5.0)
         await done.wait()
         release.finish()
 
@@ -179,7 +179,7 @@ struct StoreDeterminismTests {
     @Test("cancel pins expired through Store lease state and counts")
     func cancelPinsExpiredThroughStore() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let cap = Capability.custom("deterministicCancel_\(UUID().uuidString)")
 
         let done = AsyncStream<Void>.makeStream()
@@ -202,7 +202,7 @@ struct StoreDeterminismTests {
     @Test("virtual time preserved across reconfigure generations")
     func virtualTimePreservedAcrossGenerations() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let cap = Capability.custom("deterministicGen_\(UUID().uuidString)")
 
         let done = AsyncGate()
@@ -235,8 +235,8 @@ struct StoreDeterminismTests {
         )
         #expect(store.pendingTaskCount == 2)
 
-        await store.waitForDeterministicWaiters(count: 2)
-        await store.advanceTime(by: 5.0)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 2)
+        await store.schedulingGenerations.advanceTime(by: 5.0)
         for await _ in done.stream {
             if await completions.count == 2 { break }
         }

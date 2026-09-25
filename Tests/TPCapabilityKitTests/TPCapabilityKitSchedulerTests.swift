@@ -441,7 +441,7 @@ struct TaskSchedulerTests {
 
     @Test func twoMissingCapabilitiesShareOneDeadline() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
 
         let task = TaskDescriptor(
             requiredCapabilities: [
@@ -458,7 +458,7 @@ struct TaskSchedulerTests {
                 done.signal()
             }
         })
-        await store.advanceTime(by: 1.0)
+        await store.schedulingGenerations.advanceTime(by: 1.0)
         await done.wait()
 
         #expect(await completions.count == 1)

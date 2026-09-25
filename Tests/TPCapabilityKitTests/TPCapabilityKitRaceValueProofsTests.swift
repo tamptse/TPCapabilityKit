@@ -74,8 +74,8 @@ struct RaceValueProofsTests {
             return "should-expire"
         }
         await started.wait()
-        await store.waitForDeterministicWaiters(count: 1)
-        await store.advanceTime(by: 0.2)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.advanceTime(by: 0.2)
 
         #expect(await result == nil)
         release.finish()
@@ -105,8 +105,8 @@ struct RaceValueProofsTests {
             }
         })
         await started.wait()
-        await store.waitForDeterministicWaiters(count: 1)
-        await store.advanceTime(by: 0.2)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.advanceTime(by: 0.2)
         await done.wait()
 
         #expect(lease.state == .expired)
@@ -130,8 +130,8 @@ struct RaceValueProofsTests {
             return "late-value"
         }
         await started2.wait()
-        await store.waitForDeterministicWaiters(count: 1)
-        await store.advanceTime(by: 0.2)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.advanceTime(by: 0.2)
 
         #expect(await waited == nil)
         release2.finish()
@@ -143,7 +143,7 @@ struct RaceValueProofsTests {
     @Test("parked waiter expires once on single expiry")
     func parkedWaiterExpiresOnce() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let missing = Capability.custom("R4ParkedOnce_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [missing], timeout: 0.5)
         let done = AsyncGate()
@@ -154,9 +154,9 @@ struct RaceValueProofsTests {
                 done.signal()
             }
         })
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         #expect(!lease.isTerminal)
-        await store.advanceTime(by: 0.5)
+        await store.schedulingGenerations.advanceTime(by: 0.5)
         await done.wait()
 
         #expect(lease.state == .expired)
@@ -169,11 +169,11 @@ struct RaceValueProofsTests {
     @Test("waiter wins on mid-wait capability flip with shared resolved timeout")
     func waiterWinsOnMidWaitFlip() async {
         let store = DynamicStore()
-        store.enableDeterministicTime()
+        store.schedulingGenerations.enableDeterministicTime(owner: store)
         let cap = Capability.custom("R4FlipWin_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [cap], timeout: 4.0)
         async let result = store.scheduleTaskAndWait(task) { "flipped-ok" }
-        await store.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
         let pluginId = "R4FlipWin_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }

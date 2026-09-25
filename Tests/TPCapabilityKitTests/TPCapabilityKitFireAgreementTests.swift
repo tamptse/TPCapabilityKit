@@ -18,8 +18,8 @@ struct FireAgreementTests {
         async let waited: String? = store.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 0.2)
         ) { "ShouldNotRun" }
-        await store.waitForDeterministicWaiters(count: 1)
-        await store.advanceTime(by: 0.2)
+        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.schedulingGenerations.advanceTime(by: 0.2)
         #expect(await waited == nil)
     }
 
