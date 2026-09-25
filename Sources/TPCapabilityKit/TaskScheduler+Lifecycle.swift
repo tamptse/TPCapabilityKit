@@ -54,7 +54,7 @@ extension TaskScheduler {
             )
         }
 
-        mutating func insert(
+        private mutating func insert(
             lease: Lease,
             execution: (@Sendable () async -> Any?)?,
             waiters: [(Lease) -> Void]
@@ -177,9 +177,9 @@ extension TaskScheduler {
             case alreadyTerminal
         }
 
-        // Factory form is the chosen shape so no Task exists before the single
-        // row write; the Task form stays as fallback with table-owned cancel.
-        // Factory must not suspend; caller holds the scheduler lock across the call.
+        // Factory form is the single park seam so no Task exists before the
+        // single row write. Factory must not suspend; caller holds the
+        // scheduler lock across the call.
         // Wake clears here; terminal takes the row in transition(.terminal).
         mutating func park(for lease: Lease, makeWaiter: () -> Task<Void, Never>) -> FusedParkOutcome {
             guard var row = rows[lease.task.id], row.lease === lease else {
@@ -196,25 +196,6 @@ extension TaskScheduler {
             row.waiter = waiter
             rows[lease.task.id] = row
             return .parked
-        }
-
-        mutating func park(
-            for lease: Lease,
-            waiter: Task<Void, Never>
-        ) -> (outcome: FusedParkOutcome, waiterToCancel: Task<Void, Never>?) {
-            guard var row = rows[lease.task.id], row.lease === lease else {
-                return (.alreadyTerminal, waiter)
-            }
-            if lease.isTerminal {
-                return (.alreadyTerminal, waiter)
-            }
-            guard !row.waiting else {
-                return (.refusedAlreadyWaiting, waiter)
-            }
-            row.waiting = true
-            row.waiter = waiter
-            rows[lease.task.id] = row
-            return (.parked, nil)
         }
 
         mutating func wakeParked(for lease: Lease) {
