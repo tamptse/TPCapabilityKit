@@ -83,6 +83,15 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     // MARK: - Capability Registry
+    // Readiness facade in two grains (grouping is prose only; each method
+    // delegates thinly to the registry, which owns set-matching):
+    // - UI pair: queryCapability plus observeCapability, per-Capability Bool
+    //   grain for UI-style subscribers.
+    // - Tasks-only waiter: observeAllCapabilities plus waitForAllCapabilities,
+    //   whole-snapshot grain for the scheduler's multi-capability descriptors.
+    // Do not rebuild the whole-set wait in callers out of snapshot observation
+    // plus re-query: that relearns emission ordering and drifts the empty-set
+    // and already-satisfied fast paths per call site.
 
     /// Registers capabilities for a plugin identifier.
     /// - Parameters:
@@ -98,7 +107,9 @@ public final class DynamicStore: @unchecked Sendable {
         registry.unregister(for: pluginId)
     }
 
-    /// Queries whether any registered plugin provides the specified capability.
+    /// UI pair half: queries whether any registered plugin provides the specified capability.
+    /// Single-capability point-in-time grain for UI-style subscribers; pair with
+    /// `observeCapability` rather than whole-snapshot observation or the whole-set wait.
     /// - Parameter capability: The capability to query.
     /// - Returns: `true` if at least one plugin provides the capability.
     public func queryCapability(_ capability: Capability) -> Bool {
@@ -118,9 +129,10 @@ public final class DynamicStore: @unchecked Sendable {
         registry.queryAll()
     }
 
-    /// Reactively observes whether any plugin provides the specified capability.
-    /// Per-Capability grain for UI-style subscribers; the Tasks waiter uses
-    /// whole-snapshot observation to re-evaluate multi-capability descriptors.
+    /// UI pair half: reactively observes whether any plugin provides the specified capability.
+    /// Per-Capability grain for UI-style subscribers; pairs with `queryCapability`.
+    /// The Tasks waiter uses whole-snapshot observation to re-evaluate
+    /// multi-capability descriptors instead of this per-Capability grain.
     /// - Parameter capability: The capability to observe.
     /// - Returns: A publisher emitting `true` when the capability becomes available, `false` otherwise.
     /// - Note: Values are delivered synchronously on the writer's thread with no
@@ -129,17 +141,20 @@ public final class DynamicStore: @unchecked Sendable {
         registry.observe(capability)
     }
 
-    /// Reactively observes capabilities changes across all plugins.
-    /// Whole-snapshot grain for the Tasks waiter; UI-style subscribers prefer
+    /// Tasks-only waiter half: reactively observes capabilities changes across all plugins.
+    /// Whole-snapshot grain for the Tasks waiter; pairs with `waitForAllCapabilities`
+    /// for multi-capability descriptors. UI-style subscribers prefer the UI pair's
     /// per-Capability observation of a single `Bool`.
     /// - Returns: A publisher emitting the full capabilities dictionary on each change.
     func observeAllCapabilities() -> AnyPublisher<[String: Set<Capability>], Never> {
         registry.observeAll()
     }
 
-    /// Whole-set readiness for the Tasks waiter: thin delegation to the
-    /// registry interface, so park/Deadline/activate/settle stay in Tasks
-    /// while set-matching lives in the registry.
+    /// Tasks-only waiter half: whole-set readiness for the Tasks waiter.
+    /// Thin delegation to the registry interface, so park/Deadline/activate/settle
+    /// stay in Tasks while set-matching lives in the registry. Pairs with
+    /// `observeAllCapabilities`; do not rebuild this wait in callers out of
+    /// snapshot observation plus re-query.
     func waitForAllCapabilities(
         _ required: Set<Capability>,
         race: @Sendable @escaping (@escaping CapabilityRegistry.WaitOperation) async -> Bool
