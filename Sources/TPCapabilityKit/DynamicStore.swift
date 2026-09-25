@@ -9,6 +9,11 @@ import Foundation
 ///   its generations + clock; no caller holds a Store lock across a submodule call
 /// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
+/// ## Plugin Lifecycle Order
+/// - Register-before-start: capabilities register before `start` runs, so `start` can query them synchronously.
+/// - Unregister postconditions: state cleared with detached subscribers completed and next update starting fresh; capabilities detached with plugin row and reverse-index entries cleared and snapshot clean.
+/// - Empty-id ownership stays per domain (state owns update/get/remove/observe guards, registry owns register/unregister/query guards); facade delegates without guarding, so empty-id lifecycle entries stay observably identical to no-op.
+///
 /// ## Debug Logging
 /// - All debug logs are guarded by `#if DEBUG` and only appear in Debug builds
 /// - Logs use `[DynamicStore]` prefix for easy filtering
