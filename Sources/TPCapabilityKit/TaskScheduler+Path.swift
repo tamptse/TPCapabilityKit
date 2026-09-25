@@ -24,15 +24,11 @@ extension TaskScheduler {
     }
 
     private func parkLeaseForCapabilities(_ lease: Lease, deadline: Deadline) {
-        let shouldWait: Bool = lock.withLock {
-            lifecycleStore.beginPark(for: lease)
+        _ = lock.withLock {
+            lifecycleStore.park(for: lease) {
+                Task { await self.waitForCapabilitiesAndProcess(lease, deadline: deadline) }
+            }
         }
-        guard shouldWait else { return }
-        let waiterTask = Task { await self.waitForCapabilitiesAndProcess(lease, deadline: deadline) }
-        let alreadyTerminal: Bool = lock.withLock {
-            lifecycleStore.setParkWaiter(for: lease, waiter: waiterTask)
-        }
-        if alreadyTerminal { waiterTask.cancel() }
     }
 
     private func waitForCapabilitiesAndProcess(_ lease: Lease, deadline: Deadline) async {
@@ -41,7 +37,7 @@ extension TaskScheduler {
             deadline: deadline
         )
         lock.withLock {
-            lifecycleStore.clearParkWait(for: lease)
+            lifecycleStore.wakeParked(for: lease)
         }
 
         guard !lease.isTerminal else { return }
