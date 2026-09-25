@@ -42,11 +42,12 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         return store.getState(pluginId: pluginId, type: NSObject.self)
     }
 
-    /// Subscribes to state updates for a plugin, delivering callbacks on the specified queue.
+    /// Subscribes to state updates for a plugin.
+    /// Delivery via `ObjcDelivery`.
     /// - Parameters:
     ///   - pluginId: Unique identifier of the plugin.
-    ///   - queue: Queue for callback delivery. Pass `nil` for main queue.
-    ///   - observer: Closure invoked with updated state on specified queue.
+    ///   - queue: Delivery queue (see `ObjcDelivery`).
+    ///   - observer: Closure invoked via `ObjcDelivery` with updated state.
     /// - Returns: An `ObjcCancellable` token to manage subscription lifecycle.
     @objc public func subscribe(
         pluginId: String,
@@ -73,11 +74,12 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         store.queryCapability(ObjcMapper.capability(from: capability))
     }
 
-    /// Subscribes to capability availability updates, delivering callbacks on the specified queue.
+    /// Subscribes to capability availability updates.
+    /// Delivery via `ObjcDelivery`.
     /// - Parameters:
     ///   - capability: Capability string identifier to observe.
-    ///   - queue: Queue for callback delivery. Pass `nil` for main queue.
-    ///   - observer: Closure invoked with capability availability on specified queue.
+    ///   - queue: Delivery queue (see `ObjcDelivery`).
+    ///   - observer: Closure invoked via `ObjcDelivery` with capability availability.
     /// - Returns: An `ObjcCancellable` token to manage subscription lifecycle.
     @objc public func subscribeCapability(
         _ capability: String,
@@ -117,13 +119,14 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// (`taskScheduler.runWhenAvailable`). Holds no scheduling policy of its
     /// own: descriptor building, timeout compat, queue hopping, and defaults
     /// live only in the view behind the single delivery core.
+    /// Delivery via `ObjcDelivery`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Negative means
     ///     unspecified, so the scheduler Configuration default applies.
-    ///   - queue: Queue for callback delivery. Pass `nil` for main queue.
+    ///   - queue: Delivery queue (see `ObjcDelivery`).
     ///   - task: The task closure to execute. Must return an NSObject.
-    ///   - completion: Called on specified queue with the result, or nil if timeout.
+    ///   - completion: Called via `ObjcDelivery` with the result, or nil if timeout.
     @available(*, deprecated, message: "Use taskScheduler.runWhenAvailable — the taskScheduler live view is the single scheduling door.")
     @objc public func runTaskWhenAvailable(
         capability: String,

@@ -8,13 +8,10 @@ import TPCapabilityKit
 /// (`schedule/cancel/pending/active`). Holds no queue or count state — every
 /// call delegates to the store, so reads are always live.
 ///
-/// One delivery story: `schedule` completion fires on the Tasks execution
-/// context with no hop, while every value-returning wait (`scheduleAndWait`,
-/// `runWhenAvailable`) delivers its completion through `ObjcDelivery`
-/// alongside the Bridge subscribes. Descriptor building and timeout compat stay
-/// in `ObjcMapper`; the sync fast-path (`runIfAvailable`) consults the same
-/// registry state the Tasks waiter resolves, so sync and wait-then-run agree
-/// by construction.
+/// Single delivery story via `ObjcDelivery` alongside the Bridge subscribes.
+/// Descriptor building and timeout compat stay in `ObjcMapper`; the sync
+/// fast-path (`runIfAvailable`) consults the same registry state the Tasks
+/// waiter resolves, so sync and wait-then-run agree by construction.
 @objc(TPTaskScheduler)
 public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     private let store: DynamicStore
@@ -25,16 +22,33 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// Schedules a task for execution.
+    /// Delivery via `ObjcDelivery`.
     @objc public func schedule(
         _ descriptor: ObjcTaskDescriptor,
         task: @escaping @Sendable () -> Void,
         completion: ((ObjcLease) -> Void)? = nil
     ) -> ObjcLease {
+        schedule(descriptor, queue: nil, task: task, completion: completion)
+    }
+
+    /// Schedules a task for execution.
+    /// Delivery via `ObjcDelivery`.
+    @objc(schedule:queue:task:completion:)
+    public func schedule(
+        _ descriptor: ObjcTaskDescriptor,
+        queue: DispatchQueue?,
+        task: @escaping @Sendable () -> Void,
+        completion: ((ObjcLease) -> Void)? = nil
+    ) -> ObjcLease {
+        let completionBox = ObjcCallbackBox(completion)
         let lease = store.scheduleTask(
             descriptor.underlying,
             task: { task() },
-            completion: completion.map { handler in
-                { lease in handler(ObjcLease(underlying: lease)) }
+            completion: completionBox.value == nil ? nil : { lease in
+                let leaseBox = ObjcCallbackBox(lease)
+                ObjcDelivery.on(queue) {
+                    completionBox.value?(ObjcLease(underlying: leaseBox.value))
+                }
             }
         )
         return ObjcLease(underlying: lease)
@@ -42,7 +56,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
 
     /// Schedules a task and waits for result via completion handler.
     /// Shares the one `waitThenRun` delivery core with `runWhenAvailable`.
-    /// Delivers the result on the specified queue, or the main queue when omitted.
+    /// Delivery via `ObjcDelivery`.
     @objc public func scheduleAndWait(
         _ descriptor: ObjcTaskDescriptor,
         queue: DispatchQueue? = nil,
@@ -54,14 +68,14 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
 
     /// Runs a task when the required capability becomes available, with a timeout.
     /// Shares the one `waitThenRun` delivery core with `scheduleAndWait`.
-    /// Delivers the result on the specified queue, or the main queue when omitted.
+    /// Delivery via `ObjcDelivery`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Negative means
     ///     unspecified, so the scheduler Configuration default applies.
-    ///   - queue: Queue for callback delivery. Pass `nil` for main queue.
+    ///   - queue: Delivery queue (see `ObjcDelivery`).
     ///   - task: The task closure to execute. Must return an NSObject.
-    ///   - completion: Called on the delivery queue with the result, or nil if timeout.
+    ///   - completion: Called via `ObjcDelivery` with the result, or nil if timeout.
     @objc public func runWhenAvailable(
         capability: String,
         timeout: TimeInterval,
