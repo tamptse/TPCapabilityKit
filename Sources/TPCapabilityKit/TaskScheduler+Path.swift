@@ -131,12 +131,7 @@ extension TaskScheduler {
         let raced = await deadline.raceValue {
             await taskExecution?()
         }
-        guard let racedValue = raced else {
-            await settle(lease, result: nil, timedOut: true, execution: taskExecution)
-            return
-        }
-
-        await settle(lease, result: racedValue, timedOut: false, execution: taskExecution)
+        settle(lease, raced: raced, execution: taskExecution)
     }
 
     // MARK: - Settlement (internal step of the same path)
@@ -155,12 +150,12 @@ extension TaskScheduler {
         case cancelled
     }
 
-    func settle(_ lease: Lease, result: Any?, timedOut: Bool, execution: (@Sendable () async -> Any?)?) async {
-        if timedOut {
+    func settle(_ lease: Lease, raced: Any??, execution: (@Sendable () async -> Any?)?) {
+        guard let racedValue = raced else {
             settle(lease, as: .expired)
             return
         }
-        settle(lease, as: .completed(result), execution: execution)
+        settle(lease, as: .completed(racedValue), execution: execution)
     }
 
     /// The single row-transition step of the same path: outcome decision and
