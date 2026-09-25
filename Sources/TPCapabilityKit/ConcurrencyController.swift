@@ -90,30 +90,34 @@ final class ConcurrencyController: @unchecked Sendable {
         }
     }
 
-    /// Narrow evict-stale-waiter seam owned by Tasks displacement: removes any
-    /// queued waiter under `taskId` whose owner differs from the newcomer and
-    /// resumes it with false. Self-retire no-ops. Slot-only: resumes a
-    /// continuation, touches no Lease, no row, no lifecycle transition.
-    internal func retire(taskId: String, owner: ObjectIdentifier) {
+    internal enum WaiterEviction: Sendable {
+        case stale
+        case `self`
+    }
+
+    /// Single waiter-eviction primitive: removes at most one queued waiter
+    /// under `taskId` and resumes it with false outside the lock.
+    /// Stale evicts a waiter owned by someone else; self evicts our own wait.
+    /// Slot-only: touches no Lease, no row, no lifecycle transition.
+    internal func removeWaiter(taskId: String, owner: ObjectIdentifier, match: WaiterEviction) {
         var resume: (@Sendable (Bool) -> Void)?
         lock.withLock {
-            guard let index = waiters.firstIndex(where: { $0.taskId == taskId && $0.owner != owner }) else { return }
+            guard let index = waiters.firstIndex(where: {
+                guard $0.taskId == taskId else { return false }
+                switch match {
+                case .stale: return $0.owner != owner
+                case .self: return $0.owner == owner
+                }
+            }) else { return }
             resume = waiters.remove(at: index).resume
         }
         resume?(false)
     }
 
-    /// Removes a parked waiter and resumes it with false; owner mismatch no-ops
-    /// so cancelling one lease never yanks another holder's wait.
+    /// Lease-keyed self-cancel intent over the single eviction primitive;
+    /// owner mismatch no-ops so cancelling one lease never yanks another wait.
     private func cancel(_ lease: Lease) {
-        let taskId = lease.task.id
-        let owner = ObjectIdentifier(lease)
-        var resume: (@Sendable (Bool) -> Void)?
-        lock.withLock {
-            guard let index = waiters.firstIndex(where: { $0.taskId == taskId && $0.owner == owner }) else { return }
-            resume = waiters.remove(at: index).resume
-        }
-        resume?(false)
+        removeWaiter(taskId: lease.task.id, owner: ObjectIdentifier(lease), match: .self)
     }
 
     private func release(_ lease: Lease) {

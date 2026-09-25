@@ -39,8 +39,8 @@ struct SlotHoldTests {
         #expect(bAdmitted)
     }
 
-    @Test("retire evicts stale waiter, self-retire no-ops")
-    func retireEvictsStaleWaiter() async {
+    @Test("removeWaiter stale evicts, self-retire no-ops")
+    func removeWaiterStaleEvicts() async {
         let controller = holdController()
         let log = Probe()
         let holder = makeHoldLease(id: "h")
@@ -82,7 +82,7 @@ struct SlotHoldTests {
             await Task.yield()
         }
 
-        controller.retire(taskId: "x", owner: ObjectIdentifier(new))
+        controller.removeWaiter(taskId: "x", owner: ObjectIdentifier(new), match: .stale)
         let oldAdmitted = await oldTask.value
         #expect(!oldAdmitted)
 
@@ -97,9 +97,9 @@ struct SlotHoldTests {
         for _ in 0..<1000 {
             await Task.yield()
         }
-        controller.retire(taskId: "x", owner: ObjectIdentifier(new))
+        controller.removeWaiter(taskId: "x", owner: ObjectIdentifier(new), match: .stale)
         let stranger = makeHoldLease(id: "h")
-        controller.retire(taskId: "h", owner: ObjectIdentifier(stranger))
+        controller.removeWaiter(taskId: "h", owner: ObjectIdentifier(stranger), match: .stale)
 
         release.finish()
         let otherAdmitted = await otherTask.value
@@ -109,6 +109,47 @@ struct SlotHoldTests {
         #expect(newAdmitted)
 
         #expect(await log.values == ["holder", "old", "other", "new"])
+    }
+
+    @Test("removeWaiter self evicts own wait, stranger untouched")
+    func removeWaiterSelfEvictsOwnWait() async {
+        let controller = holdController()
+        let holder = makeHoldLease(id: "h")
+        let waiter = makeHoldLease(id: "x")
+        let stranger = makeHoldLease(id: "z")
+        let release = AsyncGate()
+        let entered = AsyncGate()
+        let waiterParked = AsyncGate()
+
+        let holderTask = Task {
+            await controller.withHold(for: holder) { _ in
+                entered.signal()
+                await release.wait()
+            }
+        }
+        await entered.wait()
+
+        let waiterTask = Task {
+            waiterParked.signal()
+            return await controller.withHold(for: waiter) { admitted in admitted }
+        }
+        await waiterParked.wait()
+        for _ in 0..<1000 {
+            await Task.yield()
+        }
+
+        controller.removeWaiter(taskId: "x", owner: ObjectIdentifier(stranger), match: .self)
+        controller.removeWaiter(taskId: "unrelated", owner: ObjectIdentifier(waiter), match: .stale)
+        controller.removeWaiter(taskId: "h", owner: ObjectIdentifier(stranger), match: .stale)
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+
+        controller.removeWaiter(taskId: "x", owner: ObjectIdentifier(waiter), match: .self)
+        #expect(!(await waiterTask.value))
+
+        release.finish()
+        await holderTask.value
     }
 
 }
