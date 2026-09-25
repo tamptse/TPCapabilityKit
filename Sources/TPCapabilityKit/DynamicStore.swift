@@ -281,21 +281,60 @@ final class StoreState: @unchecked Sendable {
     private var creationSequence: UInt64 = 0
     private let creationClock = CurrentValueSubject<UInt64, Never>(0)
 
+    private enum CreationRendezvous {
+        case existing(CurrentValueSubject<Any?, Never>)
+        case created(CurrentValueSubject<Any?, Never>, UInt64)
+        case pending(AnyPublisher<CurrentValueSubject<Any?, Never>, Never>)
+    }
+
+    private func creationRendezvous(pluginId: String, createIfMissing: Bool) -> CreationRendezvous {
+        enum Decision {
+            case existing(CurrentValueSubject<Any?, Never>)
+            case created(CurrentValueSubject<Any?, Never>, UInt64)
+            case pending(UInt64)
+        }
+        let decision: Decision = lock.withLock {
+            if let existing = subjects[pluginId] {
+                return .existing(existing)
+            }
+            if createIfMissing {
+                let created = CurrentValueSubject<Any?, Never>(nil)
+                subjects[pluginId] = created
+                creationSequence &+= 1
+                return .created(created, creationSequence)
+            }
+            return .pending(creationSequence)
+        }
+        switch decision {
+        case .existing(let subject):
+            return .existing(subject)
+        case .created(let subject, let notice):
+            return .created(subject, notice)
+        case .pending(let after):
+            let awaited: AnyPublisher<CurrentValueSubject<Any?, Never>, Never> = creationClock
+                .filter { $0 > after }
+                .map { [weak self] _ -> CurrentValueSubject<Any?, Never>? in
+                    guard let self else { return nil }
+                    return self.lock.withLock { self.subjects[pluginId] }
+                }
+                .compactMap { $0 }
+                .first()
+                .eraseToAnyPublisher()
+            return .pending(awaited)
+        }
+    }
+
     func update<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let (subject, sequence): (CurrentValueSubject<Any?, Never>, UInt64?) = lock.withLock {
-            if let existing = subjects[pluginId] {
-                return (existing, nil)
-            }
-            let created = CurrentValueSubject<Any?, Never>(nil)
-            subjects[pluginId] = created
-            creationSequence &+= 1
-            return (created, creationSequence)
+        switch creationRendezvous(pluginId: pluginId, createIfMissing: true) {
+        case .existing(let subject):
+            subject.send(newState)
+        case .created(let subject, let notice):
+            creationClock.send(notice)
+            subject.send(newState)
+        case .pending:
+            assertionFailure("State creation rendezvous produced no subject for a writer")
         }
-        if let sequence {
-            creationClock.send(sequence)
-        }
-        subject.send(newState)
     }
 
     func get<T>(pluginId: String, type: T.Type) -> T? {
@@ -333,25 +372,17 @@ final class StoreState: @unchecked Sendable {
             guard let self else {
                 return Empty(completeImmediately: true).eraseToAnyPublisher()
             }
-            let (subject, sequence): (CurrentValueSubject<Any?, Never>?, UInt64) = self.lock.withLock {
-                (self.subjects[pluginId], self.creationSequence)
-            }
-            if let subject {
+            switch self.creationRendezvous(pluginId: pluginId, createIfMissing: false) {
+            case .existing(let subject), .created(let subject, _):
                 return subject
                     .compactMap { $0 as? T }
                     .eraseToAnyPublisher()
+            case .pending(let awaited):
+                return awaited
+                    .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
+                    .switchToLatest()
+                    .eraseToAnyPublisher()
             }
-            return self.creationClock
-                .filter { $0 > sequence }
-                .map { [weak self] _ -> CurrentValueSubject<Any?, Never>? in
-                    guard let self else { return nil }
-                    return self.lock.withLock { self.subjects[pluginId] }
-                }
-                .compactMap { $0 }
-                .first()
-                .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
-                .switchToLatest()
-                .eraseToAnyPublisher()
         }
         .eraseToAnyPublisher()
     }

@@ -60,6 +60,31 @@ struct TPCapabilityKitStateLifecycleTests {
         cancellables.removeAll()
     }
 
+    @Test("concurrent observers before write rendezvous on the single write")
+    func concurrentObserversBeforeWriteRendezvous() {
+        let store = DynamicStore()
+        let pluginId = "Rendezvous_\(UUID().uuidString)"
+        let observerCount = 8
+        var received = Array(repeating: [String](), count: observerCount)
+        var cancellables = Set<AnyCancellable>()
+
+        for index in 0..<observerCount {
+            store.observeState(pluginId: pluginId, type: String.self)
+                .sink { received[index].append($0) }
+                .store(in: &cancellables)
+        }
+
+        #expect(store.getState(pluginId: pluginId, type: String.self) == nil)
+
+        store.updateState(pluginId: pluginId, newState: "RendezvousValue")
+        for values in received {
+            #expect(values.last == "RendezvousValue")
+        }
+        #expect(store.getState(pluginId: pluginId, type: String.self) == "RendezvousValue")
+
+        cancellables.removeAll()
+    }
+
     @Test("observation alone never creates visible state")
     func observationAloneNeverCreates() {
         let store = DynamicStore()
