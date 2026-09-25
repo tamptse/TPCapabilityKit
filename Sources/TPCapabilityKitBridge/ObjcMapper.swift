@@ -36,14 +36,29 @@ enum ObjcTimeout: Sendable {
 
     /// Collapsed display reading: the stored value when explicit, otherwise
     /// the pinned compat default.
-    static func display(for descriptor: TaskDescriptor) -> TimeInterval {
-        descriptor.timeout ?? pinnedDefault
+    var display: TimeInterval {
+        switch self {
+        case .unspecified: Self.pinnedDefault
+        case .explicit(let value): value
+        }
     }
 
-    /// Exact inverse of the display fallback above: true exactly when display
-    /// returns the stored value rather than the pin.
-    static func isExplicit(for descriptor: TaskDescriptor) -> Bool {
-        descriptor.timeout != nil
+    /// Explicitness flag: true exactly when display returns the stored value
+    /// rather than the pin.
+    var isExplicit: Bool {
+        switch self {
+        case .unspecified: false
+        case .explicit: true
+        }
+    }
+
+    /// Live-view mapping from an already-resolved domain value. Nil stays
+    /// unspecified; non-nil travels as explicit without touching the wire fork.
+    static func fromStored(_ value: TimeInterval?) -> ObjcTimeout {
+        switch value {
+        case .none: .unspecified
+        case .some(let stored): .explicit(stored)
+        }
     }
 }
 
@@ -52,12 +67,12 @@ enum ObjcTimeout: Sendable {
     /// Compat spelling of the pin literal, owned by `ObjcTimeout`.
     @usableFromInline static let omittedTimeout: TimeInterval = ObjcTimeout.pinnedDefault
 
-    static func displayTimeout(for descriptor: TaskDescriptor) -> TimeInterval {
-        ObjcTimeout.display(for: descriptor)
+    static func displayTimeout(for timeout: ObjcTimeout) -> TimeInterval {
+        timeout.display
     }
 
-    static func hasExplicitTimeout(for descriptor: TaskDescriptor) -> Bool {
-        ObjcTimeout.isExplicit(for: descriptor)
+    static func hasExplicitTimeout(for timeout: ObjcTimeout) -> Bool {
+        timeout.isExplicit
     }
 
     static func capability(from string: String) -> Capability {

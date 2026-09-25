@@ -10,13 +10,13 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// Collapsed timeout reading: the stored value when explicit, otherwise
     /// the pinned compat default. `hasExplicitTimeout` tells the two apart;
-    /// both read through the single mapper-owned statement
-    /// (`ObjcMapper.displayTimeout`/`hasExplicitTimeout`).
+    /// both read from the one stored timeout through the single mapper-owned
+    /// statement (`ObjcMapper.displayTimeout`/`hasExplicitTimeout`).
     @objc public var timeout: TimeInterval {
-        ObjcMapper.displayTimeout(for: underlying)
+        ObjcMapper.displayTimeout(for: storedTimeout)
     }
 
-    @objc public var hasExplicitTimeout: Bool { ObjcMapper.hasExplicitTimeout(for: underlying) }
+    @objc public var hasExplicitTimeout: Bool { ObjcMapper.hasExplicitTimeout(for: storedTimeout) }
 
     @objc public var maxRetries: Int { underlying.maxRetries }
 
@@ -28,6 +28,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// The underlying Swift TaskDescriptor.
     public let underlying: TaskDescriptor
+
+    private let storedTimeout: ObjcTimeout
 
     /// Creates a new task descriptor. Timeout compat follows the single
     /// mapper-owned fork (see `ObjcTimeout.resolve`).
@@ -50,7 +52,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
             id: nil,
             capabilities: capabilities,
             priority: priority,
-            timeout: ObjcTimeout.resolve(wire: timeout),
+            timeout: timeout,
             maxRetries: maxRetries,
             metadata: metadata
         )
@@ -80,7 +82,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
             id: clientId,
             capabilities: capabilities,
             priority: priority,
-            timeout: ObjcTimeout.resolve(wire: timeout),
+            timeout: timeout,
             maxRetries: maxRetries,
             metadata: metadata
         )
@@ -90,15 +92,17 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         id: String?,
         capabilities: [String],
         priority: Int,
-        timeout: ObjcTimeout,
+        timeout wire: TimeInterval,
         maxRetries: Int,
         metadata: [String: String]
     ) {
+        let stored = ObjcTimeout.resolve(wire: wire)
+        self.storedTimeout = stored
         self.underlying = ObjcMapper.makeDescriptor(
             id: id,
             capabilities: capabilities,
             priority: priority,
-            timeout: timeout,
+            timeout: stored,
             maxRetries: maxRetries,
             metadata: metadata
         )
@@ -106,6 +110,7 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     }
 
     internal init(underlying: TaskDescriptor) {
+        self.storedTimeout = ObjcTimeout.fromStored(underlying.timeout)
         self.underlying = underlying
         super.init()
     }

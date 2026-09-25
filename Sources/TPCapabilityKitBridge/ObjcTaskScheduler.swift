@@ -68,14 +68,8 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         task: @escaping () -> NSObject,
         completion: @escaping (NSObject?) -> Void
     ) {
-        let descriptor = ObjcMapper.makeDescriptor(
-            capabilities: [capability],
-            priority: TaskPriority.normal.rawValue,
-            timeout: ObjcTimeout.resolve(wire: timeout),
-            maxRetries: 0,
-            metadata: [:]
-        )
-        waitThenRun(descriptor: descriptor, queue: queue, task: task, completion: completion)
+        let descriptor = ObjcTaskDescriptor(capabilities: [capability], timeout: timeout)
+        waitThenRun(descriptor: descriptor.underlying, queue: queue, task: task, completion: completion)
     }
 
     /// Check-and-run entry (the facade two-entry table on
