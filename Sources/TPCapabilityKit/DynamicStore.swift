@@ -221,20 +221,6 @@ public final class DynamicStore: @unchecked Sendable {
         scheduling
     }
 
-    internal func enableDeterministicTime() {
-        scheduling.enableDeterministicTime(owner: self)
-    }
-
-    internal func advanceTime(by delta: TimeInterval) async {
-        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        await scheduling.advanceTime(by: delta)
-    }
-
-    internal func waitForDeterministicWaiters(count expected: Int) async {
-        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        await scheduling.waitForDeterministicWaiters(count: expected)
-    }
-
     internal var generationCount: Int {
         scheduling.generationCount
     }
