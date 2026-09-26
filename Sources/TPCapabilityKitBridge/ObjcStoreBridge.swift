@@ -78,6 +78,17 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         store.removeState(for: pluginId)
     }
 
+    /// Unregisters a plugin by its identifier: state cleared with detached
+    /// subscribers completed plus capability-row detach.
+    /// ObjC plugins are capability-consumers only — no Capabilities parameter
+    /// here — so detach can never fake provision. Delegates via a fresh
+    /// id-carrying adapter; Store detach reads only the id, so no `start`
+    /// side effect runs on this path.
+    /// - Parameter pluginId: Unique identifier of the plugin.
+    @objc public func unregister(pluginId: String) {
+        store.unregister(plugin: BridgeDetachAdapter(id: pluginId))
+    }
+
     // MARK: - Capability APIs
 
     /// Queries whether any registered plugin provides the specified capability.
@@ -168,4 +179,12 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         ObjcTaskScheduler(store: store)
     }
 
+}
+
+/// Fresh id-carrying adapter for the detach path above. Store detach reads
+/// only the Plugin id, so this is behaviorally identical to the
+/// registration-time adapter with no `start` side effect.
+private struct BridgeDetachAdapter: AppPlugin {
+    let id: String
+    func start(with store: DynamicStore) {}
 }

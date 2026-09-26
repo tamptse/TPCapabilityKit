@@ -826,6 +826,143 @@ struct BridgeDetachSliceTests {
         }
     }
 }
+struct BridgeUnregisterSliceTests {
+    final class UnregPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
+        let id: String
+        init(id: String) {
+            self.id = id
+            super.init()
+        }
+        func start(with store: ObjcStoreBridge) {
+            store.updateState(pluginId: id, newState: NSString(string: "UnregInitial"))
+        }
+    }
+
+    private final class StateBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String] = []
+        private let gate = DispatchSemaphore(value: 0)
+        func append(_ value: String) {
+            lock.withLock { values.append(value) }
+            gate.signal()
+        }
+        var snapshot: [String] {
+            lock.withLock { values }
+        }
+        func waitForCount(_ count: Int, timeout: TimeInterval = 2.0) -> Bool {
+            let deadline = Date().addingTimeInterval(timeout)
+            while lock.withLock({ values.count }) < count && Date() < deadline {
+                _ = gate.wait(timeout: .now() + 0.05)
+            }
+            return lock.withLock({ values.count }) >= count
+        }
+    }
+
+    @Test func bridgeUnregisterDetachesFullyById() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "BridgeUnreg_\(UUID().uuidString)"
+        let probeCap = "unregProbe_\(UUID().uuidString)"
+        let queueA = DispatchQueue(label: "unreg.a.\(UUID().uuidString)")
+        let queueB = DispatchQueue(label: "unreg.b.\(UUID().uuidString)")
+
+        bridge.register(plugin: UnregPlugin(id: pluginId))
+        #expect(store.queryCapabilities(for: pluginId).isEmpty)
+        #expect(bridge.queryCapability(probeCap) == false)
+
+        let rowCap = Capability.custom("rowDetachProbe_\(UUID().uuidString)")
+        store.registerCapability(for: pluginId, capabilities: [rowCap])
+        #expect(store.queryCapabilities(for: pluginId) == [rowCap])
+        #expect(bridge.queryCapability(rowCap.rawValue) == true)
+
+        let oldBox = StateBox()
+        let oldToken = bridge.subscribe(pluginId: pluginId, queue: queueA) { state in
+            if let str = state as? String { oldBox.append(str) }
+        }
+        defer { oldToken.cancel() }
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "V1"))
+        #expect(oldBox.waitForCount(2))
+
+        bridge.unregister(pluginId: pluginId)
+
+        #expect(bridge.getState(pluginId: pluginId) == nil)
+        #expect(store.queryCapabilities(for: pluginId).isEmpty)
+        #expect(bridge.queryCapability(rowCap.rawValue) == false)
+        #expect(bridge.queryCapability(probeCap) == false)
+
+        let newBox = StateBox()
+        let newToken = bridge.subscribe(pluginId: pluginId, queue: queueB) { state in
+            if let str = state as? String { newBox.append(str) }
+        }
+        defer { newToken.cancel() }
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "V2"))
+        #expect(newBox.waitForCount(1))
+        #expect(newBox.snapshot == ["V2"])
+
+        let deadline = Date().addingTimeInterval(0.3)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            queueA.sync {}
+            queueB.sync {}
+        }
+        #expect(!oldBox.snapshot.contains("V2"))
+        #expect(oldBox.snapshot == ["UnregInitial", "V1"])
+
+        bridge.register(plugin: UnregPlugin(id: pluginId))
+        #expect((bridge.getState(pluginId: pluginId) as? String) == "UnregInitial")
+    }
+
+    @Test func bridgeUnregisterEmptyIdIsNoOp() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "BridgeUnregNoop_\(UUID().uuidString)"
+        let uniqueCap = "unregNoopCap_\(UUID().uuidString)"
+
+        bridge.register(plugin: UnregPlugin(id: pluginId))
+        let beforeRead = bridge.getState(pluginId: pluginId) as? String
+        #expect(beforeRead == "UnregInitial")
+
+        var capValues: [Bool] = []
+        let capLock = NSLock()
+        let capGate = DispatchSemaphore(value: 0)
+        let capToken = bridge.subscribeCapability(uniqueCap, queue: DispatchQueue(label: "unreg.noop.cap.\(UUID().uuidString)")) { available in
+            capLock.withLock { capValues.append(available) }
+            capGate.signal()
+        }
+        defer { capToken.cancel() }
+        _ = capGate.wait(timeout: .now() + 2.0)
+        #expect(capLock.withLock { capValues } == [false])
+
+        var snapshots: [[String: Set<Capability>]] = []
+        let snapLock = NSLock()
+        let snapGate = DispatchSemaphore(value: 0)
+        var snapCancellables = Set<AnyCancellable>()
+        store.observeAllCapabilities()
+            .sink { snapshot in
+                snapLock.withLock { snapshots.append(snapshot) }
+                snapGate.signal()
+            }
+            .store(in: &snapCancellables)
+        defer { snapCancellables.removeAll() }
+        _ = snapGate.wait(timeout: .now() + 2.0)
+        let snapshotCountBefore = snapLock.withLock { snapshots.count }
+        let beforeQuery = bridge.queryCapability(uniqueCap)
+
+        bridge.unregister(pluginId: "")
+
+        #expect((bridge.getState(pluginId: pluginId) as? String) == beforeRead)
+        #expect(bridge.queryCapability(uniqueCap) == beforeQuery)
+        #expect(store.queryCapabilities(for: pluginId).isEmpty)
+
+        store.registerCapability(for: "UnregNoopProbe_\(UUID().uuidString)", capabilities: [.custom(uniqueCap)])
+        _ = capGate.wait(timeout: .now() + 2.0)
+        _ = snapGate.wait(timeout: .now() + 2.0)
+        #expect(capLock.withLock { capValues } == [false, true])
+        snapLock.withLock {
+            #expect(snapshots.count == snapshotCountBefore + 1)
+        }
+    }
+}
 struct ObjcFastPathAgreementTests {
     @Test func bridgeRunTaskAgreesWithSchedulerFastPath() {
         let store = DynamicStore()
