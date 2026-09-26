@@ -25,11 +25,11 @@ final class ConcurrencyController: @unchecked Sendable {
         let owner: ObjectIdentifier
         let resume: @Sendable (Bool) -> Void
     }
-    /// FIFO arrival queue; release scans from the head and admits the first
-    /// waiter fitting current capacity (first-fit FIFO with skip, single wake
-    /// per release in this step). A skipped head keeps its place and is
-    /// re-evaluated on every later release, so skipping delays but never
-    /// strands it.
+    /// FIFO arrival queue; release scans from the head and admits every waiter
+    /// fitting current capacity in arrival order (first-fit FIFO with skip).
+    /// A skipped head keeps its place and is re-evaluated on every later
+    /// release, so skipping delays but never strands it. Admitted waiters
+    /// resume outside the lock as an arrival-ordered batch.
     private var waiters: [Waiter] = []
 
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
@@ -126,7 +126,7 @@ final class ConcurrencyController: @unchecked Sendable {
     private func release(_ lease: Lease) {
         let taskId = lease.task.id
         let owner = ObjectIdentifier(lease)
-        var toResume: (@Sendable (Bool) -> Void)?
+        var toResume: [@Sendable (Bool) -> Void] = []
         lock.withLock {
             guard let held = heldKeys[taskId], held.owner == owner else { return }
             heldKeys.removeValue(forKey: taskId)
@@ -135,20 +135,28 @@ final class ConcurrencyController: @unchecked Sendable {
             for cap in keys {
                 capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
             }
-            // First-fit FIFO with skip: scan from the head and admit the first
-            // waiter fitting the freed capacity. The head keeps priority as the
-            // first candidate; a skipped waiter loses no place and is
-            // reconsidered on the next release.
-            for index in waiters.indices {
+            // First-fit FIFO with skip: scan from the head and admit every
+            // waiter fitting the freed capacity, in arrival order. The head
+            // keeps priority as the first candidate; a skipped waiter loses no
+            // place and is reconsidered on the next release. Each admission
+            // consumes capacity under the same lock, so one release admits at
+            // most what the freed capacity allows and limits are never
+            // overshot. Woken means admitted: slots are installed here, so no
+            // resumed waiter ever re-parks.
+            var index = waiters.startIndex
+            while index < waiters.endIndex {
                 let waiter = waiters[index]
                 if tryInstall(keys: waiter.keys, taskId: waiter.taskId, owner: waiter.owner) {
                     waiters.remove(at: index)
-                    toResume = waiter.resume
-                    break
+                    toResume.append(waiter.resume)
+                } else {
+                    index = waiters.index(after: index)
                 }
             }
         }
-        toResume?(true)
+        for resume in toResume {
+            resume(true)
+        }
     }
 
     // MARK: - Private Helpers
