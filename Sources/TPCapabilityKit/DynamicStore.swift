@@ -153,7 +153,7 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Tasks-only waiter half: whole-set readiness for the Tasks waiter.
-    /// Thin delegation to the registry interface, so park/Deadline/activate/settle
+    /// Thin delegation to the registry interface, so park/expiry/activate/settle
     /// stay in Tasks while set-matching lives in the registry. Pairs with
     /// `observeAllCapabilities`; do not rebuild this wait in callers out of
     /// snapshot observation plus re-query.
@@ -184,7 +184,7 @@ public final class DynamicStore: @unchecked Sendable {
     /// | Check-and-run: sync fire, @objc-compatible | `runIfAvailable` |
     /// | Schedule-and-wait: async, the one waiter | `scheduleTaskAndWait` (`runTaskWhenAvailable` is the single-capability convenience over it) |
     ///
-    /// Immediate entries bypass Lease, slot admission, and Deadline by contract:
+    /// Immediate entries bypass Lease, slot admission, and expiry race by contract:
     /// fire-and-forget must not queue, so under slot pressure sync fire runs
     /// while a scheduled wait parks.
     public func runIfAvailable<T>(

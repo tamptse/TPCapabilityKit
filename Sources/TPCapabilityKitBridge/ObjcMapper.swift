@@ -12,7 +12,7 @@ import TPCapabilityKit
     case explicit(TimeInterval)
 
     /// Pinned compat default carried as explicit for omitted wire. Literal on
-    /// purpose: it must never follow a reconfigured Swift default. Deadline
+    /// purpose: it must never follow a reconfigured Swift default. Shared-race
     /// construction stays the sole Swift resolver for nil timeouts.
     /// Display is lossy: absent displays as this pin, so rebuilding from display
     /// alone promotes to explicit pin; honor hasExplicitTimeout (absent travels
@@ -20,7 +20,7 @@ import TPCapabilityKit
     @usableFromInline static let pinnedDefault: TimeInterval = 30.0
 
     /// Single statement of ObjC timeout compat: wire-negative means unspecified
-    /// (nil, scheduler default applies at Deadline construction); every
+    /// (nil, scheduler default applies at shared-race construction); every
     /// non-negative wire travels as explicit, with wire equal to the pin
     /// literal collapsing to explicit(pinnedDefault) per ADR-0020.
     static func resolve(wire: TimeInterval) -> ObjcTimeout {
@@ -28,7 +28,7 @@ import TPCapabilityKit
         return .explicit(wire)
     }
 
-    /// Domain reading: unspecified stays nil for Deadline construction,
+    /// Domain reading: unspecified stays nil for shared-race construction,
     /// explicit travels unchanged.
     var resolved: TimeInterval? {
         switch self {

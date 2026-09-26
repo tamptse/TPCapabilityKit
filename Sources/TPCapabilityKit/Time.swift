@@ -6,7 +6,7 @@ import Foundation
 /// `enableDeterministic` swaps live for virtual exactly once before first
 /// use, after which the adapter never changes and is never threaded per call.
 /// `sleep` is the single seam the waiter and the executor share through
-/// `Deadline`: virtual sleep parks on the deterministic registry until
+/// the shared race: virtual sleep parks on the deterministic registry until
 /// `advance` expires it. Advancing wakes only expired waiters, never loses or
 /// duplicates a wakeup, and `waitForWaiters` preserves the adapter gate the
 /// advance/wait rendezvous tests synchronize on.

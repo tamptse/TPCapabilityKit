@@ -105,7 +105,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     /// The one delivery core for every value-returning wait behind the view.
     ///
     /// Contract (stated once for the whole scheduling door): sync fire
-    /// (`runIfAvailable`) bypasses Lease, slot admission, and Deadline, while
+    /// (`runIfAvailable`) bypasses Lease, slot admission, and expiry race, while
     /// every value-returning wait (`scheduleAndWait`, `runWhenAvailable`)
     /// funnels through this core — one descriptor-build plus `ObjcDelivery`
     /// queue-hop path — so the two wait spellings agree with sync fire by
