@@ -223,29 +223,17 @@ extension TaskScheduler {
             waiter: @escaping (Lease) -> Void
         ) -> ScheduleWaitRendezvousOutcome {
             if lease.isTerminal { return .settledEarly(lease) }
-            if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal {
-                guard let taken = takeRow(for: row.lease) else {
-                    insert(lease: lease, execution: execution, waiters: [waiter])
-                    guard let fresh = rows[lease.task.id], fresh.lease === lease else {
-                        return .settledEarly(lease)
-                    }
-                    if lease.isTerminal { return .settledEarly(lease) }
-                    return .parked(displaced: nil, waiters: [], waiter: nil, evict: nil)
-                }
-                taken.lease.terminalize(.expired)
-                insert(lease: lease, execution: execution, waiters: [waiter])
-                guard let fresh = rows[lease.task.id], fresh.lease === lease else {
-                    return .settledEarly(lease)
-                }
-                if lease.isTerminal { return .settledEarly(lease) }
-                return .parked(displaced: taken.lease, waiters: taken.waiters, waiter: taken.waiter, evict: EvictObligation(taskId: lease.task.id, owner: ObjectIdentifier(lease)))
-            }
-            insert(lease: lease, execution: execution, waiters: [waiter])
+            let result = exchange(lease: lease, execution: execution, waiters: [waiter])
             guard let fresh = rows[lease.task.id], fresh.lease === lease else {
                 return .settledEarly(lease)
             }
             if lease.isTerminal { return .settledEarly(lease) }
-            return .parked(displaced: nil, waiters: [], waiter: nil, evict: nil)
+            return .parked(
+                displaced: result.displaced,
+                waiters: result.waiters,
+                waiter: result.waiter,
+                evict: result.evict
+            )
         }
 
         enum FusedParkOutcome: Sendable {
