@@ -492,6 +492,9 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         // flagged-drained generation cannot become live before the sweep. T2
         // pump-coalesce must re-prove this invariant before changing the sweep.
         // Drain still means empty pending plus active from one acquisition.
+        // Follow-up blocked by T2 pump-coalesce: getters become pure reads with
+        // reaping only at explicit reconfigure/settle points fed by a
+        // settle/drain notification.
         let copied = lock.withLock { generations }
         guard copied.count > 1 else { return copied }
         let copiedCurrentID = ObjectIdentifier(copied.last!)
