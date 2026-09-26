@@ -694,6 +694,138 @@ struct ObjcLeaseTests {
     }
 }
 
+struct BridgeDetachSliceTests {
+    final class DetachPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
+        let id: String
+        init(id: String) {
+            self.id = id
+            super.init()
+        }
+        func start(with store: ObjcStoreBridge) {
+            store.updateState(pluginId: id, newState: NSString(string: "DetachInitial"))
+        }
+    }
+
+    private final class StateBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String] = []
+        private let gate = DispatchSemaphore(value: 0)
+        func append(_ value: String) {
+            lock.withLock { values.append(value) }
+            gate.signal()
+        }
+        var snapshot: [String] {
+            lock.withLock { values }
+        }
+        func waitForCount(_ count: Int, timeout: TimeInterval = 2.0) -> Bool {
+            let deadline = Date().addingTimeInterval(timeout)
+            while lock.withLock({ values.count }) < count && Date() < deadline {
+                _ = gate.wait(timeout: .now() + 0.05)
+            }
+            return lock.withLock({ values.count }) >= count
+        }
+    }
+
+    @Test func bridgeRemoveStateClearsRead() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "BridgeRemove_\(UUID().uuidString)"
+
+        bridge.register(plugin: DetachPlugin(id: pluginId))
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "V1"))
+        #expect((bridge.getState(pluginId: pluginId) as? String) == "V1")
+
+        bridge.removeState(pluginId: pluginId)
+        #expect(bridge.getState(pluginId: pluginId) == nil)
+    }
+
+    @Test func bridgeRemoveStateDetachesOldSubjectOnly() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "BridgeRemoveSubject_\(UUID().uuidString)"
+        let queueA = DispatchQueue(label: "detach.a.\(UUID().uuidString)")
+        let queueB = DispatchQueue(label: "detach.b.\(UUID().uuidString)")
+
+        bridge.register(plugin: DetachPlugin(id: pluginId))
+
+        let oldBox = StateBox()
+        let oldToken = bridge.subscribe(pluginId: pluginId, queue: queueA) { state in
+            if let str = state as? String { oldBox.append(str) }
+        }
+        defer { oldToken.cancel() }
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "V1"))
+        #expect(oldBox.waitForCount(2))
+
+        bridge.removeState(pluginId: pluginId)
+
+        let newBox = StateBox()
+        let newToken = bridge.subscribe(pluginId: pluginId, queue: queueB) { state in
+            if let str = state as? String { newBox.append(str) }
+        }
+        defer { newToken.cancel() }
+        bridge.updateState(pluginId: pluginId, newState: NSString(string: "V2"))
+        #expect(newBox.waitForCount(1))
+        #expect(newBox.snapshot == ["V2"])
+
+        let deadline = Date().addingTimeInterval(0.3)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            queueA.sync {}
+            queueB.sync {}
+        }
+        #expect(!oldBox.snapshot.contains("V2"))
+        #expect(oldBox.snapshot == ["DetachInitial", "V1"])
+    }
+
+    @Test func bridgeRemoveStateEmptyIdIsNoOp() {
+        let store = DynamicStore()
+        let bridge = ObjcStoreBridge(store: store)
+        let pluginId = "BridgeRemoveNoop_\(UUID().uuidString)"
+        let uniqueCap = "noopCap_\(UUID().uuidString)"
+
+        bridge.register(plugin: DetachPlugin(id: pluginId))
+        let beforeRead = bridge.getState(pluginId: pluginId) as? String
+        #expect(beforeRead == "DetachInitial")
+
+        var capValues: [Bool] = []
+        let capLock = NSLock()
+        let capGate = DispatchSemaphore(value: 0)
+        let capToken = bridge.subscribeCapability(uniqueCap, queue: DispatchQueue(label: "noop.cap.\(UUID().uuidString)")) { available in
+            capLock.withLock { capValues.append(available) }
+            capGate.signal()
+        }
+        defer { capToken.cancel() }
+        _ = capGate.wait(timeout: .now() + 2.0)
+        #expect(capLock.withLock { capValues } == [false])
+
+        var snapshots: [[String: Set<Capability>]] = []
+        let snapLock = NSLock()
+        let snapGate = DispatchSemaphore(value: 0)
+        var snapCancellables = Set<AnyCancellable>()
+        store.observeAllCapabilities()
+            .sink { snapshot in
+                snapLock.withLock { snapshots.append(snapshot) }
+                snapGate.signal()
+            }
+            .store(in: &snapCancellables)
+        defer { snapCancellables.removeAll() }
+        _ = snapGate.wait(timeout: .now() + 2.0)
+        let snapshotCountBefore = snapLock.withLock { snapshots.count }
+
+        bridge.removeState(pluginId: "")
+
+        #expect((bridge.getState(pluginId: pluginId) as? String) == beforeRead)
+        #expect(bridge.queryCapability(uniqueCap) == false)
+
+        store.registerCapability(for: "NoopProbe_\(UUID().uuidString)", capabilities: [.custom(uniqueCap)])
+        _ = capGate.wait(timeout: .now() + 2.0)
+        _ = snapGate.wait(timeout: .now() + 2.0)
+        #expect(capLock.withLock { capValues } == [false, true])
+        snapLock.withLock {
+            #expect(snapshots.count == snapshotCountBefore + 1)
+        }
+    }
+}
 struct ObjcFastPathAgreementTests {
     @Test func bridgeRunTaskAgreesWithSchedulerFastPath() {
         let store = DynamicStore()

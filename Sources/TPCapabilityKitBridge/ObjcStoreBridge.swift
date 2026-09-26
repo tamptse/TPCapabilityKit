@@ -65,6 +65,19 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         return ObjcCancellable(cancellable)
     }
 
+    // MARK: - Plugin Detach
+
+    // Death half of the State-API birth half above: detach entries are keyed
+    // by Plugin id string like the read/write/subscribe entries and delegate
+    // straight to the Store detach entries with no guard of their own, so the
+    // observable empty-id no-op stays identical to doing nothing.
+
+    /// Removes the state for a plugin identifier.
+    /// - Parameter pluginId: Unique identifier of the plugin.
+    @objc public func removeState(pluginId: String) {
+        store.removeState(for: pluginId)
+    }
+
     // MARK: - Capability APIs
 
     /// Queries whether any registered plugin provides the specified capability.
