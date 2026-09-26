@@ -17,11 +17,7 @@ private struct SharedRace: Sendable {
     }
 
     func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
-        let raced = await raceValue(operation: { await operation() })
-        guard let value = raced else {
-            return false
-        }
-        return (value as? Bool) ?? false
+        await raceValue(operation: { await operation() }).map { ($0 as? Bool) ?? false } ?? false
     }
 
     func raceValue(operation: @Sendable @escaping () async -> Any?) async -> Any?? {
