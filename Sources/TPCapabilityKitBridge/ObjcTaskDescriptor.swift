@@ -10,12 +10,12 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// Collapsed timeout reading: the stored optional when present, otherwise
     /// the pinned compat default. `hasExplicitTimeout` tells the two apart;
-    /// both derive from the single stored optional.
+    /// both read directly off the single timeout form.
     @objc public var timeout: TimeInterval {
-        underlying.timeout ?? ObjcTimeout.pinnedDefault
+        ObjcTimeout.fromStored(underlying.timeout).display
     }
 
-    @objc public var hasExplicitTimeout: Bool { underlying.timeout != nil }
+    @objc public var hasExplicitTimeout: Bool { ObjcTimeout.fromStored(underlying.timeout).isExplicit }
 
     @objc public var maxRetries: Int { underlying.maxRetries }
 
