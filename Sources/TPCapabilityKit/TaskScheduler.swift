@@ -64,7 +64,7 @@ public final class TaskScheduler: @unchecked Sendable {
             await taskExecution()
             return ()
         }, completion: completion)
-        Task { await self.processPendingTasks() }
+        kickPump()
         return lease
     }
 
@@ -150,7 +150,7 @@ public final class TaskScheduler: @unchecked Sendable {
                     }
                 }
                 drainEviction(evict)
-                Task { await self.processPendingTasks() }
+                kickPump()
             case .settledEarly(let settled):
                 resume(with: settled)
             }

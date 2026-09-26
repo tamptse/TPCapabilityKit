@@ -19,7 +19,7 @@ extension TaskScheduler {
             if Task.isCancelled { break }
             while true {
                 if Task.isCancelled { break }
-                let next: Lease? = lock.withLock { lifecycleStore.dequeueNext() }
+                let next: Lease? = dequeueNext()
                 guard let nextLease = next else { break }
                 guard !nextLease.isTerminal else { continue }
                 let deadline = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
@@ -40,22 +40,6 @@ extension TaskScheduler {
                 return false
             }
             if !shouldContinue { break }
-        }
-    }
-
-    func processPendingTasks() async {
-        while true {
-            guard let nextLease = dequeueNext() else { break }
-            guard !nextLease.isTerminal else { continue }
-            let deadline = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
-
-            // Entry early exit; the availability gate beside activate decides.
-            guard isAvailable(for: nextLease.task) else {
-                parkLeaseForCapabilities(nextLease, deadline: deadline)
-                continue
-            }
-
-            await activate(nextLease, deadline: deadline)
         }
     }
 
@@ -252,7 +236,7 @@ extension TaskScheduler {
         guard didRetry || settled else { return }
         waiterToCancel?.cancel()
         if didRetry {
-            Task { await self.processPendingTasks() }
+            kickPump()
             return
         }
         for waiter in waiters {
