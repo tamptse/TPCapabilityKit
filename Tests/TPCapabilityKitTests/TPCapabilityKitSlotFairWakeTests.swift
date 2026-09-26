@@ -499,3 +499,109 @@ struct SlotDrainTests {
         #expect(await probe.count == 1)
     }
 }
+
+@Suite("Slot Stress Tests")
+struct SlotStressTests {
+    @Test("heterogeneous mix drains with overtakes and limits intact")
+    func heterogeneousStressDrains() async {
+        let capA = Capability.custom("stressA_\(UUID().uuidString)")
+        let capB = Capability.custom("stressB_\(UUID().uuidString)")
+        let capC = Capability.custom("stressC_\(UUID().uuidString)")
+        let (store, pluginId) = makeStoreWithCap(
+            [capA, capB, capC],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 6),
+            prefix: "FairWakeStress"
+        )
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let order = Probe()
+        let global = Probe()
+        let probeA = Probe()
+        let probeB = Probe()
+        let probeC = Probe()
+        let drained = AsyncGate()
+        let started = AsyncGate()
+        let releaseA = AsyncGate()
+        let releaseB = AsyncGate()
+        let releaseC = AsyncGate()
+
+        var leases: [Lease] = []
+        let blockerA = TaskDescriptor(requiredCapabilities: [capA], timeout: 30.0)
+        leases.append(store.scheduleTask(blockerA, task: {
+            started.signal()
+            await releaseA.wait()
+        }, completion: { _ in drained.signal() }))
+        let blockerB = TaskDescriptor(requiredCapabilities: [capB], timeout: 30.0)
+        leases.append(store.scheduleTask(blockerB, task: {
+            started.signal()
+            await releaseB.wait()
+        }, completion: { _ in drained.signal() }))
+        let blockerC = TaskDescriptor(requiredCapabilities: [capC], timeout: 30.0)
+        leases.append(store.scheduleTask(blockerC, task: {
+            started.signal()
+            await releaseC.wait()
+        }, completion: { _ in drained.signal() }))
+        await started.wait()
+        await started.wait()
+        await started.wait()
+
+        func queueWaiter(name: String, caps: Set<Capability>) {
+            let descriptor = TaskDescriptor(requiredCapabilities: caps, timeout: 30.0)
+            leases.append(store.scheduleTask(descriptor, task: {
+                await global.enter()
+                if caps.contains(capA) { await probeA.enter() }
+                if caps.contains(capB) { await probeB.enter() }
+                if caps.contains(capC) { await probeC.enter() }
+                await Task.yield()
+                await order.append(name)
+                if caps.contains(capA) { await probeA.exit() }
+                if caps.contains(capB) { await probeB.exit() }
+                if caps.contains(capC) { await probeC.exit() }
+                await global.exit()
+            }, completion: { _ in drained.signal() }))
+        }
+
+        queueWaiter(name: "hA1", caps: [capA])
+        for _ in 0..<1000 { await Task.yield() }
+        queueWaiter(name: "hA2", caps: [capA])
+        for _ in 0..<1000 { await Task.yield() }
+        queueWaiter(name: "fB1", caps: [capB])
+        for _ in 0..<1000 { await Task.yield() }
+        queueWaiter(name: "fB2", caps: [capB])
+        for _ in 0..<1000 { await Task.yield() }
+        queueWaiter(name: "fC1", caps: [capC])
+        for _ in 0..<1000 { await Task.yield() }
+        queueWaiter(name: "fC2", caps: [capC])
+        for _ in 0..<1000 { await Task.yield() }
+        queueWaiter(name: "fBC", caps: [capB, capC])
+        for _ in 0..<2000 { await Task.yield() }
+        #expect(store.pendingTaskCount == 7)
+        #expect(store.activeTaskCount == 3)
+
+        releaseC.finish()
+        await drained.waitUntil { await order.values.count == 2 }
+        #expect(await order.values == ["fC1", "fC2"])
+        #expect(store.pendingTaskCount == 5)
+        #expect(store.activeTaskCount == 2)
+
+        releaseB.finish()
+        await drained.waitUntil { await order.values.count == 5 }
+        #expect(await order.values == ["fC1", "fC2", "fB1", "fB2", "fBC"])
+        #expect(store.pendingTaskCount == 2)
+        #expect(store.activeTaskCount == 1)
+
+        releaseA.finish()
+        await drained.waitUntil { await order.values.count == 7 }
+        #expect(await order.values == ["fC1", "fC2", "fB1", "fB2", "fBC", "hA1", "hA2"])
+        for lease in leases {
+            #expect(lease.state == .completed)
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+
+        #expect(await global.maxSeen <= 6)
+        #expect(await probeA.maxSeen <= 1)
+        #expect(await probeB.maxSeen <= 1)
+        #expect(await probeC.maxSeen <= 1)
+    }
+}

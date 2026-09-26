@@ -100,9 +100,14 @@ in the table, not in callers.
  `executeLease` is the only prod activator. Serves every wait through one
    result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
    by task identity with the identity guard derived inside from the Lease —
-   the scoped-hold interface is Lease-keyed, no caller mints tokens. Slot hold is scoped: one
-   scoped-hold seam owns admission, FIFO wake order, cancellable wait, and
-   scope-exit release. Activation crosses one seam: park, capability wait,
+    the scoped-hold interface is Lease-keyed, no caller mints tokens. Slot hold is scoped: one
+    scoped-hold seam owns admission, first-fit FIFO wake order with skip,
+    cancellable wait, and scope-exit release. Release scans the arrival queue
+    from the head on every release and admits every fitting waiter in order,
+    bounded by the freed capacity; a skipped waiter keeps its place and is
+    reconsidered each release, so skipping delays but never strands (an unfit
+    head faces exhaustion, not unfairness). Newcomers still park behind queued
+    waiters, so freed capacity belongs to the queued scan first. Activation crosses one seam: park, capability wait,
    admission, re-check, and row activation read as one path with one
    release shared by terminal, retry, and scope-exit.
 Availability wait crosses one `race(operation:)` seam on Deadline, so
