@@ -2,6 +2,47 @@ import Foundation
 import Combine
 
 extension TaskScheduler {
+    func guardedDrain() async {
+        defer {
+            var needsRekick = false
+            lock.withLock {
+                guard drainInFlight else { return }
+                drainInFlight = false
+                needsRekick = lifecycleStore.counts.queued > 0
+            }
+            if needsRekick {
+                kickPump()
+            }
+        }
+
+        while true {
+            if Task.isCancelled { break }
+            while true {
+                if Task.isCancelled { break }
+                let next: Lease? = lock.withLock { lifecycleStore.dequeueNext() }
+                guard let nextLease = next else { break }
+                guard !nextLease.isTerminal else { continue }
+                let deadline = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
+
+                guard isAvailable(for: nextLease.task) else {
+                    parkLeaseForCapabilities(nextLease, deadline: deadline)
+                    continue
+                }
+
+                Task { await self.activate(nextLease, deadline: deadline) }
+            }
+            if Task.isCancelled { break }
+            let shouldContinue: Bool = lock.withLock {
+                if lifecycleStore.counts.queued > 0 {
+                    return true
+                }
+                drainInFlight = false
+                return false
+            }
+            if !shouldContinue { break }
+        }
+    }
+
     func processPendingTasks() async {
         while true {
             guard let nextLease = dequeueNext() else { break }

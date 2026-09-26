@@ -37,7 +37,7 @@ public final class TaskScheduler: @unchecked Sendable {
 
     var lifecycleStore = LifecycleStore()
 
-
+    var drainInFlight = false
     /// Prod generations are built only by the Store threading its one shared
     /// slots + clock across live generations; direct construction with a fresh
     /// controller is a test-only seam that bypasses the shared domain.
@@ -97,6 +97,17 @@ public final class TaskScheduler: @unchecked Sendable {
     private func drainEviction(_ obligation: LifecycleStore.EvictObligation?) {
         guard let obligation else { return }
         concurrencyController.removeWaiter(taskId: obligation.taskId, owner: obligation.owner, match: .stale)
+    }
+
+    func kickPump() {
+        let shouldStart: Bool = lock.withLock {
+            if drainInFlight { return false }
+            drainInFlight = true
+            return true
+        }
+        if shouldStart {
+            Task { await self.guardedDrain() }
+        }
     }
 
     /// Schedules a task and waits for its result.
