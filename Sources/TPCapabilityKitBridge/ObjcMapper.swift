@@ -80,7 +80,7 @@ import TPCapabilityKit
     /// Maps a raw priority value to a domain priority.
     /// Out-of-range values coerce to `.normal` — the safe default that neither
     /// starves the task nor jumps the queue. Callers needing strict validation
-    /// should clamp before crossing the Bridge.
+    /// should check `isValidPriority` before crossing the Bridge.
     static func taskPriority(from rawValue: Int) -> TaskPriority {
         guard validPriorityRange.contains(rawValue),
             let priority = TaskPriority(rawValue: rawValue)
@@ -91,6 +91,12 @@ import TPCapabilityKit
             return .normal
         }
         return priority
+    }
+
+    /// Strict validity query over the single shared range. Reports only;
+    /// never coerces, schedules, or stores.
+    static func isValidPriority(_ rawValue: Int) -> Bool {
+        validPriorityRange.contains(rawValue)
     }
 
     static func makeDescriptor(

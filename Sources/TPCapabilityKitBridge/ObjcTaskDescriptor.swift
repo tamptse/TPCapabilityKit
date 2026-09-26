@@ -105,6 +105,13 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         super.init()
     }
 
+    /// Strict pre-flight check over the single mapper-owned range.
+    /// Returns false for raw values the constructors would coerce to normal.
+    /// Additive; lenient construction behavior is unchanged.
+    @objc public static func isValidPriority(_ priority: Int) -> Bool {
+        ObjcMapper.isValidPriority(priority)
+    }
+
     internal init(underlying: TaskDescriptor) {
         self.underlying = underlying
         super.init()
