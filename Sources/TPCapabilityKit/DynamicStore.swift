@@ -7,6 +7,8 @@ import Foundation
 /// ## Thread Safety
 /// - State owns its own lock, the registry owns its own lock, scheduling owns
 ///   its generations + clock; no caller holds a Store lock across a submodule call
+///   except the generations reap pass, the single allowed Store-to-Tasks crossing,
+///   which asks drain state with no scheduling lock held
 /// - Changes are collected under lock and emitted after unlock, so sinks never run under lock
 ///
 /// ## Plugin Lifecycle Order
@@ -421,7 +423,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
         }
-        prunedSnapshot()
+        reapDrainedGenerations()
     }
 
     /// Deterministic-time controls live here next to the generations they
@@ -451,11 +453,11 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
-    /// Single generations read in one prune-then-loop pass: counts SUM across
+    /// Single generations read in one reap-then-loop pass: counts SUM across
     /// live generations while slot admission SHARES the one Store-owned domain,
     /// so reconfigure never doubles the configured limit during drain.
     var snapshot: (pending: Int, active: Int, generationCount: Int) {
-        let live = prunedSnapshot()
+        let live = reapDrainedGenerations()
         var pending = 0
         var active = 0
         for generation in live {
@@ -479,14 +481,34 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     @discardableResult
-    private func prunedSnapshot() -> [TaskScheduler] {
-        // Store→Tasks: Store lock held while reading each non-current generation's drain state.
-        lock.withLock {
+    func reapDrainedGenerations() -> [TaskScheduler] {
+        // Single allowed Store-to-Tasks crossing, copy-check-sweep: copy under
+        // lock, ask drain state with no scheduling lock held, sweep under lock
+        // removing only still-present non-current generations flagged drained.
+        // Current is never reaped even if drained.
+        // No re-check of drain state under the sweep lock: non-current
+        // generations drain monotonically (new work lands only on current,
+        // cancel only removes, retry re-queues within its own generation), so a
+        // flagged-drained generation cannot become live before the sweep. T2
+        // pump-coalesce must re-prove this invariant before changing the sweep.
+        // Drain still means empty pending plus active from one acquisition.
+        let copied = lock.withLock { generations }
+        guard copied.count > 1 else { return copied }
+        let copiedCurrentID = ObjectIdentifier(copied.last!)
+        var drainedIDs = Set<ObjectIdentifier>()
+        for generation in copied where ObjectIdentifier(generation) != copiedCurrentID {
+            if generation.isDrained {
+                drainedIDs.insert(ObjectIdentifier(generation))
+            }
+        }
+        guard !drainedIDs.isEmpty else { return lock.withLock { generations } }
+        return lock.withLock {
             guard generations.count > 1 else { return generations }
-            let currentID = ObjectIdentifier(generations.last!)
+            let liveCurrentID = ObjectIdentifier(generations.last!)
             generations.removeAll { generation in
-                guard ObjectIdentifier(generation) != currentID else { return false }
-                return generation.isDrained
+                let id = ObjectIdentifier(generation)
+                guard id != liveCurrentID else { return false }
+                return drainedIDs.contains(id)
             }
             return generations
         }
