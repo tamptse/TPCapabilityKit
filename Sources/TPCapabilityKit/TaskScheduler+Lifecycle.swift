@@ -25,8 +25,11 @@ extension TaskScheduler {
         }
 
         private var rows: [String: LifecycleRow] = [:]
-        private var order = OrderIndex()
         private var snapshot = Counts(pending: 0, queued: 0, parked: 0, active: 0)
+
+        private static let dequeueOrder = TaskPriority.allCases.sorted(by: >)
+        private var orderQueues: [TaskPriority: [String]] = [:]
+        private var orderPrioritiesById: [String: TaskPriority] = [:]
 
         var counts: Counts { snapshot }
 
@@ -68,7 +71,7 @@ extension TaskScheduler {
                 waiter: nil,
                 waiting: false
             )
-            order.enqueue(id: lease.task.id, priority: lease.task.priority)
+            orderEnqueue(id: lease.task.id, priority: lease.task.priority)
             move(from: old, to: .pending)
         }
 
@@ -134,6 +137,11 @@ extension TaskScheduler {
         /// Single writer for the Lease lifecycle: the Lease mutation and the
         /// row mutation happen together here under the scheduler lock, entered
         /// through one liveness query.
+        /// Invariant stated once here: rows place plus order queues plus
+        /// snapshot counts agree on every transition. Insert, transition
+        /// (including dequeue-to-parked, wake, activate, retry, terminal),
+        /// row-take, and dequeue-next are the only writers; Path is the only
+        /// flow reader.
         mutating func transition(for lease: Lease, to target: Transition) -> TransitionResult? {
             switch target {
             case .dequeueToParked:
@@ -172,7 +180,7 @@ extension TaskScheduler {
                     row.execution = execution
                 }
                 rows[lease.task.id] = row
-                order.enqueue(id: lease.task.id, priority: lease.task.priority)
+                orderEnqueue(id: lease.task.id, priority: lease.task.priority)
                 return .retried
             case .terminal(let terminal):
                 guard !lease.isTerminal, let row = rows[lease.task.id], row.lease === lease else {
@@ -188,7 +196,7 @@ extension TaskScheduler {
             guard let row = rows[lease.task.id], row.lease === lease else { return nil }
             move(from: row.place, to: nil)
             rows.removeValue(forKey: lease.task.id)
-            order.remove(taskId: lease.task.id)
+            orderRemove(taskId: lease.task.id)
             return row
         }
 
@@ -268,7 +276,7 @@ extension TaskScheduler {
         }
 
         mutating func dequeueNext() -> Lease? {
-            while let id = order.dequeue() {
+            while let id = orderDequeue() {
                 guard let row = rows[id] else { continue }
                 guard transition(for: row.lease, to: .dequeueToParked) != nil else { continue }
                 return row.lease
@@ -281,39 +289,31 @@ extension TaskScheduler {
             return row.execution
         }
 
-        // Priority FIFO order only; place and counts live in rows/snapshot.
-        private struct OrderIndex: Sendable {
-            private static let dequeueOrder = TaskPriority.allCases.sorted(by: >)
-
-            private var queues: [TaskPriority: [String]] = [:]
-            private var prioritiesById: [String: TaskPriority] = [:]
-
-            mutating func enqueue(id: String, priority: TaskPriority) {
-                if let existing = prioritiesById[id] {
-                    queues[existing]?.removeAll { $0 == id }
-                }
-                prioritiesById[id] = priority
-                queues[priority, default: []].append(id)
+        private mutating func orderEnqueue(id: String, priority: TaskPriority) {
+            if let existing = orderPrioritiesById[id] {
+                orderQueues[existing]?.removeAll { $0 == id }
             }
+            orderPrioritiesById[id] = priority
+            orderQueues[priority, default: []].append(id)
+        }
 
-            mutating func dequeue() -> String? {
-                for priority in Self.dequeueOrder {
-                    guard var queue = queues[priority], !queue.isEmpty else { continue }
-                    let id = queue.removeFirst()
-                    queues[priority] = queue
-                    prioritiesById.removeValue(forKey: id)
-                    return id
-                }
-                return nil
+        private mutating func orderDequeue() -> String? {
+            for priority in Self.dequeueOrder {
+                guard var queue = orderQueues[priority], !queue.isEmpty else { continue }
+                let id = queue.removeFirst()
+                orderQueues[priority] = queue
+                orderPrioritiesById.removeValue(forKey: id)
+                return id
             }
+            return nil
+        }
 
-            @discardableResult
-            mutating func remove(taskId: String) -> Bool {
-                guard let priority = prioritiesById[taskId] else { return false }
-                queues[priority]?.removeAll { $0 == taskId }
-                prioritiesById.removeValue(forKey: taskId)
-                return true
-            }
+        @discardableResult
+        private mutating func orderRemove(taskId: String) -> Bool {
+            guard let priority = orderPrioritiesById[taskId] else { return false }
+            orderQueues[priority]?.removeAll { $0 == taskId }
+            orderPrioritiesById.removeValue(forKey: taskId)
+            return true
         }
     }
 }
