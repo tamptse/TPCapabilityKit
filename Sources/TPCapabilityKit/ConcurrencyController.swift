@@ -1,8 +1,8 @@
 import Foundation
 
 /// Concurrency limiter keyed by Capability sets, holders owned by task identity.
-/// Sole admission seam is `withHold(for:_:)` owning admission, FIFO wake order,
-/// cancellable wait, and scope-exit release with the identity guard inside
+/// Sole admission seam is `withHold(for:_:)` owning admission, first-fit FIFO
+/// wake order with skip, cancellable wait, and scope-exit release with the identity guard inside
 /// derived from the Lease so a displaced-active row's stale scope-exit cannot
 /// release the new holder's slot.
 /// Displaced-active then self-heals: old scope-exit no-ops, new holder keeps its slot.
@@ -25,7 +25,11 @@ final class ConcurrencyController: @unchecked Sendable {
         let owner: ObjectIdentifier
         let resume: @Sendable (Bool) -> Void
     }
-    /// FIFO arrival queue; only the head is ever woken, so wake order is policy.
+    /// FIFO arrival queue; release scans from the head and admits the first
+    /// waiter fitting current capacity (first-fit FIFO with skip, single wake
+    /// per release in this step). A skipped head keeps its place and is
+    /// re-evaluated on every later release, so skipping delays but never
+    /// strands it.
     private var waiters: [Waiter] = []
 
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
@@ -131,9 +135,17 @@ final class ConcurrencyController: @unchecked Sendable {
             for cap in keys {
                 capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
             }
-            if let head = waiters.first, tryInstall(keys: head.keys, taskId: head.taskId, owner: head.owner) {
-                waiters.removeFirst()
-                toResume = head.resume
+            // First-fit FIFO with skip: scan from the head and admit the first
+            // waiter fitting the freed capacity. The head keeps priority as the
+            // first candidate; a skipped waiter loses no place and is
+            // reconsidered on the next release.
+            for index in waiters.indices {
+                let waiter = waiters[index]
+                if tryInstall(keys: waiter.keys, taskId: waiter.taskId, owner: waiter.owner) {
+                    waiters.remove(at: index)
+                    toResume = waiter.resume
+                    break
+                }
             }
         }
         toResume?(true)
