@@ -71,12 +71,26 @@ import TPCapabilityKit
         Capability(rawValue: string)
     }
 
+    /// Single statement of the valid ObjC priority range, shared by the
+    /// coercion below and the strict validity check, so the next range
+    /// change touches one place.
+    @usableFromInline static let validPriorityRange: ClosedRange<Int> =
+        TaskPriority.background.rawValue...TaskPriority.critical.rawValue
+
     /// Maps a raw priority value to a domain priority.
     /// Out-of-range values coerce to `.normal` — the safe default that neither
     /// starves the task nor jumps the queue. Callers needing strict validation
     /// should clamp before crossing the Bridge.
     static func taskPriority(from rawValue: Int) -> TaskPriority {
-        TaskPriority(rawValue: rawValue) ?? .normal
+        guard validPriorityRange.contains(rawValue),
+            let priority = TaskPriority(rawValue: rawValue)
+        else {
+            #if DEBUG
+            print("[ObjcStoreBridge] Warning: coerced out-of-range priority \(rawValue) to normal")
+            #endif
+            return .normal
+        }
+        return priority
     }
 
     static func makeDescriptor(
