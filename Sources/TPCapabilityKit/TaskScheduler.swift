@@ -40,6 +40,8 @@ public final class TaskScheduler: @unchecked Sendable {
     struct DrainOwner: Sendable {
         enum Handover: Sendable, Equatable { case rekick, exited, idle }
         private var inFlight = false
+        private var settledHook: (@Sendable () -> Void)?
+        private var settledReported = false
         mutating func tryBegin() -> Bool {
             guard !inFlight else { return false }
             inFlight = true
@@ -49,6 +51,18 @@ public final class TaskScheduler: @unchecked Sendable {
             guard inFlight else { return .idle }
             inFlight = false
             return queuedCount > 0 ? .rekick : .exited
+        }
+        mutating func setSettledHook(_ hook: (@Sendable () -> Void)?) {
+            settledHook = hook
+        }
+        mutating func takeSettledHook(pending: Int, active: Int) -> (@Sendable () -> Void)? {
+            guard pending == 0, active == 0 else {
+                settledReported = false
+                return nil
+            }
+            guard !settledReported else { return nil }
+            settledReported = true
+            return settledHook
         }
     }
 
@@ -119,6 +133,18 @@ public final class TaskScheduler: @unchecked Sendable {
         if shouldStart {
             Task { await self.guardedDrain() }
         }
+    }
+
+    func setDrainSettledHook(_ hook: (@Sendable () -> Void)?) {
+        lock.withLock { drainOwner.setSettledHook(hook) }
+    }
+
+    func notifyDrainSettled() {
+        let hook: (@Sendable () -> Void)? = lock.withLock {
+            let counts = lifecycleStore.counts
+            return drainOwner.takeSettledHook(pending: counts.pending, active: counts.active)
+        }
+        hook?()
     }
 
     /// Schedules a task and waits for its result.

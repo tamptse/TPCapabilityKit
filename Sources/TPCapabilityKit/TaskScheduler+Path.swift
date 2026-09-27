@@ -80,8 +80,13 @@ extension TaskScheduler {
         let handover: DrainOwner.Handover = lock.withLock {
             drainOwner.finish(queuedCount: lifecycleStore.counts.queued)
         }
-        if handover == .rekick {
+        switch handover {
+        case .rekick:
             kickPump()
+        case .exited:
+            notifyDrainSettled()
+        case .idle:
+            break
         }
     }
 
