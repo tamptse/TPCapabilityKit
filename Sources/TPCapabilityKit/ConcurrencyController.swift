@@ -165,8 +165,16 @@ final class ConcurrencyController: @unchecked Sendable {
 
     /// Shared scan-plus-install consideration crossed by both wake sources
     /// (scope-exit release after freeing capacity, limit change after updating
-    /// caps). Call only with `lock` held; the admitted batch resumes outside
-    /// the lock in arrival order at the call site.
+    /// caps). Limit-wake policy: any change triggers and admission decides —
+    /// raises admit, lowers naturally admit none, mixed changes admit only the
+    /// new headroom on both axes with no old-vs-new comparison. The slot
+    /// domain self-wakes under its own lock only, reachable solely via the
+    /// explicit reconfigure entry, never a count read; reconfigure keeps its
+    /// store-thread-append-reap shape. One locked pass never overshoots (the
+    /// atomic install gates every admission against the live caps) and never
+    /// strands (a skipped waiter keeps its place and is reconsidered on every
+    /// later consideration). Call only with `lock` held; the admitted batch
+    /// resumes outside the lock in arrival order at the call site.
     private func admitFittingWaiters() -> [@Sendable (Bool) -> Void] {
         var admitted: [@Sendable (Bool) -> Void] = []
         var index = waiters.startIndex
