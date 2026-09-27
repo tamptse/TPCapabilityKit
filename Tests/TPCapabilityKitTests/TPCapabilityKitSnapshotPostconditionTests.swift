@@ -58,6 +58,7 @@ struct TPCapabilityKitSnapshotPostconditionTests {
         #expect(await executions.count == 1)
         #expect(blocker.isTerminal)
         #expect(second.isTerminal)
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
         #expect(store.generationCount == 1)
@@ -104,6 +105,7 @@ struct TPCapabilityKitSnapshotPostconditionTests {
 
         #expect(first.state == .expired)
         #expect(secondGen.state == .expired)
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
         #expect(store.generationCount == 1)

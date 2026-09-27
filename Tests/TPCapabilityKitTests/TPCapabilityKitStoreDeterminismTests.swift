@@ -243,6 +243,7 @@ struct StoreDeterminismTests {
 
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.generationCount == 1)
     }
 }

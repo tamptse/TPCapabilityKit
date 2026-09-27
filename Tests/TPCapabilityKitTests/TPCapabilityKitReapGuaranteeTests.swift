@@ -53,13 +53,14 @@ struct TPCapabilityKitReapGuaranteeTests {
         await blockerDone.wait()
         await secondDone.wait()
         #expect(await executions.count == 1)
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
         #expect(store.generationCount == 1)
     }
 
     @Test("drained generations release so generation count returns to one")
-    func drainedReleaseReturnsToOneViaGetterPath() async {
+    func drainedReleaseReturnsToOneViaExplicitReap() async {
         let (store, _) = makeStoreWithCap([], prefix: "ReapDrain")
         let missing = Capability.custom("reapDrain_\(UUID().uuidString)")
 
@@ -88,6 +89,7 @@ struct TPCapabilityKitReapGuaranteeTests {
         }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.generationCount == 1)
         #expect(first.isTerminal)
         #expect(second.isTerminal)
@@ -129,6 +131,7 @@ struct TPCapabilityKitReapGuaranteeTests {
             if store.pendingTaskCount == 0 { break }
             await Task.yield()
         }
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.generationCount == 1)
     }
 

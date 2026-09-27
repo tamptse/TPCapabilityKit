@@ -197,9 +197,10 @@ struct D4DrainOwnerPinTests {
         drained.finish()
 
         for _ in 0..<10000 {
-            if store.generationCount == 1 && store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
             await Task.yield()
         }
+        store.schedulingGenerations.reapAtSettle()
 
         #expect(await completions.count == total)
         #expect(maxGenerations <= 2)

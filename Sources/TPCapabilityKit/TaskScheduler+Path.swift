@@ -302,6 +302,9 @@ extension TaskScheduler {
         for waiter in waiters {
             waiter(lease)
         }
+        // Terminal settle re-pumps so handover-exit observes the drained state
+        // and fires the settle notification; the drain owner coalesces idle kicks.
+        kickPump()
     }
 }
 

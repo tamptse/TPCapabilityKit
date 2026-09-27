@@ -425,20 +425,27 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     func current(owner: DynamicStore) -> TaskScheduler {
-        lock.withLock {
+        var created: TaskScheduler?
+        let result = lock.withLock { () -> TaskScheduler in
             if let current = generations.last { return current }
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
+            created = new
             return new
         }
+        if let created { attachSettleHook(to: created) }
+        return result
     }
 
     func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore) {
+        var created: TaskScheduler?
         lock.withLock {
             configuration = newConfiguration
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
+            created = new
         }
+        if let created { attachSettleHook(to: created) }
         // Thread the new caps outside the generations hold: the shared slot
         // domain self-wakes under its own lock only, so the admitted batch
         // resumes with no generations lock held across activation.
@@ -473,23 +480,16 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
-    /// Single generations read in one reap-then-loop pass: counts SUM across
-    /// live generations while slot admission SHARES the one Store-owned domain,
-    /// so reconfigure never doubles the configured limit during drain.
-    var snapshot: (pending: Int, active: Int, generationCount: Int) {
-        let live = reapDrainedGenerations()
-        var pending = 0
-        var active = 0
-        for generation in live {
-            let counts = generation.countsSnapshot
-            pending += counts.pending
-            active += counts.active
-        }
-        return (pending, active, live.count)
+    /// Wires a fresh generation's settle/drain notification to the reap entry.
+    /// Called with no scheduling lock held; the hook keeps no strong cycle.
+    private func attachSettleHook(to generation: TaskScheduler) {
+        generation.setDrainSettledHook { [weak self] in _ = self?.reapAtSettle() }
     }
 
     /// Pure generations read: lock, copy, sum, report. Asks no drain state,
-    /// mutates nothing; same sums as `snapshot` over the currently held list.
+    /// mutates nothing. Counts SUM across held generations while slot admission
+    /// SHARES the one Store-owned domain, so reconfigure never doubles the
+    /// configured limit during drain.
     var pureSnapshot: (pending: Int, active: Int, generationCount: Int) {
         let held = lock.withLock { generations }
         var pending = 0
@@ -512,15 +512,15 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     var pendingCount: Int {
-        snapshot.pending
+        pureSnapshot.pending
     }
 
     var activeCount: Int {
-        snapshot.active
+        pureSnapshot.active
     }
 
     var generationCount: Int {
-        snapshot.generationCount
+        pureSnapshot.generationCount
     }
 
     @discardableResult
@@ -532,12 +532,12 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         // No re-check of drain state under the sweep lock: non-current
         // generations drain monotonically (new work lands only on current,
         // cancel only removes, retry re-queues within its own generation), so a
-        // flagged-drained generation cannot become live before the sweep. T2
-        // pump-coalesce must re-prove this invariant before changing the sweep.
+        // flagged-drained generation cannot become live before the sweep. D4
+        // pump single-drain-owner re-proves this invariant under coalesced
+        // pumping.
         // Drain still means empty pending plus active from one acquisition.
-        // Follow-up blocked by T2 pump-coalesce: getters become pure reads with
-        // reaping only at explicit reconfigure/settle points fed by a
-        // settle/drain notification.
+        // Settle/drain notification consumed from D4: the reap entry fires from
+        // each generation's hook plus reconfigure.
         let copied = lock.withLock { generations }
         guard copied.count > 1 else { return copied }
         let copiedCurrentID = ObjectIdentifier(copied.last!)

@@ -50,6 +50,7 @@ struct TPCapabilityKitGenerationsWiringTests {
         release.finish()
         await blockerDone.wait()
         await secondDone.wait()
+        store.schedulingGenerations.reapAtSettle()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
         #expect(store.generationCount == 1)

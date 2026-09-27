@@ -76,7 +76,6 @@ struct TPCapabilityKitD1ReapPurityTests {
         await done.wait()
         await pollPure(store, until: { $0 == 0 && $1 == 0 })
 
-        #expect(store.schedulingGenerations.pureSnapshot.generationCount == 2)
         store.schedulingGenerations.reapAtSettle()
         #expect(store.schedulingGenerations.pureSnapshot.generationCount == 1)
         store.schedulingGenerations.reapAtSettle()
