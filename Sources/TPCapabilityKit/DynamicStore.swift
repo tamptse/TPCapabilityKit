@@ -436,10 +436,13 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore) {
         lock.withLock {
             configuration = newConfiguration
-            slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
         }
+        // Thread the new caps outside the generations hold: the shared slot
+        // domain self-wakes under its own lock only, so the admitted batch
+        // resumes with no generations lock held across activation.
+        slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)
         reapDrainedGenerations()
     }
 

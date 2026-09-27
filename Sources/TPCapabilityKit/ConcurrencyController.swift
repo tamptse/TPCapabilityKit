@@ -25,11 +25,12 @@ final class ConcurrencyController: @unchecked Sendable {
         let owner: ObjectIdentifier
         let resume: @Sendable (Bool) -> Void
     }
-    /// FIFO arrival queue; release scans from the head and admits every waiter
-    /// fitting current capacity in arrival order (first-fit FIFO with skip).
-    /// A skipped head keeps its place and is re-evaluated on every later
-    /// release, so skipping delays but never strands it. Admitted waiters
-    /// resume outside the lock as an arrival-ordered batch.
+    /// FIFO arrival queue; release and limit change share one scan from the
+    /// head admitting every waiter fitting current capacity in arrival order
+    /// (first-fit FIFO with skip). A skipped head keeps its place and is
+    /// re-evaluated on every later consideration, so skipping delays but
+    /// never strands it. Admitted waiters resume outside the lock as an
+    /// arrival-ordered batch.
     private var waiters: [Waiter] = []
 
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
@@ -37,10 +38,20 @@ final class ConcurrencyController: @unchecked Sendable {
         self.maxGlobal = maxGlobal
     }
 
+    /// Limit entry with a wake obligation: a limit change reconsiders the
+    /// queue through the same first-fit FIFO-with-skip consideration as
+    /// release. Raises admit, lowers naturally admit none; the atomic install
+    /// gates every admission against the new caps, so no call-site
+    /// raise-vs-lower branch exists. Installs holds only, never releases.
     internal func updateLimits(maxPerCapability: Int?, maxGlobal: Int?) {
+        var toResume: [@Sendable (Bool) -> Void] = []
         lock.withLock {
             self.maxPerCapability = maxPerCapability
             self.maxGlobal = maxGlobal
+            toResume = admitFittingWaiters()
+        }
+        for resume in toResume {
+            resume(true)
         }
     }
 
@@ -135,24 +146,15 @@ final class ConcurrencyController: @unchecked Sendable {
             for cap in keys {
                 capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
             }
-            // First-fit FIFO with skip: scan from the head and admit every
-            // waiter fitting the freed capacity, in arrival order. The head
-            // keeps priority as the first candidate; a skipped waiter loses no
-            // place and is reconsidered on the next release. Each admission
-            // consumes capacity under the same lock, so one release admits at
-            // most what the freed capacity allows and limits are never
-            // overshot. Woken means admitted: slots are installed here, so no
-            // resumed waiter ever re-parks.
-            var index = waiters.startIndex
-            while index < waiters.endIndex {
-                let waiter = waiters[index]
-                if tryInstall(keys: waiter.keys, taskId: waiter.taskId, owner: waiter.owner) {
-                    waiters.remove(at: index)
-                    toResume.append(waiter.resume)
-                } else {
-                    index = waiters.index(after: index)
-                }
-            }
+            // Shared consideration with the limit entry: scan from the head and
+            // admit every waiter fitting the freed capacity, in arrival order.
+            // The head keeps priority as the first candidate; a skipped waiter
+            // loses no place and is reconsidered on the next consideration.
+            // Each admission consumes capacity under the same lock, so one
+            // consideration admits at most what the headroom allows and limits
+            // are never overshot. Woken means admitted: slots are installed
+            // here, so no resumed waiter ever re-parks.
+            toResume = admitFittingWaiters()
         }
         for resume in toResume {
             resume(true)
@@ -160,6 +162,25 @@ final class ConcurrencyController: @unchecked Sendable {
     }
 
     // MARK: - Private Helpers
+
+    /// Shared scan-plus-install consideration crossed by both wake sources
+    /// (scope-exit release after freeing capacity, limit change after updating
+    /// caps). Call only with `lock` held; the admitted batch resumes outside
+    /// the lock in arrival order at the call site.
+    private func admitFittingWaiters() -> [@Sendable (Bool) -> Void] {
+        var admitted: [@Sendable (Bool) -> Void] = []
+        var index = waiters.startIndex
+        while index < waiters.endIndex {
+            let waiter = waiters[index]
+            if tryInstall(keys: waiter.keys, taskId: waiter.taskId, owner: waiter.owner) {
+                waiters.remove(at: index)
+                admitted.append(waiter.resume)
+            } else {
+                index = waiters.index(after: index)
+            }
+        }
+        return admitted
+    }
 
     /// Atomic check-and-install; call only with `lock` held.
     private func tryInstall(keys: Set<Capability>, taskId: String, owner: ObjectIdentifier) -> Bool {
