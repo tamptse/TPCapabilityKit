@@ -51,15 +51,7 @@ private struct SharedRace: Sendable {
 extension TaskScheduler {
     func guardedDrain() async {
         defer {
-            var needsRekick = false
-            lock.withLock {
-                guard drainInFlight else { return }
-                drainInFlight = false
-                needsRekick = lifecycleStore.counts.queued > 0
-            }
-            if needsRekick {
-                kickPump()
-            }
+            completeDrainHandover()
         }
 
         while true {
@@ -79,14 +71,17 @@ extension TaskScheduler {
                 Task { await self.activate(nextLease, race: race) }
             }
             if Task.isCancelled { break }
-            let shouldContinue: Bool = lock.withLock {
-                if lifecycleStore.counts.queued > 0 {
-                    return true
-                }
-                drainInFlight = false
-                return false
-            }
-            if !shouldContinue { break }
+            completeDrainHandover()
+            break
+        }
+    }
+
+    private func completeDrainHandover() {
+        let handover: DrainOwner.Handover = lock.withLock {
+            drainOwner.finish(queuedCount: lifecycleStore.counts.queued)
+        }
+        if handover == .rekick {
+            kickPump()
         }
     }
 

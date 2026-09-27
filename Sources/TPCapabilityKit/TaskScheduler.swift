@@ -37,7 +37,22 @@ public final class TaskScheduler: @unchecked Sendable {
 
     var lifecycleStore = LifecycleStore()
 
-    var drainInFlight = false
+    struct DrainOwner: Sendable {
+        enum Handover: Sendable, Equatable { case rekick, exited, idle }
+        private var inFlight = false
+        mutating func tryBegin() -> Bool {
+            guard !inFlight else { return false }
+            inFlight = true
+            return true
+        }
+        mutating func finish(queuedCount: Int) -> Handover {
+            guard inFlight else { return .idle }
+            inFlight = false
+            return queuedCount > 0 ? .rekick : .exited
+        }
+    }
+
+    var drainOwner = DrainOwner()
     /// Prod generations are built only by the Store threading its one shared
     /// slots + clock across live generations; direct construction with a fresh
     /// controller is a test-only seam that bypasses the shared domain.
@@ -100,11 +115,7 @@ public final class TaskScheduler: @unchecked Sendable {
     }
 
     func kickPump() {
-        let shouldStart: Bool = lock.withLock {
-            if drainInFlight { return false }
-            drainInFlight = true
-            return true
-        }
+        let shouldStart: Bool = lock.withLock { drainOwner.tryBegin() }
         if shouldStart {
             Task { await self.guardedDrain() }
         }
