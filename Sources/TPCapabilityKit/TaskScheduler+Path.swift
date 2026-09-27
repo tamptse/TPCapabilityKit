@@ -220,6 +220,10 @@ extension TaskScheduler {
         case cancelled
     }
 
+    /// Single settlement-adjacent decode of the raced outcome: outer-absent
+    /// (timeout won) settles expired without consulting the carried value;
+    /// outer-present (operation won) settles completed, leaving stored-nil to
+    /// the void policy in `settle(as:)` (retry vs fail vs expire).
     func settle(_ lease: Lease, raced: Any??, execution: (@Sendable () async -> Any?)?) {
         guard let racedValue = raced else {
             settle(lease, as: .expired)
