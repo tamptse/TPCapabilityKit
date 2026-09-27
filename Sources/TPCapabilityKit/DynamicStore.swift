@@ -485,6 +485,29 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return (pending, active, live.count)
     }
 
+    /// Pure generations read: lock, copy, sum, report. Asks no drain state,
+    /// mutates nothing; same sums as `snapshot` over the currently held list.
+    var pureSnapshot: (pending: Int, active: Int, generationCount: Int) {
+        let held = lock.withLock { generations }
+        var pending = 0
+        var active = 0
+        for generation in held {
+            let counts = generation.countsSnapshot
+            pending += counts.pending
+            active += counts.active
+        }
+        return (pending, active, held.count)
+    }
+
+    /// Settle-triggered reap entry: performs the named pass and nothing else.
+    /// Consumes the D4 settle/drain notification; the monotonic-drain invariant
+    /// it relies on is re-proven by D4. Idempotent: reaping an already-reaped
+    /// list is a no-op.
+    @discardableResult
+    func reapAtSettle() -> [TaskScheduler] {
+        reapDrainedGenerations()
+    }
+
     var pendingCount: Int {
         snapshot.pending
     }
