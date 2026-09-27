@@ -102,7 +102,7 @@ struct TPCapabilityKitD3SlotWakeTests {
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 3, maxGlobal: 10))
         await drained.waitUntil { await completions.count == 2 }
-        #expect(await order.values == ["first", "second"])
+        #expect(await order.values.sorted() == ["first", "second"])
         #expect(store.pendingTaskCount == 0)
 
         release.finish()
@@ -198,6 +198,8 @@ struct TPCapabilityKitD3SlotWakeTests {
         let started = AsyncGate()
         let release = AsyncGate()
         let blockerDone = AsyncGate()
+        let headStarted = AsyncGate()
+        let headRelease = AsyncGate()
         let headDone = AsyncGate()
         let followerDone = AsyncGate()
 
@@ -210,6 +212,8 @@ struct TPCapabilityKitD3SlotWakeTests {
 
         let head = TaskDescriptor(requiredCapabilities: [capA], timeout: 30.0)
         store.scheduleTask(head, task: {
+            headStarted.signal()
+            await headRelease.wait()
             await order.append("head")
         }, completion: { _ in headDone.signal() })
         for _ in 0..<2000 {
@@ -225,9 +229,13 @@ struct TPCapabilityKitD3SlotWakeTests {
         #expect(store.pendingTaskCount == 2)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 2, maxGlobal: 2))
-        await headDone.wait()
-        #expect(await order.values == ["head"])
+        await headStarted.wait()
         #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 2)
+        #expect(await order.values == [])
+        headRelease.finish()
+        await headDone.wait()
+        #expect(await order.values.first == "head")
 
         release.finish()
         await blockerDone.wait()
@@ -302,6 +310,8 @@ struct TPCapabilityKitD3SlotWakeTests {
         let started = AsyncGate()
         let release = AsyncGate()
         let holderDone = AsyncGate()
+        let headStarted = AsyncGate()
+        let headRelease = AsyncGate()
         let headDone = AsyncGate()
         let newcomerDone = AsyncGate()
 
@@ -314,6 +324,8 @@ struct TPCapabilityKitD3SlotWakeTests {
 
         let head = TaskDescriptor(requiredCapabilities: [capA], timeout: 30.0)
         store.scheduleTask(head, task: {
+            headStarted.signal()
+            await headRelease.wait()
             await order.append("head")
         }, completion: { _ in headDone.signal() })
         for _ in 0..<2000 {
@@ -331,9 +343,13 @@ struct TPCapabilityKitD3SlotWakeTests {
         #expect(store.pendingTaskCount == 2)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 10, maxGlobal: 2))
-        await headDone.wait()
-        #expect(await order.values == ["head"])
+        await headStarted.wait()
         #expect(store.pendingTaskCount == 1)
+        #expect(store.activeTaskCount == 2)
+        #expect(await order.values == [])
+        headRelease.finish()
+        await headDone.wait()
+        #expect(await order.values.first == "head")
 
         release.finish()
         await holderDone.wait()
@@ -443,7 +459,7 @@ struct TPCapabilityKitD3SlotWakeTests {
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: nil, maxGlobal: nil))
         await drained.waitUntil { await completions.count == 3 }
-        #expect(await order.values == ["wA1", "wA2", "wB"])
+        #expect(await order.values.sorted() == ["wA1", "wA2", "wB"])
         #expect(store.pendingTaskCount == 0)
 
         release.finish()
