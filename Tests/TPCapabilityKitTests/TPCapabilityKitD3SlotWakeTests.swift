@@ -339,4 +339,60 @@ struct TPCapabilityKitD3SlotWakeTests {
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
     }
+
+    @Test("wake fires at reconfigure never from count reads")
+    func wakeFiresAtReconfigureNeverFromCountReads() async {
+        let cap = Capability.custom("d3Explicit_\(UUID().uuidString)")
+        let (store, pluginId) = makeStoreWithCap(
+            [cap],
+            configuration: .init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 10),
+            prefix: "D3Explicit"
+        )
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let holderDone = AsyncGate()
+        let executions = Probe()
+        let waiterDone = AsyncGate()
+
+        let holder = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
+        store.scheduleTask(holder, task: {
+            started.signal()
+            await release.wait()
+        }, completion: { _ in holderDone.signal() })
+        await started.wait()
+
+        let waiter = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
+        store.scheduleTask(waiter, task: {
+            await executions.inc()
+        }, completion: { _ in waiterDone.signal() })
+        for _ in 0..<2000 {
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 1)
+
+        for _ in 0..<5 {
+            #expect(store.pendingTaskCount == 1)
+            #expect(store.activeTaskCount == 1)
+            #expect(store.generationCount == 1)
+            _ = store.schedulingGenerations.pureSnapshot
+        }
+        #expect(await executions.count == 0)
+        #expect(store.pendingTaskCount == 1)
+
+        store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 10))
+        #expect(store.generationCount == 2)
+        #expect(await executions.count == 0)
+        #expect(store.pendingTaskCount == 1)
+
+        store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 2, maxGlobal: 10))
+        await waiterDone.wait()
+        #expect(await executions.count == 1)
+
+        release.finish()
+        await holderDone.wait()
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+    }
 }
