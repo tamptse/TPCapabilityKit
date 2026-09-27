@@ -232,41 +232,52 @@ extension TaskScheduler {
         settle(lease, as: .completed(racedValue), execution: execution)
     }
 
-    /// The single row-transition step of the same path: outcome decision and
-    /// row transition read as one locked block. Retry budget check, void
-    /// policy (nil result with budget retries; nil without budget fails when
-    /// active else expires), retry re-queue reusing the same Lease identity,
-    /// waiter delivery/cancellation, and retry re-pump all live here.
-    /// Failed outcomes drop the execution error and mint a fresh one once,
-    /// here. `cancelled` maps to `.expired` once, here, with no Lease
-    /// state-shape change. Waiters are preserved across retry and delivered
-    /// exactly once at terminal. Never releases the slot — the activation
-    /// scope-exit owns the single release.
+    enum SettleDirective {
+        case retry
+        case complete(Any?)
+        case fail
+        case expire
+    }
+
+    static func settleDecision(for outcome: Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
+        switch outcome {
+        case .completed(let result):
+            if result != nil {
+                return .complete(result)
+            }
+            if canRetry {
+                return .retry
+            }
+            return isActive ? .fail : .expire
+        case .failed:
+            return isActive ? .fail : .expire
+        case .expired, .cancelled:
+            return .expire
+        }
+    }
+
+    /// The single row-transition step of the same path: reads the named
+    /// decision table, then applies one row transition. Retry re-queue reuses
+    /// the same Lease identity, waiters are preserved across retry and
+    /// delivered exactly once at terminal, and retry re-pumps. Fail mints a
+    /// fresh execution error once, here. Never releases the slot — the
+    /// activation scope-exit owns the single release.
     func settle(_ lease: Lease, as outcome: Settlement, execution: (@Sendable () async -> Any?)? = nil) {
         var waiters: [(Lease) -> Void] = []
         var waiterToCancel: Task<Void, Never>?
         var settled = false
         var didRetry = false
         lock.withLock {
+            let directive = Self.settleDecision(for: outcome, canRetry: lease.canRetry, isActive: lease.isActive)
             let target: LifecycleStore.Transition
-            switch outcome {
-            case .completed(let result):
-                if result == nil, lease.canRetry {
-                    target = .retry(execution)
-                } else if result != nil {
-                    target = .terminal(.completed(result))
-                } else if lease.isActive {
-                    target = .terminal(.failed(TaskExecutionError()))
-                } else {
-                    target = .terminal(.expired)
-                }
-            case .failed:
-                if lease.isActive {
-                    target = .terminal(.failed(TaskExecutionError()))
-                } else {
-                    target = .terminal(.expired)
-                }
-            case .expired, .cancelled:
+            switch directive {
+            case .retry:
+                target = .retry(execution)
+            case .complete(let value):
+                target = .terminal(.completed(value))
+            case .fail:
+                target = .terminal(.failed(TaskExecutionError()))
+            case .expire:
                 target = .terminal(.expired)
             }
             guard let applied = lifecycleStore.transition(for: lease, to: target) else { return }
