@@ -282,20 +282,22 @@ public final class DynamicStore: @unchecked Sendable {
         scheduling.current(owner: self)
     }
 
-    internal var schedulingGenerations: StoreSchedulingGenerations {
-        scheduling
-    }
-
-    internal var generationCount: Int {
-        scheduling.generationCount
-    }
-
-    /// Reconfigures the scheduler without orphaning in-flight work: the live
-    /// generations keep draining naturally, new work enters a fresh generation,
-    /// and pending/active counts aggregate across live generations until the
-    /// drained ones release.
+    /// Reconfigures the scheduler without orphaning in-flight work (see StoreSchedulingGenerations).
     public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
         scheduling.reconfigure(configuration, owner: self)
+    }
+
+    /// Deterministic-time delegates, spelling-only forwards to the generations module.
+    internal func enableDeterministicTime(owner: DynamicStore) {
+        scheduling.enableDeterministicTime(owner: owner)
+    }
+
+    internal func advanceTime(by delta: TimeInterval) async {
+        await scheduling.advanceTime(by: delta)
+    }
+
+    internal func waitForDeterministicWaiters(count expected: Int) async {
+        await scheduling.waitForDeterministicWaiters(count: expected)
     }
 
     /// Schedules a task for centralized execution with capability matching and priority.
@@ -518,14 +520,11 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     /// Deterministic-time controls live here next to the generations they
-    /// gate: precede-first-use is checked against the pruned count in exactly
-    /// one place, enable-once and virtual-only inside the time module. The
-    /// Store keeps thin spelling-only delegation.
-    /// Fresh-instance plus precede-first-use collapse to one adjacent gate
-    /// beside the pruned count; the facade forwards here so both seams agree.
+    /// gate: precede-first-use is checked against the private emptiness helper
+    /// in exactly one place, enable-once and virtual-only inside the time module.
     func enableDeterministicTime(owner: DynamicStore) {
         precondition(owner !== DynamicStore.shared, "deterministic time only on fresh instances")
-        precondition(generationCount == 0, "enableDeterministicTime must precede first schedule")
+        precondition(isEmpty, "enableDeterministicTime must precede first schedule")
         clock.enableDeterministic()
     }
 
@@ -544,17 +543,17 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 
-    /// Wires a fresh generation's settle/drain notification to the reap entry.
+    /// Wires a fresh generation's settle/drain notification to the private reap.
     /// Called with no scheduling lock held; the hook keeps no strong cycle.
     private func attachSettleHook(to generation: TaskScheduler) {
-        generation.setDrainSettledHook { [weak self] in _ = self?.reapAtSettle() }
+        generation.setDrainSettledHook { [weak self] in _ = self?.reapDrainedGenerations() }
     }
 
     /// Pure generations read: lock, copy, sum, report. Asks no drain state,
     /// mutates nothing. Counts SUM across held generations while slot admission
     /// SHARES the one Store-owned domain, so reconfigure never doubles the
     /// configured limit during drain.
-    var pureSnapshot: (pending: Int, active: Int, generationCount: Int) {
+    private var summedCounts: (pending: Int, active: Int) {
         let held = lock.withLock { generations }
         var pending = 0
         var active = 0
@@ -563,32 +562,27 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
             pending += counts.pending
             active += counts.active
         }
-        return (pending, active, held.count)
+        return (pending, active)
     }
 
-    /// Settle-triggered reap entry: performs the named pass and nothing else.
-    /// Consumes the D4 settle/drain notification; the monotonic-drain invariant
-    /// it relies on is re-proven by D4. Idempotent: reaping an already-reaped
-    /// list is a no-op.
-    @discardableResult
-    func reapAtSettle() -> [TaskScheduler] {
-        reapDrainedGenerations()
+    private var isEmpty: Bool {
+        lock.withLock { generations.isEmpty }
     }
 
     var pendingCount: Int {
-        pureSnapshot.pending
+        summedCounts.pending
     }
 
     var activeCount: Int {
-        pureSnapshot.active
+        summedCounts.active
     }
 
-    var generationCount: Int {
-        pureSnapshot.generationCount
-    }
-
+    /// Hook-driven reap, reachable only from the settle hook above and
+    /// reconfigure: performs the named pass and nothing else. Consumes the D4
+    /// settle/drain notification; idempotent, reaping an already-reaped list
+    /// is a no-op.
     @discardableResult
-    func reapDrainedGenerations() -> [TaskScheduler] {
+    private func reapDrainedGenerations() -> [TaskScheduler] {
         // Single allowed Store-to-Tasks crossing, copy-check-sweep: copy under
         // lock, ask drain state with no scheduling lock held, sweep under lock
         // removing only still-present non-current generations flagged drained.
