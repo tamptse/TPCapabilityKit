@@ -26,3 +26,15 @@ Package.resolved
 
 # Docs
 docs/
+
+# task
+.tasks/
+
+# spec
+specs/
+
+# scratch
+.scratch/
+
+# skill
+.superpowers/
