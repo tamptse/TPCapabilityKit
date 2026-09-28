@@ -104,8 +104,8 @@ struct D6DecisionTableTests {
             }
         })
         await started.wait()
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
-        await store.schedulingGenerations.advanceTime(by: 0.2)
+        await store.waitForDeterministicWaiters(count: 1)
+        await store.advanceTime(by: 0.2)
         await done.wait()
 
         #expect(lease.state == .expired)

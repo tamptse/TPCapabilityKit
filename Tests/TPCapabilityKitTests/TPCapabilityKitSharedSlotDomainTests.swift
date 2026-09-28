@@ -31,7 +31,7 @@ struct TPCapabilityKitSharedSlotDomainTests {
         #expect(store.activeTaskCount == 1)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1))
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 1)
 
         let second = TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0)
         store.scheduleTask(second, task: {

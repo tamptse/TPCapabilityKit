@@ -40,8 +40,26 @@ struct TPCapabilityKitGenerationsTests {
 
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        store.schedulingGenerations.reapAtSettle()
-        #expect(store.generationCount == 1)
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        let missing = Capability.custom("genFollowOn_\(UUID().uuidString)")
+        let followOnDone = AsyncGate()
+        let followOn = store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
+            task: {},
+            completion: { _ in followOnDone.signal() }
+        )
+        #expect(store.pendingTaskCount == 1)
+        store.cancelTask(taskId: followOn.task.id)
+        await followOnDone.wait()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
         store.unregisterCapability(for: gatePlugin)
     }
 }

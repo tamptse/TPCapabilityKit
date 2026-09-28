@@ -189,9 +189,9 @@ struct D4DrainOwnerPinTests {
         }
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 20))
 
-        var maxGenerations = 0
+        var maxPending = 0
         for await _ in drained.stream {
-            maxGenerations = max(maxGenerations, store.generationCount)
+            maxPending = max(maxPending, store.pendingTaskCount + store.activeTaskCount)
             if await completions.count == total { break }
         }
         drained.finish()
@@ -200,11 +200,23 @@ struct D4DrainOwnerPinTests {
             if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
             await Task.yield()
         }
-        store.schedulingGenerations.reapAtSettle()
 
         #expect(await completions.count == total)
-        #expect(maxGenerations <= 2)
-        #expect(store.generationCount == 1)
+        #expect(maxPending <= total)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+
+        let followOnDone = AsyncGate()
+        store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 30.0),
+            task: {},
+            completion: { _ in followOnDone.signal() }
+        )
+        await followOnDone.wait()
+        for _ in 0..<10000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
     }

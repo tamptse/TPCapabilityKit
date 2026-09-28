@@ -70,7 +70,7 @@ struct D2SameIdExchangePinTests {
     @Test("cancel during overwrite resolves once with reuse and wait-cancel nil")
     func cancelDuringOverwrite() async {
         let store = DynamicStore()
-        store.schedulingGenerations.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime(owner: store)
         let missing = Capability.custom("d2-cancel_\(UUID().uuidString)")
         let id = "d2-cancel_\(UUID().uuidString)"
 
@@ -86,7 +86,7 @@ struct D2SameIdExchangePinTests {
                 }
             }
         )
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.waitForDeterministicWaiters(count: 1)
 
         let newProbe = Probe()
         let newDone = AsyncGate()
@@ -119,7 +119,7 @@ struct D2SameIdExchangePinTests {
                 TaskDescriptor(id: id, requiredCapabilities: [missing], timeout: 30.0)
             ) { () async throws -> String in "reused" }
         }
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.waitForDeterministicWaiters(count: 1)
         #expect(store.pendingTaskCount == 1)
         store.cancelTask(taskId: id)
         #expect(await waiter.value == nil)

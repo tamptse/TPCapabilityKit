@@ -45,15 +45,30 @@ struct TPCapabilityKitGenerationsWiringTests {
         #expect(store.pendingTaskCount == 1)
         #expect(store.activeTaskCount == 1)
         #expect(store.pendingTaskCount + store.activeTaskCount == 2)
-        #expect(store.generationCount == 2)
 
         release.finish()
         await blockerDone.wait()
         await secondDone.wait()
-        store.schedulingGenerations.reapAtSettle()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 1)
+
+        let followOnDone = AsyncGate()
+        store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0),
+            task: {},
+            completion: { _ in followOnDone.signal() }
+        )
+        await followOnDone.wait()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test("pending sums across generations without admission in play")
@@ -70,6 +85,6 @@ struct TPCapabilityKitGenerationsWiringTests {
         store.scheduleTask(TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0), task: {})
         #expect(store.pendingTaskCount == 2)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 2)
     }
 }

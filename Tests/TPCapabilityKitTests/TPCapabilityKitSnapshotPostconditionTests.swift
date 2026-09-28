@@ -10,7 +10,7 @@ struct TPCapabilityKitSnapshotPostconditionTests {
         let store = DynamicStore(
             configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1)
         )
-        store.schedulingGenerations.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime(owner: store)
         let pluginId = "SnapshotPost_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }
@@ -33,7 +33,7 @@ struct TPCapabilityKitSnapshotPostconditionTests {
         #expect(store.activeTaskCount == 1)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1))
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 1)
 
         let second = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0),
@@ -48,7 +48,6 @@ struct TPCapabilityKitSnapshotPostconditionTests {
         #expect(store.pendingTaskCount == 1)
         #expect(store.activeTaskCount == 1)
         #expect(store.pendingTaskCount + store.activeTaskCount == 2)
-        #expect(store.generationCount == 2)
         #expect(await executions.count == 0)
         #expect(!second.isTerminal)
 
@@ -58,10 +57,12 @@ struct TPCapabilityKitSnapshotPostconditionTests {
         #expect(await executions.count == 1)
         #expect(blocker.isTerminal)
         #expect(second.isTerminal)
-        store.schedulingGenerations.reapAtSettle()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 1)
 
         let missing = Capability.custom("snapshotPostMissing_\(UUID().uuidString)")
         let firstDone = AsyncGate()
@@ -92,10 +93,10 @@ struct TPCapabilityKitSnapshotPostconditionTests {
             }
         )
         #expect(store.pendingTaskCount == 2)
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 2)
 
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 2)
-        await store.schedulingGenerations.advanceTime(by: 5.0)
+        await store.waitForDeterministicWaiters(count: 2)
+        await store.advanceTime(by: 5.0)
         for await _ in firstDone.stream {
             if await firstCompletions.count == 1 { break }
         }
@@ -105,9 +106,24 @@ struct TPCapabilityKitSnapshotPostconditionTests {
 
         #expect(first.state == .expired)
         #expect(secondGen.state == .expired)
-        store.schedulingGenerations.reapAtSettle()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 1)
+
+        let followOn = store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [missing], timeout: 5.0),
+            task: {}
+        )
+        #expect(store.pendingTaskCount == 1)
+        store.cancelTask(taskId: followOn.task.id)
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 }

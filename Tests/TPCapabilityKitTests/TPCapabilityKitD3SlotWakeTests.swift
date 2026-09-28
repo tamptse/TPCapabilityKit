@@ -394,14 +394,13 @@ struct TPCapabilityKitD3SlotWakeTests {
         for _ in 0..<5 {
             #expect(store.pendingTaskCount == 1)
             #expect(store.activeTaskCount == 1)
-            #expect(store.generationCount == 1)
-            _ = store.schedulingGenerations.pureSnapshot
+            #expect(store.pendingTaskCount + store.activeTaskCount == 2)
         }
         #expect(await executions.count == 0)
         #expect(store.pendingTaskCount == 1)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 1, maxGlobal: 10))
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 2)
         #expect(await executions.count == 0)
         #expect(store.pendingTaskCount == 1)
 

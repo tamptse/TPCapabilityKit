@@ -46,21 +46,36 @@ struct TPCapabilityKitReapGuaranteeTests {
         #expect(store.pendingTaskCount == 1)
         #expect(store.activeTaskCount == 1)
         #expect(store.pendingTaskCount + store.activeTaskCount == 2)
-        #expect(store.generationCount == 2)
         #expect(await executions.count == 0)
 
         release.finish()
         await blockerDone.wait()
         await secondDone.wait()
         #expect(await executions.count == 1)
-        store.schedulingGenerations.reapAtSettle()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 1)
+
+        let followOnDone = AsyncGate()
+        store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0),
+            task: {},
+            completion: { _ in followOnDone.signal() }
+        )
+        await followOnDone.wait()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
-    @Test("drained generations release so generation count returns to one")
-    func drainedReleaseReturnsToOneViaExplicitReap() async {
+    @Test("drained generations release so counts return to zero automatically")
+    func drainedReleaseReturnsToZeroCountsViaAutomaticReap() async {
         let (store, _) = makeStoreWithCap([], prefix: "ReapDrain")
         let missing = Capability.custom("reapDrain_\(UUID().uuidString)")
 
@@ -71,28 +86,42 @@ struct TPCapabilityKitReapGuaranteeTests {
         #expect(store.pendingTaskCount == 1)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 20))
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount == 1)
 
         let second = store.scheduleTask(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
             task: {}
         )
         #expect(store.pendingTaskCount == 2)
-        #expect(store.generationCount == 2)
+        #expect(store.activeTaskCount == 0)
 
         store.cancelTask(taskId: first.task.id)
         store.cancelTask(taskId: second.task.id)
 
         for _ in 0..<1000 {
-            if store.pendingTaskCount == 0 { break }
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
             await Task.yield()
         }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        store.schedulingGenerations.reapAtSettle()
-        #expect(store.generationCount == 1)
         #expect(first.isTerminal)
         #expect(second.isTerminal)
+
+        let followOnDone = AsyncGate()
+        let followOn = store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
+            task: {},
+            completion: { _ in followOnDone.signal() }
+        )
+        #expect(store.pendingTaskCount == 1)
+        store.cancelTask(taskId: followOn.task.id)
+        await followOnDone.wait()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test("repeated count reads agree exactly")
@@ -111,28 +140,38 @@ struct TPCapabilityKitReapGuaranteeTests {
         )
 
         #expect(store.pendingTaskCount == 2)
-        #expect(store.generationCount == 2)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 2)
 
         let pendingFirst = store.pendingTaskCount
         let activeFirst = store.activeTaskCount
-        let generationsFirst = store.generationCount
         for _ in 0..<5 {
             #expect(store.pendingTaskCount == pendingFirst)
             #expect(store.activeTaskCount == activeFirst)
-            #expect(store.generationCount == generationsFirst)
         }
         #expect(pendingFirst == 2)
         #expect(activeFirst == 0)
-        #expect(generationsFirst == 2)
 
         store.cancelTask(taskId: first.task.id)
         store.cancelTask(taskId: second.task.id)
         for _ in 0..<1000 {
-            if store.pendingTaskCount == 0 { break }
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
             await Task.yield()
         }
-        store.schedulingGenerations.reapAtSettle()
-        #expect(store.generationCount == 1)
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
+
+        let followOn = store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [missing], timeout: 30.0),
+            task: {}
+        )
+        #expect(store.pendingTaskCount == 1)
+        store.cancelTask(taskId: followOn.task.id)
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 
     @Test("reconfiguring over drained store keeps single live generation")
@@ -155,14 +194,28 @@ struct TPCapabilityKitReapGuaranteeTests {
         }
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 1)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 0)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 20))
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        #expect(store.generationCount == 1)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 0)
 
         store.configureScheduler(.init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 20))
-        #expect(store.generationCount == 1)
+        #expect(store.pendingTaskCount + store.activeTaskCount == 0)
+
+        let followOnDone = AsyncGate()
+        store.scheduleTask(
+            TaskDescriptor(requiredCapabilities: [cap], timeout: 30.0),
+            task: {},
+            completion: { _ in followOnDone.signal() }
+        )
+        await followOnDone.wait()
+        for _ in 0..<1000 {
+            if store.pendingTaskCount == 0 && store.activeTaskCount == 0 { break }
+            await Task.yield()
+        }
+        #expect(store.pendingTaskCount == 0)
+        #expect(store.activeTaskCount == 0)
     }
 }

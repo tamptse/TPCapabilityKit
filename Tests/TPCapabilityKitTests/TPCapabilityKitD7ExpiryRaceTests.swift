@@ -40,8 +40,8 @@ struct D7ExpiryRaceTests {
             }
         })
         await started.wait()
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
-        await store.schedulingGenerations.advanceTime(by: 0.2)
+        await store.waitForDeterministicWaiters(count: 1)
+        await store.advanceTime(by: 0.2)
         await done.wait()
 
         #expect(lease.state == .expired)
@@ -82,11 +82,11 @@ struct D7ExpiryRaceTests {
     @Test("mid-wait capability flip wins with the executed value")
     func midWaitFlipWinsWithValue() async {
         let store = DynamicStore()
-        store.schedulingGenerations.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime(owner: store)
         let cap = Capability.custom("D7FlipWin_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [cap], timeout: 4.0)
         async let result = store.scheduleTaskAndWait(task) { "d7-flipped" }
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.waitForDeterministicWaiters(count: 1)
         let pluginId = "D7FlipWin_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }

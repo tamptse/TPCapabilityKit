@@ -89,7 +89,7 @@ struct DisplacementEvictPairingTests {
     @Test("displaced parked waiter cancelled once and never runs")
     func displacedParkWaiterCancelledOnce() async {
         let store = DynamicStore()
-        store.schedulingGenerations.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime(owner: store)
         let missing = Capability.custom("s5-park_\(UUID().uuidString)")
         let id = "s5-park_\(UUID().uuidString)"
         let pluginId = "s5-park_\(UUID().uuidString)"
@@ -107,7 +107,7 @@ struct DisplacementEvictPairingTests {
             }
         })
 
-        await store.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await store.waitForDeterministicWaiters(count: 1)
         #expect(!oldLease.isTerminal)
         #expect(store.pendingTaskCount == 1)
 
@@ -203,7 +203,7 @@ struct DisplacementEvictPairingTests {
         #expect(store.activeTaskCount == 0)
 
         let seqStore = DynamicStore()
-        seqStore.schedulingGenerations.enableDeterministicTime(owner: seqStore)
+        seqStore.enableDeterministicTime(owner: seqStore)
         let missing = Capability.custom("s5-seq_\(UUID().uuidString)")
         let seqId = "s5-seq_\(UUID().uuidString)"
         let firstProbe = Probe()
@@ -218,7 +218,7 @@ struct DisplacementEvictPairingTests {
                 }
             }
         )
-        await seqStore.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await seqStore.waitForDeterministicWaiters(count: 1)
         seqStore.cancelTask(taskId: seqId)
         await firstDone.wait()
         #expect(firstLease.state == .expired)
@@ -237,7 +237,7 @@ struct DisplacementEvictPairingTests {
                 }
             }
         )
-        await seqStore.schedulingGenerations.waitForDeterministicWaiters(count: 1)
+        await seqStore.waitForDeterministicWaiters(count: 1)
         #expect(!secondLease.isTerminal)
         #expect(seqStore.pendingTaskCount == 1)
 
