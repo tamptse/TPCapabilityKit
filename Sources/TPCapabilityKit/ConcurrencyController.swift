@@ -104,7 +104,7 @@ final class ConcurrencyController: @unchecked Sendable {
         }
     }
 
-    internal enum WaiterEviction: Sendable {
+    private enum WaiterEviction: Sendable {
         case stale
         case `self`
     }
@@ -113,7 +113,7 @@ final class ConcurrencyController: @unchecked Sendable {
     /// under `taskId` and resumes it with false outside the lock.
     /// Stale evicts a waiter owned by someone else; self evicts our own wait.
     /// Slot-only: touches no Lease, no row, no lifecycle transition.
-    internal func removeWaiter(taskId: String, owner: ObjectIdentifier, match: WaiterEviction) {
+    private func removeWaiter(taskId: String, owner: ObjectIdentifier, match: WaiterEviction) {
         var resume: (@Sendable (Bool) -> Void)?
         lock.withLock {
             guard let index = waiters.firstIndex(where: {
