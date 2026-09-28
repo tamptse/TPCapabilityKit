@@ -1,52 +1,10 @@
 import Foundation
 import Combine
 
-/// One shared expiry race spelled beside the flow that shares it.
+/// Expiry race owner: `Deadline` in the time module (`Time.swift`).
 /// Timeout resolves once from task plus configured default; waiter and
-/// executor draw from the same resolved value through the injected time
-/// instance, so neither computes timeouts nor builds races directly.
-/// See the time module (`Time.swift`) for the sleep seam.
-/// The registry receives the race as a value and never names this helper.
-private struct SharedRace: Sendable {
-    let timeout: TimeInterval
-    private let clock: Clock
-
-    init(task: TaskDescriptor, default defaultTimeout: TimeInterval, clock: Clock) {
-        self.timeout = task.timeout ?? defaultTimeout
-        self.clock = clock
-    }
-
-    func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
-        await raceValue(operation: { await operation() }).map { ($0 as? Bool) ?? false } ?? false
-    }
-
-    func raceValue(operation: @Sendable @escaping () async -> Any?) async -> Any?? {
-        let timeout = self.timeout
-        let clock = self.clock
-        struct Box: @unchecked Sendable {
-            let value: Any?
-        }
-        return await withTaskGroup(of: Box?.self) { group in
-            group.addTask {
-                let value = await operation()
-                return Box(value: value)
-            }
-            group.addTask {
-                await clock.sleep(timeout)
-                return nil
-            }
-            guard let first = await group.next() else {
-                group.cancelAll()
-                return nil
-            }
-            group.cancelAll()
-            guard let box = first else {
-                return nil
-            }
-            return .some(box.value)
-        }
-    }
-}
+/// executor draw from the same resolved value through the threaded clock,
+/// so neither computes timeouts nor builds races directly.
 
 extension TaskScheduler {
     func guardedDrain() async {
@@ -61,7 +19,7 @@ extension TaskScheduler {
                 let next: Lease? = dequeueNext()
                 guard let nextLease = next else { break }
                 guard !nextLease.isTerminal else { continue }
-                let race = SharedRace(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
+                let race = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
 
                 guard isAvailable(for: nextLease.task) else {
                     parkLeaseForCapabilities(nextLease, race: race)
@@ -96,7 +54,7 @@ extension TaskScheduler {
         }
     }
 
-    private func parkLeaseForCapabilities(_ lease: Lease, race: SharedRace) {
+    private func parkLeaseForCapabilities(_ lease: Lease, race: Deadline) {
         _ = lock.withLock {
             lifecycleStore.park(for: lease) {
                 Task { await self.waitForCapabilitiesAndProcess(lease, race: race) }
@@ -104,7 +62,7 @@ extension TaskScheduler {
         }
     }
 
-    private func waitForCapabilitiesAndProcess(_ lease: Lease, race: SharedRace) async {
+    private func waitForCapabilitiesAndProcess(_ lease: Lease, race: Deadline) async {
         let capabilityAvailable = await waitForCapabilities(
             lease.task,
             race: race
@@ -133,7 +91,7 @@ extension TaskScheduler {
     /// Readiness crosses the registry seam: Tasks keeps park, shared expiry
     /// race, activation, and settlement; set-matching lives in the registry.
     /// No per-emission query loop remains here.
-    private func waitForCapabilities(_ task: TaskDescriptor, race shared: SharedRace) async -> Bool {
+    private func waitForCapabilities(_ task: TaskDescriptor, race shared: Deadline) async -> Bool {
         guard let store else { return false }
         let race: @Sendable (@escaping CapabilityRegistry.WaitOperation) async -> Bool = { operation in
             await shared.race(operation: operation)
@@ -147,7 +105,7 @@ extension TaskScheduler {
     /// exercise the ObjcLease reflection.
     ///
     /// Entry early exit defers to the availability gate below.
-    private func activate(_ lease: Lease, race: SharedRace) async {
+    private func activate(_ lease: Lease, race: Deadline) async {
         // Entry early exit; the availability gate below decides.
         guard isAvailable(for: lease.task) else {
             settle(lease, as: .failed)
@@ -193,7 +151,7 @@ extension TaskScheduler {
         return admitted ? .proceed : .refused
     }
 
-    private func runActivatedLease(_ lease: Lease, race: SharedRace) async {
+    private func runActivatedLease(_ lease: Lease, race: Deadline) async {
         let taskExecution: (@Sendable () async -> Any?)? = lock.withLock {
             lifecycleStore.execution(for: lease)
         }

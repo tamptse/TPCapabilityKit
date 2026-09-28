@@ -98,7 +98,7 @@ struct D7ExpiryRaceTests {
 
     @Test("single TaskGroup topology in the expiry detail")
     func singleTaskGroupTopology() throws {
-        let path = try String(contentsOf: d7PathURL(), encoding: .utf8)
+        let path = try String(contentsOf: d7TimeURL(), encoding: .utf8)
         #expect(path.components(separatedBy: "withTaskGroup").count - 1 == 1)
     }
 
@@ -119,5 +119,14 @@ struct D7ExpiryRaceTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         return root.appendingPathComponent("Sources/TPCapabilityKit/TaskScheduler+Path.swift")
+    }
+
+    private func d7TimeURL() -> URL {
+        let thisFile = URL(fileURLWithPath: #filePath)
+        let root = thisFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return root.appendingPathComponent("Sources/TPCapabilityKit/Time.swift")
     }
 }
