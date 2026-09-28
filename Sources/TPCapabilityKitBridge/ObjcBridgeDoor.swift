@@ -113,3 +113,9 @@ enum ObjcBridgeDoor {
         BridgeDetachAdapter(id: id)
     }
 }
+
+/// Shared box for passing non-Sendable ObjC closures into Tasks.
+final class ObjcCallbackBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
+}

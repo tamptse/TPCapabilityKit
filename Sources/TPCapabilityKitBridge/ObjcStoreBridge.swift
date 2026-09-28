@@ -43,25 +43,21 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     }
 
     /// Subscribes to state updates for a plugin.
-    /// Delivery via `ObjcDelivery`.
+    /// Delivery via `ObjcBridgeDoor`.
     /// - Parameters:
     ///   - pluginId: Unique identifier of the plugin.
-    ///   - queue: Delivery queue (see `ObjcDelivery`).
-    ///   - observer: Closure invoked via `ObjcDelivery` with updated state.
+    ///   - queue: Delivery queue (see `ObjcBridgeDoor`).
+    ///   - observer: Closure invoked via `ObjcBridgeDoor` with updated state.
     /// - Returns: An `ObjcCancellable` token to manage subscription lifecycle.
     @objc public func subscribe(
         pluginId: String,
         queue: DispatchQueue? = nil,
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
-        let observerBox = ObjcCallbackBox(observer)
+        let sink = ObjcBridgeDoor.subscribeSink(queue: queue, observer: observer)
         let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
             .eraseToAnyPublisher()
-        .sink { state in
-            ObjcDelivery.on(queue) {
-                observerBox.value(state)
-            }
-        }
+        .sink(receiveValue: sink)
         return ObjcCancellable(cancellable)
     }
 
@@ -86,7 +82,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// side effect runs on this path.
     /// - Parameter pluginId: Unique identifier of the plugin.
     @objc public func unregister(pluginId: String) {
-        store.unregister(plugin: BridgeDetachAdapter(id: pluginId))
+        store.unregister(plugin: ObjcBridgeDoor.makeDetachAdapter(id: pluginId))
     }
 
     // MARK: - Capability APIs
@@ -99,11 +95,11 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     }
 
     /// Subscribes to capability availability updates.
-    /// Delivery via `ObjcDelivery`.
+    /// Delivery via `ObjcBridgeDoor`.
     /// - Parameters:
     ///   - capability: Capability string identifier to observe.
-    ///   - queue: Delivery queue (see `ObjcDelivery`).
-    ///   - observer: Closure invoked via `ObjcDelivery` with capability availability.
+    ///   - queue: Delivery queue (see `ObjcBridgeDoor`).
+    ///   - observer: Closure invoked via `ObjcBridgeDoor` with capability availability.
     /// - Returns: An `ObjcCancellable` token to manage subscription lifecycle.
     @objc public func subscribeCapability(
         _ capability: String,
@@ -111,14 +107,10 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
         let cap = ObjcMapper.capability(from: capability)
-        let observerBox = ObjcCallbackBox(observer)
+        let sink = ObjcBridgeDoor.subscribeCapabilitySink(queue: queue, observer: observer)
         let cancellable = store.observeCapability(cap)
             .eraseToAnyPublisher()
-            .sink { available in
-                ObjcDelivery.on(queue) {
-                    observerBox.value(available)
-                }
-            }
+            .sink(receiveValue: sink)
         return ObjcCancellable(cancellable)
     }
 
@@ -178,12 +170,4 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         ObjcTaskScheduler(store: store)
     }
 
-}
-
-/// Fresh id-carrying adapter for the detach path above. Store detach reads
-/// only the Plugin id, so this is behaviorally identical to the
-/// registration-time adapter with no `start` side effect.
-private struct BridgeDetachAdapter: AppPlugin {
-    let id: String
-    func start(with store: DynamicStore) {}
 }
