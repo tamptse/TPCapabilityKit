@@ -24,6 +24,18 @@ final class StoreState: @unchecked Sendable {
     // only; both publishes emit after unlock. Removal stays out of band: it
     // deletes the index entry and completes the detached subject, never
     // touches the waiter table.
+    // Single locked subject-creation step shared by the creation branch
+    // above and `update` below, so index insert plus waiter drain-list copy
+    // live in exactly one place. Call only with `lock` held.
+    private func insertFreshSubject(
+        pluginId: String
+    ) -> (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) {
+        let created = CurrentValueSubject<Any?, Never>(nil)
+        subjects[pluginId] = created
+        let drain = waiters.removeValue(forKey: pluginId) ?? []
+        return (created, drain)
+    }
+
     private func lookupOrAwaitCreation(
         pluginId: String,
         createIfMissing: Bool
@@ -41,10 +53,8 @@ final class StoreState: @unchecked Sendable {
                 return .hit(existing)
             }
             if createIfMissing {
-                let created = CurrentValueSubject<Any?, Never>(nil)
-                subjects[pluginId] = created
-                let drain = waiters.removeValue(forKey: pluginId) ?? []
-                return .created(created, drain: drain)
+                let fresh = insertFreshSubject(pluginId: pluginId)
+                return .created(fresh.subject, drain: fresh.drain)
             }
             let waiter = PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>()
             waiters[pluginId, default: []].append(waiter)
@@ -80,26 +90,17 @@ final class StoreState: @unchecked Sendable {
 
     func update<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let resolved = resolveOrCreateSubject(pluginId: pluginId)
+        let resolved: (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) = lock.withLock {
+            if let existing = subjects[pluginId] {
+                return (existing, [])
+            }
+            return insertFreshSubject(pluginId: pluginId)
+        }
         for waiter in resolved.drain {
             waiter.send(resolved.subject)
             waiter.send(completion: .finished)
         }
         resolved.subject.send(newState)
-    }
-
-    private func resolveOrCreateSubject(
-        pluginId: String
-    ) -> (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) {
-        lock.withLock {
-            if let existing = subjects[pluginId] {
-                return (existing, [])
-            }
-            let created = CurrentValueSubject<Any?, Never>(nil)
-            subjects[pluginId] = created
-            let drain = waiters.removeValue(forKey: pluginId) ?? []
-            return (created, drain)
-        }
     }
 
     func get<T>(pluginId: String, type: T.Type) -> T? {
