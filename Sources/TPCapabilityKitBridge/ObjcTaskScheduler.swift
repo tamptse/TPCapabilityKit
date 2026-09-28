@@ -101,7 +101,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         )
     }
 
-    /// Check-and-run entry carrying the sync-check policy of the one contract
+    /// Check-and-run entry over the sync-check shape of the one contract
     /// on `DynamicStore.fire`. Stays synchronous because `@objc` cannot await.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
@@ -111,7 +111,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        store.fire(requiring: ObjcMapper.capability(from: capability), policy: .syncCheck, task: task)
+        store.fire(requiring: ObjcMapper.capability(from: capability), task: task)
     }
 
     /// Cancels a pending task.
