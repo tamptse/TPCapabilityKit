@@ -12,25 +12,20 @@ extension TaskScheduler {
             completeDrainHandover()
         }
 
+        if Task.isCancelled { return }
         while true {
-            if Task.isCancelled { break }
-            while true {
-                if Task.isCancelled { break }
-                let next: Lease? = dequeueNext()
-                guard let nextLease = next else { break }
-                guard !nextLease.isTerminal else { continue }
-                let race = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
+            if Task.isCancelled { return }
+            let next: Lease? = dequeueNext()
+            guard let nextLease = next else { break }
+            guard !nextLease.isTerminal else { continue }
+            let race = Deadline(task: nextLease.task, default: configuration.defaultTimeout, clock: clock)
 
-                guard isAvailable(for: nextLease.task) else {
-                    parkLeaseForCapabilities(nextLease, race: race)
-                    continue
-                }
-
-                Task { await self.activate(nextLease, race: race) }
+            guard isAvailable(for: nextLease.task) else {
+                parkLeaseForCapabilities(nextLease, race: race)
+                continue
             }
-            if Task.isCancelled { break }
-            completeDrainHandover()
-            break
+
+            Task { await self.activate(nextLease, race: race) }
         }
     }
 
