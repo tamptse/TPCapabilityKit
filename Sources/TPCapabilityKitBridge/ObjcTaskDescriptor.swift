@@ -8,14 +8,14 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     @objc public var priority: Int { underlying.priority.rawValue }
 
+    private var storedTimeout: ObjcTimeout { ObjcTimeout.fromStored(underlying.timeout) }
+
     /// Collapsed timeout reading: the stored optional when present, otherwise
     /// the pinned compat default. `hasExplicitTimeout` tells the two apart;
-    /// both read directly off the single timeout form.
-    @objc public var timeout: TimeInterval {
-        ObjcTimeout.fromStored(underlying.timeout).display
-    }
+    /// both read through the single stored-timeout helper below.
+    @objc public var timeout: TimeInterval { storedTimeout.display }
 
-    @objc public var hasExplicitTimeout: Bool { ObjcTimeout.fromStored(underlying.timeout).isExplicit }
+    @objc public var hasExplicitTimeout: Bool { storedTimeout.isExplicit }
 
     @objc public var maxRetries: Int { underlying.maxRetries }
 
