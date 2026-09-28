@@ -126,7 +126,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     /// Deprecated forwarder to the single scheduling door
     /// (`taskScheduler.runIfAvailable`). Holds no scheduling policy of its own:
-    /// sync-vs-wait agreement is stated once beside the view's delivery core.
+    /// sync-vs-wait agreement is stated once on `DynamicStore.fire`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -141,8 +141,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
 
     /// Deprecated forwarder to the single scheduling door
     /// (`taskScheduler.runWhenAvailable`). Holds no scheduling policy of its
-    /// own: descriptor building, timeout compat, queue hopping, and defaults
-    /// live only in the view behind the single delivery core.
+    /// own (see the one contract on `DynamicStore.fire`).
     /// Delivery via `ObjcDelivery`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
