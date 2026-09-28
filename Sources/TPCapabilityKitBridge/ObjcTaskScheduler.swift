@@ -55,7 +55,8 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// Schedules a task and waits for result via completion handler.
-    /// Shares the one `waitThenRun` delivery core with `runWhenAvailable`.
+    /// Queued-wait spelling over the one `waitThenRun` core below (bypass rule:
+    /// see the one contract on `DynamicStore.fire`).
     /// Delivery via `ObjcDelivery`.
     @objc public func scheduleAndWait(
         _ descriptor: ObjcTaskDescriptor,
@@ -67,7 +68,8 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     }
 
     /// Runs a task when the required capability becomes available, with a timeout.
-    /// Shares the one `waitThenRun` delivery core with `scheduleAndWait`.
+    /// Queued-wait spelling over the one `waitThenRun` core below (bypass rule:
+    /// see the one contract on `DynamicStore.fire`).
     /// Delivery via `ObjcDelivery`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
@@ -83,14 +85,11 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         task: @escaping () -> NSObject,
         completion: @escaping (NSObject?) -> Void
     ) {
-        let descriptor = ObjcTaskDescriptor(capabilities: [capability], timeout: timeout)
-        waitThenRun(descriptor: descriptor.underlying, queue: queue, task: task, completion: completion)
+        waitThenRun(capability: capability, timeout: timeout, queue: queue, task: task, completion: completion)
     }
 
-    /// Check-and-run entry (the facade two-entry table on
-    /// `DynamicStore.runIfAvailable`: sync fire). Stays synchronous because
-    /// `@objc` cannot await. Sync-fire half of the contract stated beside
-    /// `waitThenRun`.
+    /// Check-and-run entry carrying the sync-check policy of the one contract
+    /// on `DynamicStore.fire`. Stays synchronous because `@objc` cannot await.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - task: The task closure to execute. Must return an NSObject.
@@ -99,17 +98,13 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         capability: String,
         task: () -> NSObject
     ) -> NSObject? {
-        store.runIfAvailable(requiring: ObjcMapper.capability(from: capability), task: task)
+        store.fire(requiring: ObjcMapper.capability(from: capability), policy: .syncCheck, task: task)
     }
 
     /// The one delivery core for every value-returning wait behind the view.
-    ///
-    /// Contract (stated once for the whole scheduling door): sync fire
-    /// (`runIfAvailable`) bypasses Lease, slot admission, and expiry race, while
-    /// every value-returning wait (`scheduleAndWait`, `runWhenAvailable`)
-    /// funnels through this core — one descriptor-build plus `ObjcDelivery`
-    /// queue-hop path — so the two wait spellings agree with sync fire by
-    /// construction.
+    /// Bypass rule: see the one contract on `DynamicStore.fire` — this core is
+    /// its queued-wait half behind the view, with results delivered via
+    /// `ObjcDelivery.on(queue)`.
     private func waitThenRun(
         descriptor: TaskDescriptor,
         queue: DispatchQueue?,
@@ -119,13 +114,27 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         let taskBox = ObjcCallbackBox(task)
         let completionBox = ObjcCallbackBox(completion)
         Task {
-            let result: NSObject? = await store.scheduleTaskAndWait(descriptor) {
+            let result: NSObject? = await store.fire(descriptor, policy: .queuedWait) {
                 taskBox.value()
             }
             ObjcDelivery.on(queue) {
                 completionBox.value(result)
             }
         }
+    }
+
+    /// Capability-string spelling of the one core: builds the descriptor here
+    /// (via `ObjcTaskDescriptor`, so timeout compat stays on the single
+    /// `ObjcTimeout.resolve` fork), then funnels to the descriptor shape above.
+    private func waitThenRun(
+        capability: String,
+        timeout: TimeInterval,
+        queue: DispatchQueue?,
+        task: @escaping () -> NSObject,
+        completion: @escaping (NSObject?) -> Void
+    ) {
+        let descriptor = ObjcTaskDescriptor(capabilities: [capability], timeout: timeout)
+        waitThenRun(descriptor: descriptor.underlying, queue: queue, task: task, completion: completion)
     }
 
     /// Cancels a pending task.
