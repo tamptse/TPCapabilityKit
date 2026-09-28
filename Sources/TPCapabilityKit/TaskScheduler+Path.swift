@@ -190,14 +190,14 @@ extension TaskScheduler {
         settle(lease, as: .completed(racedValue), execution: execution)
     }
 
-    enum SettleDirective {
+    private enum SettleDirective {
         case retry
         case complete(Any?)
         case fail
         case expire
     }
 
-    static func settleDecision(for outcome: Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
+    private static func settleDecision(for outcome: Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
         switch outcome {
         case .completed(let result):
             if result != nil {
