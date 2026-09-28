@@ -64,10 +64,10 @@ extension TaskScheduler {
 
         var counts: Counts { snapshot }
 
-        private mutating func move(from: Place?, to: Place?) {
-            var queued = snapshot.queued
-            var parked = snapshot.parked
-            var active = snapshot.active
+        private static func nextCounts(_ base: Counts, from: Place?, to: Place?) -> Counts {
+            var queued = base.queued
+            var parked = base.parked
+            var active = base.active
             switch from {
             case .pending: queued -= 1
             case .parked: parked -= 1
@@ -80,12 +80,16 @@ extension TaskScheduler {
             case .active: active += 1
             case nil: break
             }
-            snapshot = Counts(
+            return Counts(
                 pending: queued + parked,
                 queued: queued,
                 parked: parked,
                 active: active
             )
+        }
+
+        private mutating func move(from: Place?, to: Place?) {
+            snapshot = Self.nextCounts(snapshot, from: from, to: to)
         }
 
         private mutating func insert(
