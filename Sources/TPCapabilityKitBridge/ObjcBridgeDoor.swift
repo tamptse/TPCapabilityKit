@@ -107,12 +107,7 @@ enum ObjcBridgeDoor {
         policy: ObjcQueuePolicy = .givenOrMain,
         observer: @escaping (NSObject?) -> Void
     ) -> (NSObject?) -> Void {
-        let observerBox = ObjcCallbackBox(observer)
-        return { state in
-            policy.deliver(queue) {
-                observerBox.value(state)
-            }
-        }
+        boxedSink(queue: queue, policy: policy, observer: observer)
     }
 
     /// Capability-subscribe sink-boxing behind the door: same shape as
@@ -122,10 +117,18 @@ enum ObjcBridgeDoor {
         policy: ObjcQueuePolicy = .givenOrMain,
         observer: @escaping (Bool) -> Void
     ) -> (Bool) -> Void {
+        boxedSink(queue: queue, policy: policy, observer: observer)
+    }
+
+    private static func boxedSink<T: Sendable>(
+        queue: DispatchQueue?,
+        policy: ObjcQueuePolicy,
+        observer: @escaping (T) -> Void
+    ) -> (T) -> Void {
         let observerBox = ObjcCallbackBox(observer)
-        return { available in
+        return { value in
             policy.deliver(queue) {
-                observerBox.value(available)
+                observerBox.value(value)
             }
         }
     }
