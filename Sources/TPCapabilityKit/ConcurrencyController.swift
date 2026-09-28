@@ -94,14 +94,21 @@ final class ConcurrencyController: @unchecked Sendable {
         let taskId = lease.task.id
         let owner = ObjectIdentifier(lease)
         return lock.withLock {
-            if heldKeys.values.contains(where: { $0.owner == owner }) { return .duplicate }
-            if waiters.contains(where: { $0.owner == owner }) { return .duplicate }
+            if isDuplicate(owner: owner) { return .duplicate }
             if waiters.isEmpty, tryInstall(keys: keys, taskId: taskId, owner: owner) {
                 return .admitted
             }
             waiters.append(Waiter(keys: keys, taskId: taskId, owner: owner, resume: resume))
             return .parked
         }
+    }
+
+    /// Single duplicate-ownership query over held slots plus the queued wait:
+    /// a Lease parks at most once across both collections. Call only with
+    /// `lock` held.
+    private func isDuplicate(owner: ObjectIdentifier) -> Bool {
+        heldKeys.values.contains(where: { $0.owner == owner })
+            || waiters.contains(where: { $0.owner == owner })
     }
 
     private enum WaiterEviction: Sendable {
