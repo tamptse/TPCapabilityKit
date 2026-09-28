@@ -128,6 +128,13 @@ final class ConcurrencyController: @unchecked Sendable {
         resume?(false)
     }
 
+    /// Single displaced-note: evicts at most one queued waiter under the fresh
+    /// lease's task id whose owner differs, resuming it false outside the lock.
+    /// No-op when absent. Slot-only: touches no Lease, no row, no transition.
+    internal func noteDisplaced(fresh: Lease) {
+        removeWaiter(taskId: fresh.task.id, owner: ObjectIdentifier(fresh), match: .stale)
+    }
+
     /// Lease-keyed self-cancel intent over the single eviction primitive;
     /// owner mismatch no-ops so cancelling one lease never yanks another wait.
     private func cancel(_ lease: Lease) {
