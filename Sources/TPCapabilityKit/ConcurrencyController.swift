@@ -153,13 +153,7 @@ final class ConcurrencyController: @unchecked Sendable {
         let owner = ObjectIdentifier(lease)
         var toResume: [@Sendable (Bool) -> Void] = []
         lock.withLock {
-            guard let held = heldKeys[taskId], held.owner == owner else { return }
-            heldKeys.removeValue(forKey: taskId)
-            let keys = held.keys
-            globalSlots = max(0, globalSlots - 1)
-            for cap in keys {
-                capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
-            }
+            guard removeHolding(taskId: taskId, owner: owner) != nil else { return }
             // Shared consideration with the limit entry: scan from the head and
             // admit every waiter fitting the freed capacity, in arrival order.
             // The head keeps priority as the first candidate; a skipped waiter
@@ -204,6 +198,32 @@ final class ConcurrencyController: @unchecked Sendable {
         return admitted
     }
 
+    /// Single accounting install behind the admission seam: consumes capacity
+    /// for all three occupancy structures at once. Call only with `lock` held,
+    /// only after the capacity guards pass.
+    private func installHolding(keys: Set<Capability>, taskId: String, owner: ObjectIdentifier) {
+        globalSlots += 1
+        for cap in keys {
+            capabilitySlots[cap, default: 0] += 1
+        }
+        heldKeys[taskId] = (keys, owner)
+    }
+
+    /// Single accounting remove behind the release seam: drops all three
+    /// occupancy structures at once with the identity guard inside, so a
+    /// displaced-active row's stale scope-exit cannot release the new holder.
+    /// Returns the released keys when the owner matches, nil otherwise.
+    /// Call only with `lock` held.
+    private func removeHolding(taskId: String, owner: ObjectIdentifier) -> Set<Capability>? {
+        guard let held = heldKeys[taskId], held.owner == owner else { return nil }
+        heldKeys.removeValue(forKey: taskId)
+        globalSlots = max(0, globalSlots - 1)
+        for cap in held.keys {
+            capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
+        }
+        return held.keys
+    }
+
     /// Atomic check-and-install; call only with `lock` held.
     private func tryInstall(keys: Set<Capability>, taskId: String, owner: ObjectIdentifier) -> Bool {
         if let maxGlobal = maxGlobal {
@@ -214,11 +234,7 @@ final class ConcurrencyController: @unchecked Sendable {
                 guard (capabilitySlots[cap] ?? 0) < maxPerCap else { return false }
             }
         }
-        globalSlots += 1
-        for cap in keys {
-            capabilitySlots[cap, default: 0] += 1
-        }
-        heldKeys[taskId] = (keys, owner)
+        installHolding(keys: keys, taskId: taskId, owner: owner)
         return true
     }
 }
