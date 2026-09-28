@@ -91,10 +91,10 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         task: @escaping () -> NSObject,
         completion: @escaping (NSObject?) -> Void
     ) {
-        let descriptor = ObjcTaskDescriptor(capabilities: [capability], timeout: timeout)
         ObjcBridgeDoor.waitThenRun(
             store: store,
-            descriptor: ObjcBridgeDoor.translate(descriptor),
+            capability: capability,
+            timeout: timeout,
             queue: queue,
             task: task,
             completion: completion

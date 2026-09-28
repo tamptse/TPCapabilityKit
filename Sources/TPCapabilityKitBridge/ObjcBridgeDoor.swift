@@ -23,13 +23,13 @@ struct ObjcQueuePolicy: Sendable {
 
 /// The single scheduling door behind the Bridge.
 ///
-/// Owns descriptor translation, the one delivery core for every
-/// value-returning wait, the schedule-completion hop, the subscribe
-/// sink-boxing, and detach-adapter construction. Callers build at most the
-/// ObjC-shaped arguments then delegate here, so the given-or-main hop and the
-/// sync-vs-wait agreement each live in exactly one place. Timeout compat
-/// stays on the `ObjcTimeout` fork — `translate` passes `underlying` through
-/// without inspecting timeout.
+/// Owns descriptor translation, the capability-spelling descriptor build, the
+/// one delivery core for every value-returning wait, the schedule-completion
+/// hop, the subscribe sink-boxing, and detach-adapter construction. Callers
+/// build at most the ObjC-shaped arguments then delegate here, so the
+/// given-or-main hop and the sync-vs-wait agreement each live in exactly one
+/// place. Timeout compat stays on the `ObjcTimeout` fork — `translate` passes
+/// `underlying` through without inspecting timeout.
 enum ObjcBridgeDoor {
     /// Id-carrying adapter for the detach path. Store detach reads only the
     /// Plugin id, so this is behaviorally identical to the registration-time
@@ -43,6 +43,29 @@ enum ObjcBridgeDoor {
     /// timeout inspection).
     static func translate(_ descriptor: ObjcTaskDescriptor) -> TaskDescriptor {
         descriptor.underlying
+    }
+
+    /// Capability-spelling build inside the door: constructs the descriptor
+    /// through the same ObjC spelling the facade used to build at its call
+    /// site (same defaults, same wire fork), then funnels to the descriptor
+    /// core below, so the two wait spellings cannot diverge.
+    static func waitThenRun(
+        store: DynamicStore,
+        capability: String,
+        timeout: TimeInterval,
+        queue: DispatchQueue?,
+        task: @escaping () -> NSObject,
+        completion: @escaping (NSObject?) -> Void,
+        policy: ObjcQueuePolicy = .givenOrMain
+    ) {
+        waitThenRun(
+            store: store,
+            descriptor: translate(ObjcTaskDescriptor(capabilities: [capability], timeout: timeout)),
+            queue: queue,
+            task: task,
+            completion: completion,
+            policy: policy
+        )
     }
 
     /// The one delivery core for every value-returning wait behind the Bridge.
