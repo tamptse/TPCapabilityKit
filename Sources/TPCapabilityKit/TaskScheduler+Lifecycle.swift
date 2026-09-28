@@ -231,18 +231,6 @@ extension TaskScheduler {
             return row
         }
 
-        mutating func appendScheduleWaiter(
-            for lease: Lease,
-            waiter: @escaping (Lease) -> Void
-        ) -> Lease? {
-            if lease.isTerminal { return lease }
-            guard var row = rows[lease.task.id] else { return lease }
-            if row.lease !== lease { return lease }
-            row.waiters.append(waiter)
-            rows[lease.task.id] = row
-            return nil
-        }
-
         enum ScheduleWaitRendezvousOutcome {
             case parked(displaced: Lease?, waiters: [(Lease) -> Void], waiter: Task<Void, Never>?, evict: EvictObligation?)
             case settledEarly(Lease)
