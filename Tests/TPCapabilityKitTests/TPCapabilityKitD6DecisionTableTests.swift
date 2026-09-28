@@ -279,6 +279,31 @@ struct D6DecisionTableTests {
         #expect(scheduler.activeCount == 0)
     }
 
+    @Test("completed-nil without budget when pending expires")
+    func completedNilWithoutBudgetWhenPendingExpires() async {
+        let store = DynamicStore()
+        let missing = Capability.custom("D6NilPending_\(UUID().uuidString)")
+        let scheduler = makeScheduler(store: store)
+
+        let state = Probe()
+        let done = AsyncGate()
+        let descriptor = TaskDescriptor(requiredCapabilities: [missing], timeout: 10.0, maxRetries: 0)
+        let lease = scheduler.schedule(descriptor, taskExecution: {}, completion: { finished in
+            Task {
+                await state.record(finished)
+                done.signal()
+            }
+        })
+        scheduler.settle(lease, as: .completed(nil))
+        await done.wait()
+
+        #expect(await state.count == 1)
+        #expect(await state.lastState == .expired)
+        #expect(lease.state == .expired)
+        #expect(scheduler.pendingCount == 0)
+        #expect(scheduler.activeCount == 0)
+    }
+
     @Test("completed when pending refuses completion")
     func completedWhenPendingRefusesCompletion() async {
         let store = DynamicStore()
