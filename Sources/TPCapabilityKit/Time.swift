@@ -5,12 +5,8 @@ internal struct Deadline: Sendable {
     private let clock: Clock
 
     init(task: TaskDescriptor, default defaultTimeout: TimeInterval, clock: Clock) {
-        self.timeout = Self.resolve(task.timeout, default: defaultTimeout)
+        self.timeout = task.timeout ?? defaultTimeout
         self.clock = clock
-    }
-
-    static func resolve(_ taskTimeout: TimeInterval?, default defaultTimeout: TimeInterval) -> TimeInterval {
-        taskTimeout ?? defaultTimeout
     }
 
     func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
