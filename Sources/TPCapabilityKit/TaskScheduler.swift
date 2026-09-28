@@ -112,15 +112,31 @@ public final class TaskScheduler: @unchecked Sendable {
                 waiters: completion.map { [$0] } ?? []
             )
         }
-        if let displaced = exchanged.displaced {
-            exchanged.waiter?.cancel()
-            for waiter in exchanged.waiters {
+        deliverDisplaced(
+            displaced: exchanged.displaced,
+            waiters: exchanged.waiters,
+            waiter: exchanged.waiter,
+            evicted: exchanged.evict != nil,
+            fresh: lease
+        )
+
+        return lease
+    }
+
+    private func deliverDisplaced(
+        displaced: Lease?,
+        waiters: [(Lease) -> Void],
+        waiter: Task<Void, Never>?,
+        evicted: Bool,
+        fresh: Lease
+    ) {
+        if let displaced {
+            waiter?.cancel()
+            for waiter in waiters {
                 waiter(displaced)
             }
         }
-        if exchanged.evict != nil { concurrencyController.noteDisplaced(fresh: lease) }
-
-        return lease
+        if evicted { concurrencyController.noteDisplaced(fresh: fresh) }
     }
 
     func kickPump() {
@@ -175,13 +191,13 @@ public final class TaskScheduler: @unchecked Sendable {
             }
             switch outcome {
             case .parked(let displaced, let waiters, let waiter, let evict):
-                if let displaced {
-                    waiter?.cancel()
-                    for waiter in waiters {
-                        waiter(displaced)
-                    }
-                }
-                if evict != nil { concurrencyController.noteDisplaced(fresh: lease) }
+                deliverDisplaced(
+                    displaced: displaced,
+                    waiters: waiters,
+                    waiter: waiter,
+                    evicted: evict != nil,
+                    fresh: lease
+                )
                 kickPump()
             case .settledEarly(let settled):
                 resume(with: settled)
