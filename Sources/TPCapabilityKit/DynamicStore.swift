@@ -166,6 +166,89 @@ public final class DynamicStore: @unchecked Sendable {
 
     // MARK: - Task Execution
 
+    /// One fire policy for every entry (see `fire`): sync check-and-run or
+    /// queued schedule-and-wait. Binary and exclusive — a fire either bypasses
+    /// the waiter or goes through it — so cases, not flags.
+    public enum FirePolicy: Sendable {
+        /// Point-in-time check plus direct invocation; never queues.
+        case syncCheck
+        /// Funnels through the one shared waiter; parks under pressure.
+        case queuedWait
+    }
+
+    /// The one fire contract, stated once. The entry table on
+    /// `runIfAvailable` and the Bridge scheduling door point here instead of
+    /// restating it: sync fire (`syncCheck`) skips Lease, slot admission, and
+    /// the expiry race by construction — point-in-time `queryCapability` plus
+    /// direct invocation, with no code path to Lease, slots, or expiry;
+    /// queued waits (`queuedWait`) funnel through the one waiter
+    /// (`scheduler.scheduleAndWait`), so under slot pressure sync fire runs
+    /// while a scheduled wait parks.
+    /// Sync and async stay split — Swift concurrency forbids awaiting in a
+    /// sync body — so the policy rides two overload shapes of this one entry.
+    public func fire<T>(
+        requiring capability: Capability,
+        policy: FirePolicy,
+        task: () -> T
+    ) -> T? {
+        switch policy {
+        case .syncCheck:
+            guard queryCapability(capability) else { return nil }
+            return task()
+        case .queuedWait:
+            preconditionFailure("FirePolicy.queuedWait needs the async fire shape — await fire(_:policy:task:) — because a queued wait cannot complete synchronously.")
+        }
+    }
+
+    /// Async shape of the one fire entry: builds the single-capability
+    /// descriptor here, so both queued spellings share it, then funnels to
+    /// the descriptor shape below.
+    public func fire<T: Sendable>(
+        requiring capability: Capability,
+        timeout: TimeInterval = 5.0,
+        policy: FirePolicy,
+        task: @escaping @Sendable () async throws -> T
+    ) async -> T? {
+        await fire(
+            TaskDescriptor(requiredCapabilities: [capability], timeout: timeout),
+            policy: policy,
+            task: task
+        )
+    }
+
+    /// Async shape of the one fire entry over a full descriptor. The queued
+    /// branch is the canonical waiter path (`scheduler.scheduleAndWait`); the
+    /// sync branch is the point-in-time check plus direct invocation, with no
+    /// Lease, slot, or expiry path.
+    public func fire<T: Sendable>(
+        _ descriptor: TaskDescriptor,
+        policy: FirePolicy,
+        task: @escaping @Sendable () async throws -> T
+    ) async -> T? {
+        switch policy {
+        case .syncCheck:
+            guard descriptor.requiredCapabilities.allSatisfy({ queryCapability($0) }) else { return nil }
+            return try? await task()
+        case .queuedWait:
+            return await scheduler.scheduleAndWait(descriptor, taskExecution: task)
+        }
+    }
+
+    /// Choosing a fire entry (the one decision; Bridge comments point here).
+    ///
+    /// | When | Call |
+    /// | Check-and-run: sync fire, @objc-compatible | `runIfAvailable` |
+    /// | Schedule-and-wait: async, the one waiter | `scheduleTaskAndWait` (`runTaskWhenAvailable` is the single-capability convenience over it) |
+    ///
+    /// Bypass contract: stated once on `fire` — this entry carries the
+    /// sync-check policy.
+    public func runIfAvailable<T>(
+        requiring capability: Capability,
+        task: () -> T
+    ) -> T? {
+        fire(requiring: capability, policy: .syncCheck, task: task)
+    }
+
     /// Legacy async immediate, kept bit-identical for existing callers.
     /// Prefer the two documented entries (see `runIfAvailable`): sync
     /// check-and-run, or `scheduleTaskAndWait` for the queued waiter.
@@ -178,24 +261,7 @@ public final class DynamicStore: @unchecked Sendable {
         return try await task()
     }
 
-    /// Choosing a fire entry (the one decision; Bridge comments point here).
-    ///
-    /// | When | Call |
-    /// | Check-and-run: sync fire, @objc-compatible | `runIfAvailable` |
-    /// | Schedule-and-wait: async, the one waiter | `scheduleTaskAndWait` (`runTaskWhenAvailable` is the single-capability convenience over it) |
-    ///
-    /// Immediate entries bypass Lease, slot admission, and expiry race by contract:
-    /// fire-and-forget must not queue, so under slot pressure sync fire runs
-    /// while a scheduled wait parks.
-    public func runIfAvailable<T>(
-        requiring capability: Capability,
-        task: () -> T
-    ) -> T? {
-        guard queryCapability(capability) else { return nil }
-        return task()
-    }
-
-    /// Single-capability convenience over `scheduleTaskAndWait` (the one waiter).
+    /// Single-capability convenience over the one waiter (see `fire`).
     /// For the entry choice see `runIfAvailable`.
     /// - Parameters:
     ///   - capability: The capability required to run the task.
@@ -207,10 +273,7 @@ public final class DynamicStore: @unchecked Sendable {
         timeout: TimeInterval = 5.0,
         task: @escaping @Sendable () async throws -> T
     ) async -> T? {
-        await scheduleTaskAndWait(
-            TaskDescriptor(requiredCapabilities: [capability], timeout: timeout),
-            task: task
-        )
+        await fire(requiring: capability, timeout: timeout, policy: .queuedWait, task: task)
     }
 
     // MARK: - Task Scheduling (facade over StoreSchedulingGenerations)
@@ -252,8 +315,9 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Schedules a task and waits for its result.
-    /// Queued-style entry to the one shared Tasks waiter; `runTaskWhenAvailable`
-    /// delegates here, so both styles behave identically.
+    /// Queued-style entry to the one shared Tasks waiter (see `fire`);
+    /// `runTaskWhenAvailable` is the single-capability convenience over the
+    /// same core, so both styles behave identically.
     /// - Parameters:
     ///   - descriptor: The task descriptor.
     ///   - task: The async closure to execute.
@@ -262,7 +326,7 @@ public final class DynamicStore: @unchecked Sendable {
         _ descriptor: TaskDescriptor,
         task: @escaping @Sendable () async throws -> T
     ) async -> T? {
-        await scheduler.scheduleAndWait(descriptor, taskExecution: task)
+        await fire(descriptor, policy: .queuedWait, task: task)
     }
 
     /// Cancels a pending task by its identifier.
