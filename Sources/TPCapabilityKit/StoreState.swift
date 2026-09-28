@@ -36,6 +36,16 @@ final class StoreState: @unchecked Sendable {
         return (created, drain)
     }
 
+    private func notifyDrain(
+        waiters drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>],
+        subject: CurrentValueSubject<Any?, Never>
+    ) {
+        for waiter in drain {
+            waiter.send(subject)
+            waiter.send(completion: .finished)
+        }
+    }
+
     private func lookupOrAwaitCreation(
         pluginId: String,
         createIfMissing: Bool
@@ -64,10 +74,7 @@ final class StoreState: @unchecked Sendable {
         case .hit(let subject):
             return Just(subject).eraseToAnyPublisher()
         case .created(let subject, let drain):
-            for waiter in drain {
-                waiter.send(subject)
-                waiter.send(completion: .finished)
-            }
+            notifyDrain(waiters: drain, subject: subject)
             return Just(subject).eraseToAnyPublisher()
         case .parked(let waiter):
             return waiter
@@ -96,10 +103,7 @@ final class StoreState: @unchecked Sendable {
             }
             return insertFreshSubject(pluginId: pluginId)
         }
-        for waiter in resolved.drain {
-            waiter.send(resolved.subject)
-            waiter.send(completion: .finished)
-        }
+        notifyDrain(waiters: resolved.drain, subject: resolved.subject)
         resolved.subject.send(newState)
     }
 
