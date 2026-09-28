@@ -118,14 +118,9 @@ public final class TaskScheduler: @unchecked Sendable {
                 waiter(displaced)
             }
         }
-        drainEviction(exchanged.evict)
+        if exchanged.evict != nil { concurrencyController.noteDisplaced(fresh: lease) }
 
         return lease
-    }
-
-    private func drainEviction(_ obligation: LifecycleStore.EvictObligation?) {
-        guard let obligation else { return }
-        concurrencyController.removeWaiter(taskId: obligation.taskId, owner: obligation.owner, match: .stale)
     }
 
     func kickPump() {
@@ -186,7 +181,7 @@ public final class TaskScheduler: @unchecked Sendable {
                         waiter(displaced)
                     }
                 }
-                drainEviction(evict)
+                if evict != nil { concurrencyController.noteDisplaced(fresh: lease) }
                 kickPump()
             case .settledEarly(let settled):
                 resume(with: settled)
