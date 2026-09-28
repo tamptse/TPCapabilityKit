@@ -134,14 +134,14 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// Deprecated forwarder to the single scheduling door
     /// (`taskScheduler.runWhenAvailable`). Holds no scheduling policy of its
     /// own (see the one contract on `DynamicStore.fire`).
-    /// Delivery via `ObjcDelivery`.
+    /// Delivery via `ObjcBridgeDoor`.
     /// - Parameters:
     ///   - capability: Capability string identifier required to run the task.
     ///   - timeout: Maximum seconds to wait for the capability. Negative means
     ///     unspecified, so the scheduler Configuration default applies.
-    ///   - queue: Delivery queue (see `ObjcDelivery`).
+    ///   - queue: Delivery queue (see `ObjcBridgeDoor`).
     ///   - task: The task closure to execute. Must return an NSObject.
-    ///   - completion: Called via `ObjcDelivery` with the result, or nil if timeout.
+    ///   - completion: Called via `ObjcBridgeDoor` with the result, or nil if timeout.
     @available(*, deprecated, message: "Use taskScheduler.runWhenAvailable — the taskScheduler live view is the single scheduling door.")
     @objc public func runTaskWhenAvailable(
         capability: String,

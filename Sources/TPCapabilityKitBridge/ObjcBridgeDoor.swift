@@ -5,7 +5,7 @@ import TPCapabilityKit
 ///
 /// Single statement of the given-or-main contract: every Bridge completion
 /// arrives on the given queue when supplied, or the main queue when omitted.
-/// `.givenOrMain` is the live default (calls `ObjcDelivery.on`); `.immediate`
+/// `.givenOrMain` is the live default; `.immediate`
 /// runs inline for tests that assert delivery without a live Store or a
 /// main-queue pump. The policy never crosses `@objc` — it rides default args
 /// on the internal door core, so no `@objc` signature changes.
@@ -13,7 +13,7 @@ struct ObjcQueuePolicy: Sendable {
     var deliver: @Sendable (DispatchQueue?, @escaping @Sendable () -> Void) -> Void
 
     static var givenOrMain: Self {
-        Self { queue, work in ObjcDelivery.on(queue, execute: work) }
+        Self { queue, work in (queue ?? .main).async(execute: work) }
     }
 
     static var immediate: Self {
@@ -23,12 +23,12 @@ struct ObjcQueuePolicy: Sendable {
 
 /// The single scheduling door behind the Bridge.
 ///
-/// Owns descriptor translation, the capability-spelling descriptor build, the
+/// Owns the capability-spelling descriptor build, the
 /// one delivery core for every value-returning wait, the schedule-completion
 /// hop, the subscribe sink-boxing, and detach-adapter construction. Callers
 /// build at most the ObjC-shaped arguments then delegate here, so the
 /// given-or-main hop and the sync-vs-wait agreement each live in exactly one
-/// place. Timeout compat stays on the `ObjcTimeout` fork — `translate` passes
+/// place. Timeout compat stays on the `ObjcTimeout` fork — callers pass
 /// `underlying` through without inspecting timeout.
 enum ObjcBridgeDoor {
     /// Id-carrying adapter for the detach path. Store detach reads only the
@@ -37,12 +37,6 @@ enum ObjcBridgeDoor {
     struct BridgeDetachAdapter: AppPlugin {
         let id: String
         func start(with store: DynamicStore) {}
-    }
-
-    /// Descriptor translation passthrough (via the underlying descriptor; no
-    /// timeout inspection).
-    static func translate(_ descriptor: ObjcTaskDescriptor) -> TaskDescriptor {
-        descriptor.underlying
     }
 
     /// Capability-spelling build inside the door: constructs the descriptor
@@ -60,7 +54,7 @@ enum ObjcBridgeDoor {
     ) {
         waitThenRun(
             store: store,
-            descriptor: translate(ObjcTaskDescriptor(capabilities: [capability], timeout: timeout)),
+            descriptor: ObjcTaskDescriptor(capabilities: [capability], timeout: timeout).underlying,
             queue: queue,
             task: task,
             completion: completion,

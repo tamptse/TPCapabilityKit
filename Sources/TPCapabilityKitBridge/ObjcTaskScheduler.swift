@@ -66,7 +66,7 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
     ) {
         ObjcBridgeDoor.waitThenRun(
             store: store,
-            descriptor: ObjcBridgeDoor.translate(descriptor),
+            descriptor: descriptor.underlying,
             queue: queue,
             task: task,
             completion: completion
