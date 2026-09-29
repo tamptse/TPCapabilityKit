@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 extension DynamicStore {
-    // MARK: - Task Execution
+    // MARK: - Fire core (one funnel; contract stated once)
 
     /// The one fire contract, stated once. The entry table on
     /// `runIfAvailable` and the Bridge scheduling door point here instead of
@@ -14,9 +14,14 @@ extension DynamicStore {
     /// while a scheduled wait parks.
     /// Sync and async stay split — Swift concurrency forbids awaiting in a
     /// sync body — so sync-check and queued-wait ride two overload shapes of
-    /// this one entry. No policy value travels: the shape decides, so the
+    /// this one core. No policy value travels: the shape decides, so the
     /// crashing sync-plus-queued combination is unrepresentable.
-    public func fire<T>(
+    /// Package, not public: the documented entries are `runIfAvailable`
+    /// (sync check-and-run) and `scheduleTaskAndWait` (async
+    /// schedule-and-wait) plus the `runTaskWhenAvailable` single-capability
+    /// convenience; the Bridge door lives in this package, so it funnels
+    /// through this core directly.
+    package func fire<T>(
         requiring capability: Capability,
         task: () -> T
     ) -> T? {
@@ -24,10 +29,10 @@ extension DynamicStore {
         return task()
     }
 
-    /// Async shape of the one fire entry: builds the single-capability
+    /// Async shape of the one fire core: builds the single-capability
     /// descriptor here, so both queued spellings share it, then funnels to
     /// the descriptor shape below.
-    public func fire<T: Sendable>(
+    package func fire<T: Sendable>(
         requiring capability: Capability,
         timeout: TimeInterval = 5.0,
         task: @escaping @Sendable () async throws -> T
@@ -38,16 +43,18 @@ extension DynamicStore {
         )
     }
 
-    /// Async shape of the one fire entry over a full descriptor: the canonical
+    /// Async shape of the one fire core over a full descriptor: the canonical
     /// waiter path (`scheduler.scheduleAndWait`), with no Lease, slot, or
     /// expiry bypass — async callers needing a point-in-time check use the
     /// sync shape above.
-    public func fire<T: Sendable>(
+    package func fire<T: Sendable>(
         _ descriptor: TaskDescriptor,
         task: @escaping @Sendable () async throws -> T
     ) async -> T? {
         await scheduler.scheduleAndWait(descriptor, taskExecution: task)
     }
+
+    // MARK: - Fire entries (the two documented spellings + convenience)
 
     /// Choosing a fire entry (the one decision; Bridge comments point here).
     ///
@@ -64,18 +71,6 @@ extension DynamicStore {
         fire(requiring: capability, task: task)
     }
 
-    /// Legacy async immediate, kept bit-identical for existing callers.
-    /// Prefer the two documented entries (see `runIfAvailable`): sync
-    /// check-and-run, or `scheduleTaskAndWait` for the queued waiter.
-    @available(*, deprecated, message: "Use runIfAvailable(requiring:task:) for sync check-and-run, or scheduleTaskAndWait for the queued waiter.")
-    public func runTask<T>(
-        requiring capability: Capability,
-        task: () async throws -> T
-    ) async rethrows -> T? {
-        guard queryCapability(capability) else { return nil }
-        return try await task()
-    }
-
     /// Single-capability convenience over the one waiter (see `fire`).
     /// For the entry choice see `runIfAvailable`.
     /// - Parameters:
@@ -89,5 +84,21 @@ extension DynamicStore {
         task: @escaping @Sendable () async throws -> T
     ) async -> T? {
         await fire(requiring: capability, timeout: timeout, task: task)
+    }
+
+    // MARK: - Legacy (thin alias only, no logic of its own)
+
+    /// Legacy async immediate, kept bit-identical for existing callers.
+    /// Thin alias only: the availability check funnels through the sync shape
+    /// of the one core, then the caller's async closure runs directly.
+    /// Prefer the two documented entries (see `runIfAvailable`): sync
+    /// check-and-run, or `scheduleTaskAndWait` for the queued waiter.
+    @available(*, deprecated, message: "Use runIfAvailable(requiring:task:) for sync check-and-run, or scheduleTaskAndWait for the queued waiter.")
+    public func runTask<T>(
+        requiring capability: Capability,
+        task: () async throws -> T
+    ) async rethrows -> T? {
+        guard fire(requiring: capability, task: {}) != nil else { return nil }
+        return try await task()
     }
 }
