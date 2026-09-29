@@ -38,6 +38,20 @@ final class StoreState: @unchecked Sendable {
         return insertFreshSubject(pluginId: pluginId)
     }
 
+    // Cancel identity-remove plus empty-list clear. Call only with `lock` held.
+    private func removeWaiterLocked(
+        pluginId: String,
+        waiter: PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>
+    ) {
+        guard var list = waiters[pluginId] else { return }
+        list.removeAll(where: { $0 === waiter })
+        if list.isEmpty {
+            waiters.removeValue(forKey: pluginId)
+        } else {
+            waiters[pluginId] = list
+        }
+    }
+
     private func notifyDrain(
         waiters drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>],
         subject: CurrentValueSubject<Any?, Never>
@@ -88,14 +102,7 @@ final class StoreState: @unchecked Sendable {
                 .handleEvents(receiveCancel: { [weak self, weak waiter] in
                     guard let self, let waiter else { return }
                     self.lock.withLock {
-                        if var list = self.waiters[pluginId] {
-                            list.removeAll(where: { $0 === waiter })
-                            if list.isEmpty {
-                                self.waiters.removeValue(forKey: pluginId)
-                            } else {
-                                self.waiters[pluginId] = list
-                            }
-                        }
+                        self.removeWaiterLocked(pluginId: pluginId, waiter: waiter)
                     }
                 })
                 .eraseToAnyPublisher()
