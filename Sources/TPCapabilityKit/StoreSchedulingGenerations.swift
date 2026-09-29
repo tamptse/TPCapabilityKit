@@ -63,6 +63,10 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
 
     func cancel(taskId: String) {
         let snapshot = lock.withLock { generations }
+        fanOutCancel(taskId: taskId, to: snapshot)
+    }
+
+    private func fanOutCancel(taskId: String, to snapshot: [TaskScheduler]) {
         for generation in snapshot {
             generation.cancel(taskId: taskId)
         }
