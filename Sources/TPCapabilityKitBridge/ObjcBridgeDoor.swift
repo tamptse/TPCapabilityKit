@@ -23,13 +23,13 @@ struct ObjcQueuePolicy: Sendable {
 
 /// The single scheduling door behind the Bridge.
 ///
-/// Owns the capability-spelling descriptor build, the
-/// one delivery core for every value-returning wait, the schedule-completion
-/// hop, the subscribe sink-boxing, and detach-adapter construction. Callers
-/// build at most the ObjC-shaped arguments then delegate here, so the
-/// given-or-main hop and the sync-vs-wait agreement each live in exactly one
-/// place. Timeout compat stays on the `ObjcTimeout` fork — callers pass
-/// `underlying` through without inspecting timeout.
+/// Owns the capability-spelling descriptor build, the one value-returning wait
+/// core (no queue knowledge), the one delivery hop (no Store knowledge), and
+/// detach-adapter construction. Callers build at most the ObjC-shaped
+/// arguments then delegate here, so the given-or-main hop and the sync-vs-wait
+/// agreement each live in exactly one place. Timeout compat stays on the
+/// `ObjcTimeout` fork — callers pass `underlying` through without inspecting
+/// timeout.
 enum ObjcBridgeDoor {
     /// Id-carrying adapter for the detach path. Store detach reads only the
     /// Plugin id, so this is behaviorally identical to the registration-time
@@ -62,7 +62,10 @@ enum ObjcBridgeDoor {
         )
     }
 
-    /// The one delivery core for every value-returning wait behind the Bridge.
+    /// The one value-returning wait entry behind the Bridge. Thin composition
+    /// over the wait core plus the one hop below: capability-spelling callers
+    /// funnel through this descriptor spelling, which funnels through the
+    /// core, so the two wait spellings cannot diverge.
     /// Queued-wait half of the one contract on `DynamicStore.fire` (see it for
     /// the sync-vs-wait agreement); results hop via the injected policy.
     static func waitThenRun(
@@ -76,22 +79,44 @@ enum ObjcBridgeDoor {
         let taskBox = ObjcCallbackBox(task)
         let completionBox = ObjcCallbackBox(completion)
         Task {
-            let result: NSObject? = await store.scheduleTaskAndWait(descriptor) {
-                taskBox.value()
-            }
-            policy.deliver(queue) {
+            let result = await waitCore(store: store, descriptor: descriptor, taskBox: taskBox)
+            hop(queue: queue, policy: policy) {
                 completionBox.value(result)
             }
         }
     }
 
-    /// Schedule-completion hop behind the door (same policy, same contract).
+    /// Wait core: the one value-returning wait for every Bridge wait spelling.
+    /// No queue knowledge — no queue, no policy, no delivery. Returns the
+    /// task result (or nil on timeout) for the hop to deliver.
+    private static func waitCore(
+        store: DynamicStore,
+        descriptor: TaskDescriptor,
+        taskBox: ObjcCallbackBox<() -> NSObject>
+    ) async -> NSObject? {
+        await store.scheduleTaskAndWait(descriptor) {
+            taskBox.value()
+        }
+    }
+
+    /// Delivery hop: the one given-or-main crossing for schedule completions,
+    /// wait completions, and subscribe values. No Store knowledge — only the
+    /// injected policy decides the queue.
+    private static func hop(
+        queue: DispatchQueue?,
+        policy: ObjcQueuePolicy,
+        work: @escaping @Sendable () -> Void
+    ) {
+        policy.deliver(queue, work)
+    }
+
+    /// Schedule-completion hop behind the door (same hop, same contract).
     static func deliverScheduleCompletion(
         queue: DispatchQueue?,
         policy: ObjcQueuePolicy = .givenOrMain,
         work: @escaping @Sendable () -> Void
     ) {
-        policy.deliver(queue, work)
+        hop(queue: queue, policy: policy, work: work)
     }
 
     /// Subscribe sink-boxing behind the door: boxes the observer once, hops
@@ -121,7 +146,7 @@ enum ObjcBridgeDoor {
     ) -> (T) -> Void {
         let observerBox = ObjcCallbackBox(observer)
         return { value in
-            policy.deliver(queue) {
+            hop(queue: queue, policy: policy) {
                 observerBox.value(value)
             }
         }
