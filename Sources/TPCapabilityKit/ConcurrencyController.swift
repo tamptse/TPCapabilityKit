@@ -1,6 +1,6 @@
 import Foundation
 
-/// Concurrency limiter keyed by Capability sets, holders owned by task identity.
+/// Concurrency limiter keyed by Capability sets, holders owned by Lease identity.
 /// Sole admission seam is `withHold(for:_:)` owning admission, first-fit FIFO
 /// wake order with skip, cancellable wait, and scope-exit release with the identity guard inside
 /// derived from the Lease so a displaced-active row's stale scope-exit cannot
@@ -18,7 +18,7 @@ final class ConcurrencyController: @unchecked Sendable {
     private let lock = NSLock()
     private var capabilitySlots: [Capability: Int] = [:]
     private var globalSlots: Int = 0
-    private var heldKeys: [String: (keys: Set<Capability>, owner: ObjectIdentifier)] = [:]
+    private var heldKeys: [ObjectIdentifier: (taskId: String, keys: Set<Capability>)] = [:]
     private struct Waiter: Sendable {
         let keys: Set<Capability>
         let taskId: String
@@ -107,7 +107,7 @@ final class ConcurrencyController: @unchecked Sendable {
     /// a Lease parks at most once across both collections. Call only with
     /// `lock` held.
     private func isDuplicate(owner: ObjectIdentifier) -> Bool {
-        heldKeys.values.contains(where: { $0.owner == owner })
+        heldKeys[owner] != nil
             || waiters.contains(where: { $0.owner == owner })
     }
 
@@ -206,7 +206,7 @@ final class ConcurrencyController: @unchecked Sendable {
         for cap in keys {
             capabilitySlots[cap, default: 0] += 1
         }
-        heldKeys[taskId] = (keys, owner)
+        heldKeys[owner] = (taskId: taskId, keys: keys)
     }
 
     /// Single accounting remove behind the release seam: drops all three
@@ -215,8 +215,8 @@ final class ConcurrencyController: @unchecked Sendable {
     /// Returns the released keys when the owner matches, nil otherwise.
     /// Call only with `lock` held.
     private func removeHolding(taskId: String, owner: ObjectIdentifier) -> Set<Capability>? {
-        guard let held = heldKeys[taskId], held.owner == owner else { return nil }
-        heldKeys.removeValue(forKey: taskId)
+        guard let held = heldKeys[owner], held.taskId == taskId else { return nil }
+        heldKeys.removeValue(forKey: owner)
         globalSlots = max(0, globalSlots - 1)
         for cap in held.keys {
             capabilitySlots[cap] = max(0, (capabilitySlots[cap] ?? 1) - 1)
