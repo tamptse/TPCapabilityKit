@@ -1,8 +1,13 @@
 import Foundation
 
+/// Single-expiry owner: timeout resolves once at init; waiter + executor share one race.
 internal struct Deadline: Sendable {
     let timeout: TimeInterval
     private let clock: Clock
+
+    private struct Box: @unchecked Sendable {
+        let value: Any?
+    }
 
     init(task: TaskDescriptor, default defaultTimeout: TimeInterval, clock: Clock) {
         self.timeout = task.timeout ?? defaultTimeout
@@ -16,9 +21,6 @@ internal struct Deadline: Sendable {
     func raceValue(operation: @Sendable @escaping () async -> Any?) async -> Any?? {
         let timeout = self.timeout
         let clock = self.clock
-        struct Box: @unchecked Sendable {
-            let value: Any?
-        }
         return await withTaskGroup(of: Box?.self) { group in
             group.addTask {
                 let value = await operation()
