@@ -46,6 +46,11 @@ final class StoreState: @unchecked Sendable {
         }
     }
 
+    // Single coercion policy for the typed edge: a wrong-typed value reads as absent.
+    private static func coerce<T>(_ value: Any?, to type: T.Type) -> T? {
+        value as? T
+    }
+
     private func lookupOrAwaitCreation(
         pluginId: String,
         createIfMissing: Bool
@@ -116,7 +121,7 @@ final class StoreState: @unchecked Sendable {
                 #endif
                 return nil
             }
-            guard let value = subject.value as? T else {
+            guard let value = Self.coerce(subject.value, to: type) else {
                 #if DEBUG
                 print("[DynamicStore] Warning: Type mismatch for plugin '\(pluginId)': expected \(T.self)")
                 #endif
@@ -143,7 +148,7 @@ final class StoreState: @unchecked Sendable {
                 return Empty(completeImmediately: true).eraseToAnyPublisher()
             }
             return self.lookupOrAwaitCreation(pluginId: pluginId, createIfMissing: false)
-                .map { $0.compactMap { $0 as? T }.eraseToAnyPublisher() }
+                .map { $0.compactMap { Self.coerce($0, to: type) }.eraseToAnyPublisher() }
                 .switchToLatest()
                 .eraseToAnyPublisher()
         }
