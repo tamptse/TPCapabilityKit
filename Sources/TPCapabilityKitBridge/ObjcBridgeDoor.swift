@@ -5,7 +5,7 @@ import TPCapabilityKit
 ///
 /// Single statement of the given-or-main contract: every Bridge completion
 /// arrives on the given queue when supplied, or the main queue when omitted.
-/// `.givenOrMain` is the live default; `.immediate`
+/// `.givenOrMain` is the sole prod contract; `.immediate` is test-only and
 /// runs inline for tests that assert delivery without a live Store or a
 /// main-queue pump. The policy never crosses `@objc` — it rides default args
 /// on the internal door core, so no `@objc` signature changes.
@@ -16,6 +16,8 @@ struct ObjcQueuePolicy: Sendable {
         Self { queue, work in (queue ?? .main).async(execute: work) }
     }
 
+    /// Test-only inline delivery without a queue hop. Prod uses `.givenOrMain`.
+    @available(*, deprecated, message: "Test-only: runs inline without a queue hop. Prod uses givenOrMain.")
     static var immediate: Self {
         Self { _, work in work() }
     }
@@ -24,13 +26,39 @@ struct ObjcQueuePolicy: Sendable {
 /// The single scheduling door behind the Bridge.
 ///
 /// Owns the capability-spelling descriptor build, the one value-returning wait
-/// core (no queue knowledge), the one delivery hop (no Store knowledge), and
-/// detach-adapter construction. Callers build at most the ObjC-shaped
+/// core (no queue knowledge), and detach-adapter construction. Queue policy +
+/// Sendable boxing live in the delivery Adapter below; the door orchestrates
+/// only (wait core, then Adapter hop). Callers build at most the ObjC-shaped
 /// arguments then delegate here, so the given-or-main hop and the sync-vs-wait
 /// agreement each live in exactly one place. Timeout compat stays on the
 /// `ObjcTimeout` fork — callers pass `underlying` through without inspecting
 /// timeout.
 enum ObjcBridgeDoor {
+    /// Delivery Adapter: the one owner of queue policy + Sendable boxing.
+    /// No Store knowledge — only the injected policy decides the queue, and
+    /// observers are boxed once via `ObjcCallbackBox` then hopped per value.
+    /// The door orchestrates through this Adapter; callers stay thin
+    /// translators over the door.
+    private struct DeliveryAdapter: Sendable {
+        let policy: ObjcQueuePolicy
+
+        func deliver(queue: DispatchQueue?, work: @escaping @Sendable () -> Void) {
+            policy.deliver(queue, work)
+        }
+
+        func boxedSink<T: Sendable>(
+            queue: DispatchQueue?,
+            observer: @escaping (T) -> Void
+        ) -> (T) -> Void {
+            let observerBox = ObjcCallbackBox(observer)
+            return { value in
+                deliver(queue: queue) {
+                    observerBox.value(value)
+                }
+            }
+        }
+    }
+
     /// Id-carrying adapter for the detach path. Store detach reads only the
     /// Plugin id, so this is behaviorally identical to the registration-time
     /// adapter with no `start` side effect.
@@ -101,13 +129,13 @@ enum ObjcBridgeDoor {
 
     /// Delivery hop: the one given-or-main crossing for schedule completions,
     /// wait completions, and subscribe values. No Store knowledge — only the
-    /// injected policy decides the queue.
+    /// injected policy decides the queue. Delegates to the delivery Adapter.
     private static func hop(
         queue: DispatchQueue?,
         policy: ObjcQueuePolicy,
         work: @escaping @Sendable () -> Void
     ) {
-        policy.deliver(queue, work)
+        DeliveryAdapter(policy: policy).deliver(queue: queue, work: work)
     }
 
     /// Schedule-completion hop behind the door (same hop, same contract).
@@ -144,12 +172,7 @@ enum ObjcBridgeDoor {
         policy: ObjcQueuePolicy,
         observer: @escaping (T) -> Void
     ) -> (T) -> Void {
-        let observerBox = ObjcCallbackBox(observer)
-        return { value in
-            hop(queue: queue, policy: policy) {
-                observerBox.value(value)
-            }
-        }
+        DeliveryAdapter(policy: policy).boxedSink(queue: queue, observer: observer)
     }
 
     /// Detach-adapter construction behind the door, so the store-bridge
