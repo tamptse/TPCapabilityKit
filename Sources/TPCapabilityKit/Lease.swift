@@ -13,8 +13,9 @@ import Foundation
 /// completed/failed staying active-only is intentional, not a missing case.
 /// - Important: `@unchecked Sendable` is intentional — all mutations
 ///   (`activate`, `terminalize`, `beginRetry`) are `internal` and only
-///   called by the lifecycle table's single transition, which pairs each
-///   mutation with its row write under the scheduler lock. Never call them
+///   called by the lifecycle table seam only — `transition(for:to:)` plus the
+///   fused displace core in `insert` (takeRow + terminalize(.expired)) — which
+///   pairs each mutation with its row write under the scheduler lock. Never call them
 ///   directly from a new path. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
     /// State of the lease.
@@ -68,7 +69,7 @@ public final class Lease: @unchecked Sendable {
 
     /// Marks the lease as active (task started executing).
     /// Legal only from pending; all other states are no-ops per the contract above.
-    func activate() {
+    internal func activate() {
         guard isPending else { return }
         state = .active
         activatedAt = Date()
@@ -80,14 +81,14 @@ public final class Lease: @unchecked Sendable {
     /// `cancelled` stays input-only and maps to `.expired` at the single settle
     /// site. `Settlement.failed` carries no `Error`; the single transition
     /// mints the fresh execution error when applying `.failed`.
-    enum Terminal {
+    internal enum Terminal {
         case completed(Any?)
         case failed(Error)
         case expired
     }
 
     /// Sole terminal writer; Settlement is the only caller.
-    func terminalize(_ terminal: Terminal) {
+    internal func terminalize(_ terminal: Terminal) {
         switch terminal {
         case .completed(let result):
             guard isActive else { return }
@@ -114,7 +115,7 @@ public final class Lease: @unchecked Sendable {
     /// Resets to pending for another attempt and consumes one retry.
     /// Infallible primitive; callers check `canRetry` before calling.
     /// Clears `result`, `activatedAt`, and `completedAt` per the contract above.
-    func beginRetry() {
+    internal func beginRetry() {
         retryCount += 1
         state = .pending
         activatedAt = nil

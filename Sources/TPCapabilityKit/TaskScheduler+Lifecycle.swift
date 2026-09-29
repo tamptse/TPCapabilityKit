@@ -177,6 +177,13 @@ extension TaskScheduler {
         /// (including dequeue-to-parked, wake, activate, retry, terminal),
         /// row-take, and dequeue-next are the only writers; Path is the only
         /// flow reader.
+        private func liveRow(for lease: Lease) -> LifecycleRow? {
+            guard !lease.isTerminal, let row = rows[lease.task.id], row.lease === lease else {
+                return nil
+            }
+            return row
+        }
+
         mutating func transition(for lease: Lease, to target: Transition) -> TransitionResult? {
             switch target {
             case .dequeueToParked:
@@ -196,7 +203,7 @@ extension TaskScheduler {
                 rows[lease.task.id] = row
                 return .woken
             case .activate:
-                guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
+                guard var row = liveRow(for: lease) else {
                     return nil
                 }
                 move(from: row.place, to: .active)
@@ -205,7 +212,7 @@ extension TaskScheduler {
                 rows[lease.task.id] = row
                 return .activated
             case .retry(let execution):
-                guard !lease.isTerminal, var row = rows[lease.task.id], row.lease === lease else {
+                guard var row = liveRow(for: lease) else {
                     return nil
                 }
                 lease.beginRetry()
@@ -218,7 +225,7 @@ extension TaskScheduler {
                 orderIndex.enqueue(id: lease.task.id, priority: lease.task.priority)
                 return .retried
             case .terminal(let terminal):
-                guard !lease.isTerminal, let row = rows[lease.task.id], row.lease === lease else {
+                guard liveRow(for: lease) != nil else {
                     return nil
                 }
                 guard let taken = takeRow(for: lease) else { return nil }
