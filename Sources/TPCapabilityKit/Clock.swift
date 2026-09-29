@@ -2,14 +2,16 @@ import Foundation
 
 /// Time module: live + virtual behind one sleep seam.
 ///
-/// The adapter starts live — `sleep` suspends on real time — with one allowed pre-use promotion:
-/// `enableDeterministic` swaps live for virtual exactly once before first
-/// use, after which the adapter never changes and is never threaded per call.
-/// `sleep` is the single seam the waiter and the executor share through
-/// the shared race: virtual sleep parks on the deterministic registry until
-/// `advance` expires it. Advancing wakes only expired waiters, never loses or
-/// duplicates a wakeup, and `waitForWaiters` preserves the adapter gate the
-/// advance/wait rendezvous tests synchronize on.
+/// Prod surface is `sleep` (plus deterministic `advance` drive): the waiter
+/// and the executor share `sleep` through the shared race; virtual sleep
+/// parks on the deterministic registry until `advance` expires it. Advancing
+/// wakes only expired waiters, never loses or duplicates a wakeup.
+///
+/// K4-02 test-Adapter split (deferred, no logic change): `waiterCount` /
+/// `waitForWaiters` are test-only registration rendezvous slated to move onto
+/// a test Adapter. They stay on Clock for now because deterministic tests use
+/// Clock directly and StoreSchedulingGenerations forwards through Clock;
+/// removing them here would break those callers. Prod must not depend on them.
 final class Clock: @unchecked Sendable {
     private let lock = NSLock()
     private var virtual: VirtualTime?
