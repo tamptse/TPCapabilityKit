@@ -234,6 +234,123 @@ struct BridgeDeliveryUnifyTests {
         #expect(view.pendingCount == 0)
         #expect(view.activeCount == 0)
     }
+
+    @Test func injectedRecordingSharesHopAndAgrees() async {
+        final class HopLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var targets: [DispatchQueue] = []
+            func record(_ queue: DispatchQueue) { lock.withLock { targets.append(queue) } }
+            var last: DispatchQueue? { lock.withLock { targets.last } }
+            var count: Int { lock.withLock { targets.count } }
+        }
+        final class DidRun: @unchecked Sendable {
+            private let lock = NSLock()
+            private var ran = false
+            func set() { lock.withLock { ran = true } }
+            var value: Bool { lock.withLock { ran } }
+        }
+        final class TextBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var text: String?
+            func set(_ value: String?) { lock.withLock { text = value } }
+            var value: String? { lock.withLock { text } }
+        }
+        let log = HopLog()
+        let recording = ObjcQueuePolicy { queue, work in
+            log.record(queue ?? .main)
+            work()
+        }
+        let given = DispatchQueue(label: "delivery.injected.\(UUID().uuidString)")
+
+        let scheduleGivenDidRun = DidRun()
+        ObjcBridgeDoor.deliverScheduleCompletion(queue: given, policy: recording) {
+            scheduleGivenDidRun.set()
+        }
+        #expect(scheduleGivenDidRun.value)
+        #expect(log.last === given)
+
+        let scheduleOmittedDidRun = DidRun()
+        ObjcBridgeDoor.deliverScheduleCompletion(queue: nil, policy: recording) {
+            scheduleOmittedDidRun.set()
+        }
+        #expect(scheduleOmittedDidRun.value)
+        #expect(log.last === DispatchQueue.main)
+
+        let stateGivenDidRun = DidRun()
+        let stateGivenSink = ObjcBridgeDoor.subscribeSink(queue: given, policy: recording) { _ in
+            stateGivenDidRun.set()
+        }
+        stateGivenSink(nil)
+        #expect(stateGivenDidRun.value)
+        #expect(log.last === given)
+
+        let stateOmittedDidRun = DidRun()
+        let stateOmittedSink = ObjcBridgeDoor.subscribeSink(queue: nil, policy: recording) { _ in
+            stateOmittedDidRun.set()
+        }
+        stateOmittedSink(nil)
+        #expect(stateOmittedDidRun.value)
+        #expect(log.last === DispatchQueue.main)
+
+        let capGivenDidRun = DidRun()
+        let capGivenSink = ObjcBridgeDoor.subscribeCapabilitySink(queue: given, policy: recording) { _ in
+            capGivenDidRun.set()
+        }
+        capGivenSink(true)
+        #expect(capGivenDidRun.value)
+        #expect(log.last === given)
+
+        let capOmittedDidRun = DidRun()
+        let capOmittedSink = ObjcBridgeDoor.subscribeCapabilitySink(queue: nil, policy: recording) { _ in
+            capOmittedDidRun.set()
+        }
+        capOmittedSink(true)
+        #expect(capOmittedDidRun.value)
+        #expect(log.last === DispatchQueue.main)
+
+        let store = DynamicStore()
+        let pluginId = "InjectedVerify_\(UUID().uuidString)"
+        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        let syncResult = store.runIfAvailable(requiring: .heavyTask) { NSString(string: "ok") }
+        #expect((syncResult as? String) == "ok")
+
+        let descriptor = TaskDescriptor(requiredCapabilities: [.heavyTask], timeout: 5.0)
+        let descriptorBox = TextBox()
+        await withCheckedContinuation { continuation in
+            ObjcBridgeDoor.waitThenRun(
+                store: store, descriptor: descriptor, queue: given,
+                task: { NSString(string: "ok") },
+                completion: { result in
+                    descriptorBox.set(result as? String)
+                    continuation.resume()
+                },
+                policy: recording
+            )
+        }
+        #expect(descriptorBox.value == "ok")
+        #expect(log.last === given)
+
+        let capabilityBox = TextBox()
+        await withCheckedContinuation { continuation in
+            ObjcBridgeDoor.waitThenRun(
+                store: store, capability: "heavyTask", timeout: 5.0, queue: nil,
+                task: { NSString(string: "ok") },
+                completion: { result in
+                    capabilityBox.set(result as? String)
+                    continuation.resume()
+                },
+                policy: recording
+            )
+        }
+        #expect(capabilityBox.value == "ok")
+        #expect(log.last === DispatchQueue.main)
+
+        #expect(descriptorBox.value == capabilityBox.value)
+        #expect(descriptorBox.value == (syncResult as? String))
+        #expect(log.count == 8)
+    }
 }
 
 private final class DeliveryQueueIdentity: @unchecked Sendable {
