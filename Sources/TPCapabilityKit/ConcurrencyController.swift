@@ -33,7 +33,8 @@ final class ConcurrencyController: @unchecked Sendable {
     /// (first-fit FIFO with skip). A skipped head keeps its place and is
     /// re-evaluated on every later consideration, so skipping delays but
     /// never strands it. Admitted waiters resume outside the lock as an
-    /// arrival-ordered batch.
+    /// arrival-ordered batch. Fairness is proven with distinct task
+    /// identities; same-id repeats are an eviction concern, not admission.
     private var waiters: [Waiter] = []
 
     init(maxPerCapability: Int? = 5, maxGlobal: Int? = 20) {
