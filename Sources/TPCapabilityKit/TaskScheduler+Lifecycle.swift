@@ -92,11 +92,28 @@ extension TaskScheduler {
             snapshot = Self.nextCounts(snapshot, from: from, to: to)
         }
 
+        // Single locked insert seam: fresh insert plus same-id displace live
+        // here so no half-displaced id is observable. Displaced lease
+        // terminalizes with its row removal; waiters plus park waiter return
+        // for outside-lock delivery and cancel. Slot stale-evict stays after
+        // on its own lock, never nested.
         private mutating func insert(
             lease: Lease,
             execution: (@Sendable () async -> Any?)?,
             waiters: [(Lease) -> Void]
-        ) {
+        ) -> ExchangeResult {
+            var result = ExchangeResult(displaced: nil, waiters: [], waiter: nil, evict: nil)
+            if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal,
+                let taken = takeRow(for: row.lease)
+            {
+                taken.lease.terminalize(.expired)
+                result = ExchangeResult(
+                    displaced: taken.lease,
+                    waiters: taken.waiters,
+                    waiter: taken.waiter,
+                    evict: EvictObligation(taskId: lease.task.id, owner: ObjectIdentifier(lease))
+                )
+            }
             let old = rows[lease.task.id]?.place
             rows[lease.task.id] = LifecycleRow(
                 lease: lease,
@@ -108,12 +125,9 @@ extension TaskScheduler {
             )
             orderIndex.enqueue(id: lease.task.id, priority: lease.task.priority)
             move(from: old, to: .pending)
+            return result
         }
 
-        // Single locked displace-plus-insert so no half-displaced id is observable.
-        // Displaced lease terminalizes here with its row removal; waiters plus
-        // park waiter return for outside-lock delivery and cancel. Slot
-        // stale-evict stays after on its own lock, never nested.
         struct EvictObligation: Sendable {
             let taskId: String
             let owner: ObjectIdentifier
@@ -126,27 +140,13 @@ extension TaskScheduler {
             let evict: EvictObligation?
         }
 
+        // Enqueue entry kept for its caller; forwards to the single seam.
         mutating func exchange(
             lease: Lease,
             execution: (@Sendable () async -> Any?)?,
             waiters: [(Lease) -> Void]
         ) -> ExchangeResult {
-            if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal {
-                guard let taken = takeRow(for: row.lease) else {
-                    insert(lease: lease, execution: execution, waiters: waiters)
-                    return ExchangeResult(displaced: nil, waiters: [], waiter: nil, evict: nil)
-                }
-                taken.lease.terminalize(.expired)
-                insert(lease: lease, execution: execution, waiters: waiters)
-                return ExchangeResult(
-                    displaced: taken.lease,
-                    waiters: taken.waiters,
-                    waiter: taken.waiter,
-                    evict: EvictObligation(taskId: lease.task.id, owner: ObjectIdentifier(lease))
-                )
-            }
             insert(lease: lease, execution: execution, waiters: waiters)
-            return ExchangeResult(displaced: nil, waiters: [], waiter: nil, evict: nil)
         }
 
         func lease(for id: String) -> Lease? {
@@ -246,7 +246,7 @@ extension TaskScheduler {
             waiter: @escaping (Lease) -> Void
         ) -> ScheduleWaitRendezvousOutcome {
             if lease.isTerminal { return .settledEarly(lease) }
-            let result = exchange(lease: lease, execution: execution, waiters: [waiter])
+            let result = insert(lease: lease, execution: execution, waiters: [waiter])
             guard let fresh = rows[lease.task.id], fresh.lease === lease else {
                 return .settledEarly(lease)
             }
