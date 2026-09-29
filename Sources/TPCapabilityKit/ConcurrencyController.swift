@@ -18,9 +18,12 @@ final class ConcurrencyController: @unchecked Sendable {
     private let lock = NSLock()
     private var capabilitySlots: [Capability: Int] = [:]
     private var globalSlots: Int = 0
+    /// Owner-keyed hold; taskId rides along as waiter-side eviction index only,
+    /// never as a held-release lookup.
     private var heldKeys: [ObjectIdentifier: (taskId: String, keys: Set<Capability>)] = [:]
     private struct Waiter: Sendable {
         let keys: Set<Capability>
+        /// Waiter-side eviction index only; held release never looks up by taskId.
         let taskId: String
         let owner: ObjectIdentifier
         let resume: @Sendable (Bool) -> Void
@@ -85,7 +88,8 @@ final class ConcurrencyController: @unchecked Sendable {
         }
     }
 
-    /// Newcomers never overtake queued waiters.
+    /// Newcomers never overtake queued waiters: the waiters.isEmpty gate forces
+    /// parking behind any queued waiter even when capacity is free.
     private func park(
         _ lease: Lease,
         resume: @Sendable @escaping (Bool) -> Void
@@ -119,6 +123,7 @@ final class ConcurrencyController: @unchecked Sendable {
     /// Single waiter-eviction primitive: removes at most one queued waiter
     /// under `taskId` and resumes it with false outside the lock.
     /// Stale evicts a waiter owned by someone else; self evicts our own wait.
+    /// TaskId is waiter-side index only; absent match no-ops.
     /// Slot-only: touches no Lease, no row, no lifecycle transition.
     private func removeWaiter(taskId: String, owner: ObjectIdentifier, match: WaiterEviction) {
         var resume: (@Sendable (Bool) -> Void)?
@@ -143,7 +148,8 @@ final class ConcurrencyController: @unchecked Sendable {
     }
 
     /// Lease-keyed self-cancel intent over the single eviction primitive;
-    /// owner mismatch no-ops so cancelling one lease never yanks another wait.
+    /// owner mismatch or absent wait no-ops so cancelling one lease never
+    /// yanks another wait.
     private func cancel(_ lease: Lease) {
         removeWaiter(taskId: lease.task.id, owner: ObjectIdentifier(lease), match: .self)
     }
