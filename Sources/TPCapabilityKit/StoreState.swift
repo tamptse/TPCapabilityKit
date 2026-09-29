@@ -11,22 +11,14 @@ final class StoreState: @unchecked Sendable {
     private var subjects: [String: CurrentValueSubject<Any?, Never>] = [:]
     private var waiters: [String: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]] = [:]
 
-    // State creation rendezvous: single lookup-or-await-creation transition.
-    // Late-subscriber proof in one place: lookup-before-park under one lock
-    // means a create racing a subscribe lands on existing instead of parking
-    // stale; insert-before-drain under one lock means a subscribe racing a
-    // create parks before the drain copies it, so no parker is skipped;
-    // waiter resolution emits adjacent to the subject value publish after
-    // unlock, so no waiter sleeps through its subject; `Deferred` re-runs
-    // lookup so a subscribe-racing-create lands on existing instead of
-    // parking stale.
+    // Creation rendezvous: lookup-before-park lands racing subscribes on
+    // existing; insert-before-drain parks racing subscribes before the drain
+    // copy; drain resolution emits adjacent to value publish after unlock.
     // Locked work is index read-or-insert plus waiter park-or-drain-list copy
-    // only; both publishes emit after unlock. Removal stays out of band: it
-    // deletes the index entry and completes the detached subject, never
-    // touches the waiter table.
-    // Single locked subject-creation step shared by the creation branch
-    // above and `update` below, so index insert plus waiter drain-list copy
-    // live in exactly one place. Call only with `lock` held.
+    // only. Removal stays out of band, never touching the waiter table.
+    // `Deferred` re-runs lookup so a subscribe-racing-create never parks stale.
+    // Single locked subject-creation step shared by creation and `update`.
+    // Call only with `lock` held.
     private func insertFreshSubject(
         pluginId: String
     ) -> (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) {
@@ -34,6 +26,16 @@ final class StoreState: @unchecked Sendable {
         subjects[pluginId] = created
         let drain = waiters.removeValue(forKey: pluginId) ?? []
         return (created, drain)
+    }
+
+    // Single locked read-or-insert for writers. Call only with `lock` held.
+    private func getOrInsertLocked(
+        pluginId: String
+    ) -> (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) {
+        if let existing = subjects[pluginId] {
+            return (existing, [])
+        }
+        return insertFreshSubject(pluginId: pluginId)
     }
 
     private func notifyDrain(
@@ -102,12 +104,7 @@ final class StoreState: @unchecked Sendable {
 
     func update<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let resolved: (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) = lock.withLock {
-            if let existing = subjects[pluginId] {
-                return (existing, [])
-            }
-            return insertFreshSubject(pluginId: pluginId)
-        }
+        let resolved = lock.withLock { getOrInsertLocked(pluginId: pluginId) }
         notifyDrain(waiters: resolved.drain, subject: resolved.subject)
         resolved.subject.send(newState)
     }
