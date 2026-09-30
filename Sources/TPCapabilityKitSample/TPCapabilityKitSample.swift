@@ -195,7 +195,7 @@ enum TPCapabilityKitSample {
         teardown(
             store: store,
             plugins: [profilePlugin, chatPlugin],
-            stateIds: [profilePlugin.id, chatPlugin.id, "TempPlugin"],
+            stateIds: [profilePlugin.id, chatPlugin.id],
             cancellables: &cancellables
         )
     }
@@ -234,7 +234,6 @@ enum TPCapabilityKitSample {
     }
 
     static func runSchedulingExample(store: DynamicStore) {
-        var cancellables = Set<AnyCancellable>()
         // 19. Centralized Task Scheduling - Swift API
         print("\n--- Task Scheduling Examples ---")
 
@@ -294,13 +293,6 @@ enum TPCapabilityKitSample {
         print("[Configuration] Applied custom timeout/limits via configureScheduler")
         store.configureScheduler(.default)
         print("[Configuration] Restored defaults")
-
-        teardown(
-            store: store,
-            plugins: [],
-            stateIds: [],
-            cancellables: &cancellables
-        )
     }
 
     static func runObjCBridgeExample(store: DynamicStore, bridge: ObjcStoreBridge) {
