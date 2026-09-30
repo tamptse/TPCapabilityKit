@@ -3,6 +3,7 @@ import Combine
 import TPCapabilityKit
 
 /// Objective-C singleton bridge exposing `DynamicStore` functionality to Objective-C modules.
+/// ObjC grain: only NSObject crosses; wrong-typed reads as absent; removals complete; never emits nil.
 @objc(TPStoreBridge)
 public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// Shared singleton instance.
@@ -14,6 +15,14 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         self.store = store
         super.init()
     }
+
+#if DEBUG
+    private func warnIfNonNSObjectGrain(pluginId: String, raw: Any?) {
+        if let raw, !(raw is NSObject) {
+            print("[ObjcStoreBridge] Warning: non-NSObject state for plugin '\(pluginId)' reads as absent on ObjC path.")
+        }
+    }
+#endif
 
     // MARK: - State APIs
 
@@ -36,13 +45,18 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     }
 
     /// Synchronously retrieves state for a specified plugin.
+    /// ObjC grain: wrong-typed reads as absent.
     /// - Parameter pluginId: Unique identifier of the plugin.
     /// - Returns: `NSObject` state or `nil`.
     @objc public func getState(pluginId: String) -> NSObject? {
+        #if DEBUG
+        warnIfNonNSObjectGrain(pluginId: pluginId, raw: store.getState(pluginId: pluginId, type: Any.self))
+        #endif
         return store.getState(pluginId: pluginId, type: NSObject.self)
     }
 
     /// Subscribes to state updates for a plugin.
+    /// ObjC grain: wrong-typed reads as absent; removals complete; never emits nil.
     /// Delivery via `ObjcBridgeDoor`.
     /// - Parameters:
     ///   - pluginId: Unique identifier of the plugin.
@@ -54,6 +68,9 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         queue: DispatchQueue? = nil,
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
+        #if DEBUG
+        warnIfNonNSObjectGrain(pluginId: pluginId, raw: store.getState(pluginId: pluginId, type: Any.self))
+        #endif
         let sink = ObjcBridgeDoor.subscribeSink(queue: queue, observer: observer)
         let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
             .eraseToAnyPublisher()

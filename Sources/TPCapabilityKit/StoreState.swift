@@ -2,6 +2,7 @@ import Combine
 import Foundation
 
 /// State storage behind the Store seam.
+/// Typed edge: wrong-typed reads as absent; removals complete; never emits nil.
 /// Writers get-or-create on update; observation alone never creates; removal
 /// completes detached subscribers and the next update creates a fresh subject.
 /// Empty plugin identifiers are rejected here: writes and removals are no-ops,
@@ -116,6 +117,7 @@ final class StoreState: @unchecked Sendable {
         resolved.subject.send(newState)
     }
 
+    /// Typed edge: wrong-typed reads as absent.
     func get<T>(pluginId: String, type: T.Type) -> T? {
         guard validatePluginId(pluginId) else { return nil }
         return lock.withLock {
@@ -143,6 +145,7 @@ final class StoreState: @unchecked Sendable {
         subject?.send(completion: .finished)
     }
 
+    /// Typed edge: wrong-typed reads as absent; removals complete; never emits nil.
     func observe<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
         guard validatePluginId(pluginId) else {
             return Empty(completeImmediately: true).eraseToAnyPublisher()
