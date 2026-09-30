@@ -17,10 +17,14 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         self.slots = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
-    private func current() -> TaskScheduler {
+    private func makeGeneration(
+        with newConfiguration: TaskScheduler.Configuration? = nil,
+        onlyIfEmpty: Bool = false
+    ) -> TaskScheduler {
         var created: TaskScheduler?
         let result = lock.withLock { () -> TaskScheduler in
-            if let current = generations.last { return current }
+            if let newConfiguration { configuration = newConfiguration }
+            if onlyIfEmpty, let existing = generations.last { return existing }
             let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
             generations.append(new)
             created = new
@@ -30,15 +34,12 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return result
     }
 
+    private func current() -> TaskScheduler {
+        makeGeneration(onlyIfEmpty: true)
+    }
+
     func reconfigure(_ newConfiguration: TaskScheduler.Configuration) {
-        var created: TaskScheduler?
-        lock.withLock {
-            configuration = newConfiguration
-            let new = TaskScheduler(store: owner, configuration: configuration, clock: clock, concurrencyController: slots)
-            generations.append(new)
-            created = new
-        }
-        if let created { attachSettleHook(to: created) }
+        _ = makeGeneration(with: newConfiguration)
         // Thread the new caps outside the generations hold: the shared slot
         // domain self-wakes under its own lock only, so the admitted batch
         // resumes with no generations lock held across activation.
@@ -47,8 +48,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     func cancel(taskId: String) {
-        let snapshot = lock.withLock { generations }
-        fanOutCancel(taskId: taskId, to: snapshot)
+        fanOutCancel(taskId: taskId, to: snapshotGenerations)
     }
 
     @discardableResult
@@ -83,11 +83,14 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     /// mutates nothing. Counts SUM across held generations while slot admission
     /// SHARES the one Store-owned domain, so reconfigure never doubles the
     /// configured limit during drain.
+    private var snapshotGenerations: [TaskScheduler] {
+        lock.withLock { generations }
+    }
+
     private var summedCounts: (pending: Int, active: Int) {
-        let held = lock.withLock { generations }
         var pending = 0
         var active = 0
-        for generation in held {
+        for generation in snapshotGenerations {
             let counts = generation.countsSnapshot
             pending += counts.pending
             active += counts.active
@@ -126,7 +129,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         // Drain still means empty pending plus active from one acquisition.
         // Settle/drain notification consumed from D4: the reap entry fires from
         // each generation's hook plus reconfigure.
-        let copied = lock.withLock { generations }
+        let copied = snapshotGenerations
         guard copied.count > 1 else { return copied }
         let copiedCurrentID = ObjectIdentifier(copied.last!)
         var drainedIDs = Set<ObjectIdentifier>()
@@ -135,7 +138,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
                 drainedIDs.insert(ObjectIdentifier(generation))
             }
         }
-        guard !drainedIDs.isEmpty else { return lock.withLock { generations } }
+        guard !drainedIDs.isEmpty else { return snapshotGenerations }
         return lock.withLock {
             guard generations.count > 1 else { return generations }
             let liveCurrentID = ObjectIdentifier(generations.last!)
