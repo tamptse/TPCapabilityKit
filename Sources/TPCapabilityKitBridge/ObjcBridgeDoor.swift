@@ -25,6 +25,10 @@ struct ObjcQueuePolicy: Sendable {
 
 /// The single scheduling door behind the Bridge.
 ///
+/// Funnel: inner adapter owns queue policy + boxing,
+/// capability-spelling funnels to descriptor-spelling to one wait core,
+/// detach stays identifier-only noop-start.
+///
 /// Owns the capability-spelling descriptor build, the one value-returning wait
 /// core (no queue knowledge), and detach-adapter construction. Queue policy +
 /// Sendable boxing live in the delivery Adapter below; the door orchestrates
