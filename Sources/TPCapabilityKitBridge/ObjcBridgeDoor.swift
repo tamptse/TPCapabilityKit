@@ -28,38 +28,13 @@ struct ObjcQueuePolicy: Sendable {
 ///
 /// Owns the capability-spelling descriptor build and the one value-returning wait
 /// core (no queue knowledge). Queue policy +
-/// Sendable boxing live in the delivery Adapter below; the door orchestrates
-/// only (wait core, then Adapter hop). Callers build at most the ObjC-shaped
+/// Sendable boxing live in the private helpers below; the door orchestrates
+/// only (wait core, then hop). Callers build at most the ObjC-shaped
 /// arguments then delegate here, so the given-or-main hop and the sync-vs-wait
 /// agreement each live in exactly one place. Timeout compat stays on the
 /// `ObjcTimeout` fork — callers pass `underlying` through without inspecting
 /// timeout.
 enum ObjcBridgeDoor {
-    /// Delivery Adapter: the one owner of queue policy + Sendable boxing.
-    /// No Store knowledge — only the injected policy decides the queue, and
-    /// observers are boxed once via `ObjcCallbackBox` then hopped per value.
-    /// The door orchestrates through this Adapter; callers stay thin
-    /// translators over the door.
-    private struct DeliveryAdapter: Sendable {
-        let policy: ObjcQueuePolicy
-
-        func deliver(queue: DispatchQueue?, work: @escaping @Sendable () -> Void) {
-            policy.deliver(queue, work)
-        }
-
-        func boxedSink<T: Sendable>(
-            queue: DispatchQueue?,
-            observer: @escaping (T) -> Void
-        ) -> (T) -> Void {
-            let observerBox = ObjcCallbackBox(observer)
-            return { value in
-                deliver(queue: queue) {
-                    observerBox.value(value)
-                }
-            }
-        }
-    }
-
     /// Capability-spelling build inside the door: constructs the descriptor
     /// through the same ObjC spelling the facade used to build at its call
     /// site (same defaults, same wire fork), then funnels to the descriptor
@@ -122,13 +97,13 @@ enum ObjcBridgeDoor {
 
     /// Delivery hop: the one given-or-main crossing for schedule completions,
     /// wait completions, and subscribe values. No Store knowledge — only the
-    /// injected policy decides the queue. Delegates to the delivery Adapter.
+    /// injected policy decides the queue.
     private static func hop(
         queue: DispatchQueue?,
         policy: ObjcQueuePolicy,
         work: @escaping @Sendable () -> Void
     ) {
-        DeliveryAdapter(policy: policy).deliver(queue: queue, work: work)
+        policy.deliver(queue, work)
     }
 
     /// Schedule-completion hop behind the door (same hop, same contract).
@@ -165,7 +140,12 @@ enum ObjcBridgeDoor {
         policy: ObjcQueuePolicy,
         observer: @escaping (T) -> Void
     ) -> (T) -> Void {
-        DeliveryAdapter(policy: policy).boxedSink(queue: queue, observer: observer)
+        let observerBox = ObjcCallbackBox(observer)
+        return { value in
+            hop(queue: queue, policy: policy) {
+                observerBox.value(value)
+            }
+        }
     }
 
     static func subscribeState(
