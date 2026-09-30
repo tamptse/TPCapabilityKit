@@ -317,28 +317,25 @@ enum TPCapabilityKitSample {
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         print("[ObjC Cancel] Updates after cancel: \(objcReceivedAfterCancel)")
 
-        // 14. runTask - fire-and-forget if capability available
-        Task {
-            let heavyResult = await store.runTask(requiring: .heavyTask) {
-                return "HeavyTaskResult"
-            }
-            if let result = heavyResult {
-                print("[runTask] heavyTask executed, result: \(result)")
-            } else {
-                print("[runTask] heavyTask not available, skipped")
-            }
-
-            // runTask on missing capability
-            let gpuResult = await store.runTask(requiring: .custom("GPURender")) {
-                return "GPURenderResult"
-            }
-            if let _ = gpuResult {
-                print("[runTask] GPURender executed")
-            } else {
-                print("[runTask] GPURender not available, skipped")
-            }
+        // 14. runIfAvailable - check-and-run if capability available
+        let heavyResult = store.runIfAvailable(requiring: .heavyTask) {
+            return "HeavyTaskResult"
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        if let result = heavyResult {
+            print("[runIfAvailable] heavyTask executed, result: \(result)")
+        } else {
+            print("[runIfAvailable] heavyTask not available, skipped")
+        }
+
+        // runIfAvailable on missing capability
+        let gpuResult = store.runIfAvailable(requiring: .custom("GPURender")) {
+            return "GPURenderResult"
+        }
+        if let _ = gpuResult {
+            print("[runIfAvailable] GPURender executed")
+        } else {
+            print("[runIfAvailable] GPURender not available, skipped")
+        }
 
         // 15. runTaskWhenAvailable - wait for capability then execute
         Task {

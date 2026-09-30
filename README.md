@@ -96,8 +96,8 @@ final class NetworkPlugin: AppPlugin {
 let hasNetwork = store.queryCapability(.networkAccess) // true
 
 // Run task only if capability is available
-let result = await store.runTask(requiring: .networkAccess) {
-    return try await fetchData()
+let result = store.runIfAvailable(requiring: .networkAccess) {
+    return fetchData()
 }
 
 // Wait for capability with timeout

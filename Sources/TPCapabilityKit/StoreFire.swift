@@ -85,20 +85,4 @@ extension DynamicStore {
     ) async -> T? {
         await fire(requiring: capability, timeout: timeout, task: task)
     }
-
-    // MARK: - Legacy (thin alias only, no logic of its own)
-
-    /// Legacy async immediate, kept bit-identical for existing callers.
-    /// Thin alias only: the availability check funnels through the sync shape
-    /// of the one core, then the caller's async closure runs directly.
-    /// Prefer the two documented entries (see `runIfAvailable`): sync
-    /// check-and-run, or `scheduleTaskAndWait` for the queued waiter.
-    @available(*, deprecated, message: "Use runIfAvailable(requiring:task:) for sync check-and-run, or scheduleTaskAndWait for the queued waiter.")
-    public func runTask<T>(
-        requiring capability: Capability,
-        task: () async throws -> T
-    ) async rethrows -> T? {
-        guard fire(requiring: capability, task: {}) != nil else { return nil }
-        return try await task()
-    }
 }

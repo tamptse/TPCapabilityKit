@@ -7,34 +7,34 @@ struct TPCapabilityKitTaskTests {
 
     // MARK: - Task Execution Tests
 
-    @Test func runTaskWhenCapabilityAvailable() async {
+    @Test func runIfAvailableWhenCapabilityAvailable() async {
         let store = DynamicStore()
         let pluginId = "RunTaskPlugin_\(UUID().uuidString)"
 
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
 
-        let result = await store.runTask(requiring: .heavyTask) {
+        let result = store.runIfAvailable(requiring: .heavyTask) {
             return "HeavyTaskResult"
         }
         #expect(result == "HeavyTaskResult")
     }
 
-    @Test func runTaskWhenCapabilityNotAvailable() async {
+    @Test func runIfAvailableWhenCapabilityNotAvailable() async {
         let store = DynamicStore()
 
         // No capability registered
-        let result = await store.runTask(requiring: .custom("NonExistent_\(UUID().uuidString)")) {
+        let result = store.runIfAvailable(requiring: .custom("NonExistent_\(UUID().uuidString)")) {
             return "ShouldNotRun"
         }
         #expect(result == nil)
     }
 
-    @Test func runTaskPassesArgumentsAndReturnsValue() async {
+    @Test func runIfAvailablePassesArgumentsAndReturnsValue() async {
         let store = DynamicStore()
         let pluginId = "RunTaskArgCap_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.networkAccess])
 
-        let sum = await store.runTask(requiring: .networkAccess) {
+        let sum = store.runIfAvailable(requiring: .networkAccess) {
             return 40 + 2
         }
         #expect(sum == 42)
@@ -94,7 +94,7 @@ struct TPCapabilityKitTaskTests {
         #expect(store.pendingTaskCount == 0)
     }
 
-    @Test func runTaskCapabilityRevokedAfterRegister() async {
+    @Test func runIfAvailableCapabilityRevokedAfterRegister() async {
         let store = DynamicStore()
         let pluginId = "RevokeCap_\(UUID().uuidString)"
         let uniqueCap = Capability.custom("revokeCap_\(UUID().uuidString)")
@@ -102,33 +102,33 @@ struct TPCapabilityKitTaskTests {
         store.registerCapability(for: pluginId, capabilities: [uniqueCap])
         #expect(store.queryCapability(uniqueCap) == true)
 
-        let result1 = await store.runTask(requiring: uniqueCap) { "First" }
+        let result1 = store.runIfAvailable(requiring: uniqueCap) { "First" }
         #expect(result1 == "First")
 
         // Revoke capability by unregistering
         store.unregisterCapability(for: pluginId)
         #expect(store.queryCapability(uniqueCap) == false)
 
-        let result2 = await store.runTask(requiring: uniqueCap) { "Second" }
+        let result2 = store.runIfAvailable(requiring: uniqueCap) { "Second" }
         #expect(result2 == nil)
     }
 
-    @Test func runTaskMultipleCapabilities() async {
+    @Test func runIfAvailableMultipleCapabilities() async {
         let store = DynamicStore()
 
         store.registerCapability(for: "BG", capabilities: [.heavyTask, .backgroundExecution])
         store.registerCapability(for: "Net", capabilities: [.networkAccess])
 
-        let r1 = await store.runTask(requiring: .heavyTask) { "BG" }
-        let r2 = await store.runTask(requiring: .networkAccess) { "Net" }
-        let r3 = await store.runTask(requiring: .lightTask) { "Missing" }
+        let r1 = store.runIfAvailable(requiring: .heavyTask) { "BG" }
+        let r2 = store.runIfAvailable(requiring: .networkAccess) { "Net" }
+        let r3 = store.runIfAvailable(requiring: .lightTask) { "Missing" }
 
         #expect(r1 == "BG")
         #expect(r2 == "Net")
         #expect(r3 == nil)
     }
 
-    @Test func runTaskConcurrentAccess() async {
+    @Test func runIfAvailableConcurrentAccess() async {
         let store = DynamicStore()
         let pluginId = "ConcurrentRunTask_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [.heavyTask])
@@ -136,7 +136,7 @@ struct TPCapabilityKitTaskTests {
         await withTaskGroup(of: Void.self) { group in
             for i in 0..<100 {
                 group.addTask {
-                    let result = await store.runTask(requiring: .heavyTask) {
+                    let result = store.runIfAvailable(requiring: .heavyTask) {
                         return i
                     }
                     #expect(result != nil)
