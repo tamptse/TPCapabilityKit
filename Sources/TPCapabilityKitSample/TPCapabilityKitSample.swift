@@ -271,8 +271,6 @@ enum TPCapabilityKitSample {
         store.register(plugin: networkPlugin)
 
         // 3. Register ObjC plugin via bridge.
-        // No Bridge unregister seam exists, so SampleObjcPlugin stays registered
-        // on the shared store after the sample (documented leak, not worked around).
         bridge.register(plugin: objcPlugin)
 
         // 13. ObjC subscription lifecycle
@@ -378,7 +376,11 @@ enum TPCapabilityKitSample {
         // Check counts via ObjC bridge
         print("[ObjC] Pending: \(bridge.taskScheduler.pendingCount), Active: \(bridge.taskScheduler.activeCount)")
 
+        bridge.unregister(pluginId: objcPlugin.id)
+        bridge.removeState(pluginId: objcPlugin.id)
+        assert(bridge.getState(pluginId: objcPlugin.id) == nil)
         store.unregister(plugin: networkPlugin)
+        store.removeState(for: networkPlugin.id)
     }
 
     /// Demonstrates registering plugins, publishing state, and decoupled cross-plugin observation.

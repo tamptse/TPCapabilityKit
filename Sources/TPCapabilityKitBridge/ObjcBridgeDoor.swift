@@ -59,10 +59,7 @@ enum ObjcBridgeDoor {
         }
     }
 
-    /// Id-carrying adapter for the detach path. Store detach reads only the
-    /// Plugin id, so this is behaviorally identical to the registration-time
-    /// adapter with no `start` side effect.
-    struct BridgeDetachAdapter: AppPlugin {
+    private struct BridgeDetachAdapter: AppPlugin {
         let id: String
         func start(with store: DynamicStore) {}
     }
@@ -175,9 +172,7 @@ enum ObjcBridgeDoor {
         DeliveryAdapter(policy: policy).boxedSink(queue: queue, observer: observer)
     }
 
-    /// Detach-adapter construction behind the door, so the store-bridge
-    /// `unregister` call-site is one line.
-    static func makeDetachAdapter(id: String) -> BridgeDetachAdapter {
+    static func makeDetachAdapter(id: String) -> some AppPlugin {
         BridgeDetachAdapter(id: id)
     }
 }
