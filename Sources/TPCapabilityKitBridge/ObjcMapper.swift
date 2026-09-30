@@ -118,4 +118,32 @@ import TPCapabilityKit
             metadata: metadata
         )
     }
+
+    /// Single-capability factory: the one internal build for capability-string
+    /// callers (Bridge door capability spelling). Takes an already-resolved
+    /// `Capability` plus an already-resolved `ObjcTimeout`, so the wire fork
+    /// (`ObjcTimeout.resolve`) stays visible at the call site and the pin
+    /// literal never follows a reconfigured Swift default.
+    /// Priority, retry, and metadata defaults are stated once here
+    /// (normal/2, 0, [:]); id policy is explicit via `id` (nil auto-generates).
+    /// Core `StoreFire.fire(requiring:capability:)` keeps its inline build:
+    /// core cannot depend on the Bridge, and funneling core through this seam
+    /// would leak the Bridge-compat pin into core defaults.
+    static func makeSingleCapabilityDescriptor(
+        id: String? = nil,
+        capability: Capability,
+        priority: Int = TaskPriority.normal.rawValue,
+        timeout: ObjcTimeout = .explicit(ObjcTimeout.pinnedDefault),
+        maxRetries: Int = 0,
+        metadata: [String: String] = [:]
+    ) -> TaskDescriptor {
+        TaskDescriptor(
+            id: id ?? UUID().uuidString,
+            requiredCapabilities: [capability],
+            priority: taskPriority(from: priority),
+            timeout: timeout.resolved,
+            maxRetries: maxRetries,
+            metadata: metadata
+        )
+    }
 }

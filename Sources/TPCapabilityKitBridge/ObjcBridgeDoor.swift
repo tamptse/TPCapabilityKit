@@ -36,9 +36,9 @@ struct ObjcQueuePolicy: Sendable {
 /// timeout.
 enum ObjcBridgeDoor {
     /// Capability-spelling build inside the door: constructs the descriptor
-    /// through the same ObjC spelling the facade used to build at its call
-    /// site (same defaults, same wire fork), then funnels to the descriptor
-    /// core below, so the two wait spellings cannot diverge.
+    /// through the single-capability factory core (same defaults, same wire
+    /// fork), then funnels to the descriptor core below, so the two wait
+    /// spellings cannot diverge.
     static func waitThenRun(
         store: DynamicStore,
         capability: String,
@@ -50,7 +50,10 @@ enum ObjcBridgeDoor {
     ) {
         waitThenRun(
             store: store,
-            descriptor: ObjcTaskDescriptor(capabilities: [capability], timeout: timeout).underlying,
+            descriptor: ObjcMapper.makeSingleCapabilityDescriptor(
+                capability: ObjcMapper.capability(from: capability),
+                timeout: ObjcTimeout.resolve(wire: timeout)
+            ),
             queue: queue,
             task: task,
             completion: completion,
