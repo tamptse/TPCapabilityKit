@@ -85,6 +85,8 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         )
     }
 
+    /// Fork boundary: wrapper owns ObjC shape + auto-vs-client id policy, mapper owns capability/priority/timeout forks.
+    /// Pin stays singly owned in the mapper and never follows a reconfigured default.
     private init(
         id: String?,
         capabilities: [String],

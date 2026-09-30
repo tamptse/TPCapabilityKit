@@ -99,6 +99,8 @@ import TPCapabilityKit
         validPriorityRange.contains(rawValue)
     }
 
+    /// Fork owner: mapper owns capability/priority/timeout forks; wrapper owns ObjC shape + auto-vs-client id policy.
+    /// Pin stays singly owned here and never follows a reconfigured default.
     static func makeDescriptor(
         id: String? = nil,
         capabilities: [String],
