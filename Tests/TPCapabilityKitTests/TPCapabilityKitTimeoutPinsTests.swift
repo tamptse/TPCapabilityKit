@@ -22,7 +22,7 @@ struct TimeoutPinsTests {
         async let result: String? = scheduler.scheduleAndWait(task) {
             return "should-not-run"
         }
-        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
+        await clock.waitForWaiters(count: 1)
         await clock.advance(by: 0.3)
 
         #expect(await result == nil)
@@ -50,7 +50,7 @@ struct TimeoutPinsTests {
         #expect(lease.task.timeout == nil)
         #expect(task.timeout == nil)
 
-        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
+        await clock.waitForWaiters(count: 1)
         await clock.advance(by: 0.3)
 
         await done.wait()

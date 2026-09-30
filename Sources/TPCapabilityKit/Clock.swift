@@ -40,34 +40,12 @@ final class Clock: @unchecked Sendable {
         await parked!.advance(by: delta)
     }
 
-    fileprivate var deterministicRegistry: VirtualTime? {
+    internal var deterministicRegistry: VirtualTime? {
         lock.withLock { virtual }
     }
 }
 
-struct DeterministicClockProbe: Sendable {
-    private let clock: Clock
-
-    init(_ clock: Clock) {
-        self.clock = clock
-    }
-
-    var waiterCount: Int {
-        clock.deterministicRegistry?.waiterCount ?? 0
-    }
-
-    func waitForWaiters(count expected: Int) async {
-        guard let registry = clock.deterministicRegistry else {
-            preconditionFailure("deterministic time not enabled")
-        }
-        await registry.awaitWaiterRegistered(count: expected)
-    }
-}
-
-/// Deterministic waiter registry behind the virtual adapter. Waiters park
-/// with absolute deadlines; `advance` moves the clock once, collects exactly
-/// the expired continuations under lock, and resumes them after unlock.
-private final class VirtualTime: @unchecked Sendable {
+final class VirtualTime: @unchecked Sendable {
     private let lock = NSLock()
     private var now: TimeInterval = 0
     private var nextID: UInt64 = 0
@@ -102,16 +80,6 @@ private final class VirtualTime: @unchecked Sendable {
             lock.withLock { cont = waiters.removeValue(forKey: id)?.continuation }
             cont?.resume()
         }
-    }
-
-    func awaitWaiterRegistered(count expected: Int) async {
-        let deadline = Date().addingTimeInterval(5.0)
-        while Date() < deadline {
-            if lock.withLock({ waiters.count }) >= expected { return }
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
-        preconditionFailure("Clock: no waiter registered within 5s (expected \(expected))")
     }
 
     func advance(by delta: TimeInterval) async {

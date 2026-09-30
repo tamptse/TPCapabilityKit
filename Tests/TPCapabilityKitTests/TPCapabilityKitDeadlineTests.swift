@@ -35,7 +35,7 @@ struct DeadlineTests {
         })
         #expect(explicitLease.task.timeout == 7.5)
 
-        await DeterministicClockProbe(clock).waitForWaiters(count: 2)
+        await clock.waitForWaiters(count: 2)
         await clock.advance(by: 7.5)
 
         await implicitDone.wait()
@@ -62,7 +62,7 @@ struct DeadlineTests {
             done.signal()
         })
         await started.wait()
-        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
+        await clock.waitForWaiters(count: 1)
         await clock.advance(by: 0.2)
         await done.wait()
         release.finish()

@@ -47,7 +47,7 @@ struct ScheduleWaitRendezvousPinTests {
             timeout: 0.3
         )
         async let result: String? = scheduler.scheduleAndWait(task) { "should-not-run" }
-        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
+        await clock.waitForWaiters(count: 1)
         await clock.advance(by: 0.3)
 
         #expect(await result == nil)

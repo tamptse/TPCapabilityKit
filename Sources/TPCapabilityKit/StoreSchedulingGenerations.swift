@@ -7,7 +7,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     private let slots: ConcurrencyController
     /// One time instance shared across live generations, so reconfigure never
     /// forks virtual time. Fixed here at construction, never threaded per call.
-    private let clock: Clock
+    internal let clock: Clock
     private unowned let owner: DynamicStore
 
     init(owner: DynamicStore, configuration: TaskScheduler.Configuration, clock: Clock) {
@@ -44,23 +44,6 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         // resumes with no generations lock held across activation.
         slots.updateLimits(maxPerCapability: newConfiguration.maxPerCapability, maxGlobal: newConfiguration.maxGlobal)
         reapDrainedGenerations()
-    }
-
-    /// Deterministic-time controls live here next to the generations they
-    /// gate: precede-first-use is checked against the private emptiness helper
-    /// in exactly one place, enable-once and virtual-only inside the time module.
-    func enableDeterministicTime() {
-        precondition(owner !== DynamicStore.shared, "deterministic time only on fresh instances")
-        precondition(isEmpty, "enableDeterministicTime must precede first schedule")
-        clock.enableDeterministic()
-    }
-
-    func advanceTime(by delta: TimeInterval) async {
-        await clock.advance(by: delta)
-    }
-
-    func waitForDeterministicWaiters(count expected: Int) async {
-        await DeterministicClockProbe(clock).waitForWaiters(count: expected)
     }
 
     func cancel(taskId: String) {
@@ -112,7 +95,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return (pending, active)
     }
 
-    private var isEmpty: Bool {
+    internal var isEmpty: Bool {
         lock.withLock { generations.isEmpty }
     }
 

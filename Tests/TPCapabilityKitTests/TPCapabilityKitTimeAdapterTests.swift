@@ -14,11 +14,11 @@ struct TimeAdapterTests {
         virtual.enableDeterministic()
         await virtual.sleep(0)
         await virtual.sleep(-1)
-        #expect(DeterministicClockProbe(virtual).waiterCount == 0)
+        #expect(virtual.deterministicWaiterCount == 0)
 
         let live = Clock.live
         await live.sleep(0)
-        #expect(DeterministicClockProbe(live).waiterCount == 0)
+        #expect(live.deterministicWaiterCount == 0)
     }
 
     @Test("advance wakes only expired waiters without loss or duplication")
@@ -41,18 +41,18 @@ struct TimeAdapterTests {
             await clock.sleep(10.0)
             await flags.markSecond()
         }()
-        await DeterministicClockProbe(clock).waitForWaiters(count: 2)
+        await clock.waitForWaiters(count: 2)
 
         await clock.advance(by: 5.0)
         await first
         #expect(await flags.first == true)
         #expect(await flags.second == false)
-        #expect(DeterministicClockProbe(clock).waiterCount == 1)
+        #expect(clock.deterministicWaiterCount == 1)
 
         await clock.advance(by: 5.0)
         await second
         #expect(await flags.first == true)
         #expect(await flags.second == true)
-        #expect(DeterministicClockProbe(clock).waiterCount == 0)
+        #expect(clock.deterministicWaiterCount == 0)
     }
 }

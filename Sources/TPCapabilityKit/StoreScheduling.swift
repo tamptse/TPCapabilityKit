@@ -8,19 +8,6 @@ extension DynamicStore {
         scheduling.reconfigure(configuration)
     }
 
-    /// Deterministic-time delegates, spelling-only forwards to the generations module.
-    internal func enableDeterministicTime() {
-        scheduling.enableDeterministicTime()
-    }
-
-    internal func advanceTime(by delta: TimeInterval) async {
-        await scheduling.advanceTime(by: delta)
-    }
-
-    internal func waitForDeterministicWaiters(count expected: Int) async {
-        await scheduling.waitForDeterministicWaiters(count: expected)
-    }
-
     /// Schedules a task for centralized execution with capability matching and priority.
     /// Queued work; for immediate fire see the entry table on `runIfAvailable`.
     /// - Parameters:
