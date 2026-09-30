@@ -6,6 +6,9 @@ import Foundation
 /// and the executor share `sleep` through the shared race; virtual sleep
 /// parks on the deterministic registry until `advance` expires it. Advancing
 /// wakes only expired waiters, never loses or duplicates a wakeup.
+
+// MARK: - Clock (prod: sleep seam + advance drive)
+
 final class Clock: @unchecked Sendable {
     private let lock = NSLock()
     private var virtual: VirtualTime?
@@ -15,13 +18,6 @@ final class Clock: @unchecked Sendable {
 
     static var live: Clock {
         Clock()
-    }
-
-    func enableDeterministic() {
-        lock.withLock {
-            precondition(virtual == nil, "deterministic time already enabled")
-            virtual = VirtualTime()
-        }
     }
 
     func sleep(_ timeout: TimeInterval) async {
@@ -39,11 +35,9 @@ final class Clock: @unchecked Sendable {
         precondition(parked != nil, "deterministic time not enabled; call enableDeterministicTime() first")
         await parked!.advance(by: delta)
     }
-
-    internal var deterministicRegistry: VirtualTime? {
-        lock.withLock { virtual }
-    }
 }
+
+// MARK: - VirtualTime park (prod internals)
 
 final class VirtualTime: @unchecked Sendable {
     private let lock = NSLock()
@@ -106,9 +100,20 @@ final class VirtualTime: @unchecked Sendable {
     }
 }
 
-// MARK: - Deterministic test seam
+// MARK: - Clock deterministic test facet (test-only rendezvous)
 
 extension Clock {
+    func enableDeterministic() {
+        lock.withLock {
+            precondition(virtual == nil, "deterministic time already enabled")
+            virtual = VirtualTime()
+        }
+    }
+
+    internal var deterministicRegistry: VirtualTime? {
+        lock.withLock { virtual }
+    }
+
     var deterministicWaiterCount: Int {
         deterministicRegistry?.waiterCount ?? 0
     }
@@ -126,6 +131,8 @@ extension Clock {
         preconditionFailure("Clock: no waiter registered (expected \(expected), got \(registry.waiterCount))")
     }
 }
+
+// MARK: - Scheduling / store deterministic test facet
 
 extension StoreSchedulingGenerations {
     func enableDeterministicTime() {
