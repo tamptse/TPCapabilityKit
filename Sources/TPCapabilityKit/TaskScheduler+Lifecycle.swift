@@ -226,7 +226,7 @@ extension TaskScheduler {
         }
 
         enum ScheduleWaitRendezvousOutcome {
-            case parked(displaced: Lease?, waiters: [(Lease) -> Void], waiter: Task<Void, Never>?, evict: EvictObligation?)
+            case parked(ExchangeResult)
             case settledEarly(Lease)
         }
 
@@ -241,12 +241,7 @@ extension TaskScheduler {
                 return .settledEarly(lease)
             }
             if lease.isTerminal { return .settledEarly(lease) }
-            return .parked(
-                displaced: result.displaced,
-                waiters: result.waiters,
-                waiter: result.waiter,
-                evict: result.evict
-            )
+            return .parked(result)
         }
 
         enum FusedParkOutcome: Sendable {

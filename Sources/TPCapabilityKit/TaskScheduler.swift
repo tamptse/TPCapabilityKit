@@ -93,7 +93,6 @@ public final class TaskScheduler: @unchecked Sendable {
             await taskExecution()
             return ()
         }, completion: completion)
-        kickPump()
         return lease
     }
 
@@ -112,15 +111,20 @@ public final class TaskScheduler: @unchecked Sendable {
                 waiters: completion.map { [$0] } ?? []
             )
         }
-        deliverDisplaced(
-            displaced: exchanged.displaced,
-            waiters: exchanged.waiters,
-            waiter: exchanged.waiter,
-            evicted: exchanged.evict != nil,
-            fresh: lease
-        )
+        finishExchange(result: exchanged, fresh: lease)
 
         return lease
+    }
+
+    private func finishExchange(result: LifecycleStore.ExchangeResult, fresh: Lease) {
+        deliverDisplaced(
+            displaced: result.displaced,
+            waiters: result.waiters,
+            waiter: result.waiter,
+            evicted: result.evict != nil,
+            fresh: fresh
+        )
+        kickPump()
     }
 
     private func deliverDisplaced(
@@ -190,15 +194,8 @@ public final class TaskScheduler: @unchecked Sendable {
                 )
             }
             switch outcome {
-            case .parked(let displaced, let waiters, let waiter, let evict):
-                deliverDisplaced(
-                    displaced: displaced,
-                    waiters: waiters,
-                    waiter: waiter,
-                    evicted: evict != nil,
-                    fresh: lease
-                )
-                kickPump()
+            case .parked(let result):
+                finishExchange(result: result, fresh: lease)
             case .settledEarly(let settled):
                 resume(with: settled)
             }
