@@ -116,6 +116,9 @@ public final class TaskScheduler: @unchecked Sendable {
         return lease
     }
 
+    /// Lock order: runs outside scheduler `lock` to avoid nesting; controller self-locks, waiters run outside lock.
+    /// Note after delivery in same batch so stale drains before newcomer admission.
+    /// Generations stay evict-free; obligation is still minted in insert.
     private func finishExchange(result: LifecycleStore.ExchangeResult, fresh: Lease) {
         deliverDisplaced(
             displaced: result.displaced,
