@@ -244,6 +244,7 @@ struct WaiterThroughInterfaceTests {
         ) {
             return "should-not-run"
         }
+        await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 5.0)
         #expect(await result == nil)
         #expect(store.pendingTaskCount == 0)

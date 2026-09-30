@@ -30,7 +30,7 @@ struct TimeoutContractTests {
         let leaseA = schedulerA.schedule(task, taskExecution: {}, completion: { _ in
             doneA.signal()
         })
-        await clockA.waitForWaiters(count: 1)
+        await DeterministicClockProbe(clockA).waitForWaiters(count: 1)
         await clockA.advance(by: 7.5)
         for _ in 0..<20 { await Task.yield() }
         #expect(!leaseA.isTerminal)
@@ -49,7 +49,7 @@ struct TimeoutContractTests {
         let leaseB = schedulerB.schedule(explicitTask, taskExecution: {}, completion: { _ in
             doneB.signal()
         })
-        await clockB.waitForWaiters(count: 1)
+        await DeterministicClockProbe(clockB).waitForWaiters(count: 1)
         await clockB.advance(by: 7.5)
         await doneB.wait()
         #expect(leaseB.state == .expired)
@@ -65,7 +65,7 @@ struct TimeoutContractTests {
         let leaseC = schedulerC.schedule(task, taskExecution: {}, completion: { _ in
             doneC.signal()
         })
-        await clockC.waitForWaiters(count: 1)
+        await DeterministicClockProbe(clockC).waitForWaiters(count: 1)
         await clockC.advance(by: configured)
         for _ in 0..<20 { await Task.yield() }
         #expect(!leaseC.isTerminal)
@@ -120,7 +120,7 @@ struct TimeoutContractTests {
         let lease = scheduler.schedule(descriptor.underlying, taskExecution: {}, completion: { _ in
             done.signal()
         })
-        await clock.waitForWaiters(count: 1)
+        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
         await clock.advance(by: configured)
         await done.wait()
         #expect(lease.state == .expired)
@@ -157,7 +157,7 @@ struct TimeoutContractTests {
             done.signal()
         })
 
-        await clock.waitForWaiters(count: 1)
+        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
 
         let pluginId = "TimeoutContractShared_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
@@ -165,7 +165,7 @@ struct TimeoutContractTests {
 
         await started.wait()
 
-        await clock.waitForWaiters(count: 1)
+        await DeterministicClockProbe(clock).waitForWaiters(count: 1)
         release.finish()
 
         await done.wait()

@@ -87,6 +87,7 @@ struct TPCapabilityKitTaskTests {
         async let result = store.runTaskWhenAvailable(capability: uniqueCap, timeout: 0.1) {
             return "ShouldNotRun"
         }
+        await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 0.1)
 
         #expect(await result == nil)

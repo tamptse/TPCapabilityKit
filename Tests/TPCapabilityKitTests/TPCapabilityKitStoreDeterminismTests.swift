@@ -17,6 +17,7 @@ struct StoreDeterminismTests {
             completion: { _ in done.continuation.yield() }
         )
 
+        await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 5.0)
         for await _ in done.stream { break }
 
@@ -48,6 +49,7 @@ struct StoreDeterminismTests {
         )
 
         await started.wait()
+        await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 5.0)
         await done.wait()
         release.finish()

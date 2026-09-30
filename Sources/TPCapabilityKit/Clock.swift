@@ -6,12 +6,6 @@ import Foundation
 /// and the executor share `sleep` through the shared race; virtual sleep
 /// parks on the deterministic registry until `advance` expires it. Advancing
 /// wakes only expired waiters, never loses or duplicates a wakeup.
-///
-/// K4-02 test-Adapter split (deferred, no logic change): `waiterCount` /
-/// `waitForWaiters` are test-only registration rendezvous slated to move onto
-/// a test Adapter. They stay on Clock for now because deterministic tests use
-/// Clock directly and StoreSchedulingGenerations forwards through Clock;
-/// removing them here would break those callers. Prod must not depend on them.
 final class Clock: @unchecked Sendable {
     private let lock = NSLock()
     private var virtual: VirtualTime?
@@ -21,10 +15,6 @@ final class Clock: @unchecked Sendable {
 
     static var live: Clock {
         Clock()
-    }
-
-    var waiterCount: Int {
-        lock.withLock { virtual?.waiterCount ?? 0 }
     }
 
     func enableDeterministic() {
@@ -43,17 +33,34 @@ final class Clock: @unchecked Sendable {
         await parked.sleep(timeout)
     }
 
-    func waitForWaiters(count expected: Int) async {
-        let parked: VirtualTime? = lock.withLock { virtual }
-        precondition(parked != nil, "deterministic time not enabled")
-        await parked!.awaitWaiterRegistered(count: expected)
-    }
-
     func advance(by delta: TimeInterval) async {
         precondition(delta >= 0)
         let parked: VirtualTime? = lock.withLock { virtual }
         precondition(parked != nil, "deterministic time not enabled; call enableDeterministicTime() first")
         await parked!.advance(by: delta)
+    }
+
+    fileprivate var deterministicRegistry: VirtualTime? {
+        lock.withLock { virtual }
+    }
+}
+
+struct DeterministicClockProbe: Sendable {
+    private let clock: Clock
+
+    init(_ clock: Clock) {
+        self.clock = clock
+    }
+
+    var waiterCount: Int {
+        clock.deterministicRegistry?.waiterCount ?? 0
+    }
+
+    func waitForWaiters(count expected: Int) async {
+        guard let registry = clock.deterministicRegistry else {
+            preconditionFailure("deterministic time not enabled")
+        }
+        await registry.awaitWaiterRegistered(count: expected)
     }
 }
 
@@ -108,7 +115,6 @@ private final class VirtualTime: @unchecked Sendable {
     }
 
     func advance(by delta: TimeInterval) async {
-        await awaitWaiterRegistered(count: 1)
         var expired: [CheckedContinuation<Void, Never>] = []
         lock.withLock {
             now += delta

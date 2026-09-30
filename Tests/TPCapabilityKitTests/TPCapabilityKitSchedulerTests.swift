@@ -458,6 +458,7 @@ struct TaskSchedulerTests {
                 done.signal()
             }
         })
+        await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 1.0)
         await done.wait()
 

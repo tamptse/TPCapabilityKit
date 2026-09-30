@@ -30,6 +30,7 @@ struct DynamicStoreSchedulerIntegrationTests {
             return "ShouldNotRun"
         }
 
+        await store.waitForDeterministicWaiters(count: 1)
         await store.advanceTime(by: 0.5)
 
         #expect(await result == nil)

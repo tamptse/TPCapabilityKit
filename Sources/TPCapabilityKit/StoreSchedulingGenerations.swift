@@ -58,7 +58,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     }
 
     func waitForDeterministicWaiters(count expected: Int) async {
-        await clock.waitForWaiters(count: expected)
+        await DeterministicClockProbe(clock).waitForWaiters(count: expected)
     }
 
     func cancel(taskId: String) {

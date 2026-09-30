@@ -14,6 +14,7 @@ struct SingleExpiryTests {
         ) {
             return "should-not-run"
         }
+        await waiterStore.waitForDeterministicWaiters(count: 1)
         await waiterStore.advanceTime(by: 5.0)
         #expect(await waiterResult == nil)
         #expect(waiterStore.pendingTaskCount == 0)
@@ -35,6 +36,7 @@ struct SingleExpiryTests {
             return "should-expire"
         }
         await started.wait()
+        await execStore.waitForDeterministicWaiters(count: 1)
         await execStore.advanceTime(by: 5.0)
         release.finish()
         #expect(await execResult == nil)
