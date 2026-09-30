@@ -25,8 +25,8 @@ struct ObjcQueuePolicy: Sendable {
 
 /// The single scheduling door behind the Bridge.
 ///
-/// Owns the capability-spelling descriptor build, the one value-returning wait
-/// core (no queue knowledge), and detach-adapter construction. Queue policy +
+/// Owns the capability-spelling descriptor build and the one value-returning wait
+/// core (no queue knowledge). Queue policy +
 /// Sendable boxing live in the delivery Adapter below; the door orchestrates
 /// only (wait core, then Adapter hop). Callers build at most the ObjC-shaped
 /// arguments then delegate here, so the given-or-main hop and the sync-vs-wait
@@ -57,11 +57,6 @@ enum ObjcBridgeDoor {
                 }
             }
         }
-    }
-
-    private struct BridgeDetachAdapter: AppPlugin {
-        let id: String
-        func start(with store: DynamicStore) {}
     }
 
     /// Capability-spelling build inside the door: constructs the descriptor
@@ -170,10 +165,6 @@ enum ObjcBridgeDoor {
         observer: @escaping (T) -> Void
     ) -> (T) -> Void {
         DeliveryAdapter(policy: policy).boxedSink(queue: queue, observer: observer)
-    }
-
-    static func makeDetachAdapter(id: String) -> some AppPlugin {
-        BridgeDetachAdapter(id: id)
     }
 }
 

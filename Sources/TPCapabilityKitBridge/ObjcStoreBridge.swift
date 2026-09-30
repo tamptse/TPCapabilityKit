@@ -94,12 +94,10 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
     /// Unregisters a plugin by its identifier: state cleared with detached
     /// subscribers completed plus capability-row detach.
     /// ObjC plugins are capability-consumers only — no Capabilities parameter
-    /// here — so detach can never fake provision. Delegates via a fresh
-    /// id-carrying adapter; Store detach reads only the id, so no `start`
-    /// side effect runs on this path.
+    /// here — so detach can never provision.
     /// - Parameter pluginId: Unique identifier of the plugin.
     @objc public func unregister(pluginId: String) {
-        store.unregister(plugin: ObjcBridgeDoor.makeDetachAdapter(id: pluginId))
+        store.unregister(pluginId: pluginId)
     }
 
     // MARK: - Capability APIs

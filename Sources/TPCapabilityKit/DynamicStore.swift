@@ -73,10 +73,16 @@ public final class DynamicStore: @unchecked Sendable {
     }
 
     /// Unregisters a plugin and cleans up its state and capabilities.
+    /// - Parameter pluginId: The identifier of the plugin to unregister.
+    public func unregister(pluginId: String) {
+        removeState(for: pluginId)
+        unregisterCapability(for: pluginId)
+    }
+
+    /// Unregisters a plugin and cleans up its state and capabilities.
     /// - Parameter plugin: The plugin to unregister.
     public func unregister(plugin: AppPlugin) {
-        removeState(for: plugin.id)
-        unregisterCapability(for: plugin.id)
+        unregister(pluginId: plugin.id)
     }
 
     /// Observes state changes for a plugin identifier.
