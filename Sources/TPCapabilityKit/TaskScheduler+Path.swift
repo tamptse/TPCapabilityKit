@@ -185,32 +185,11 @@ extension TaskScheduler {
         settle(lease, as: .completed(racedValue), execution: execution)
     }
 
-    private enum SettleDirective {
-        case retry
-        case complete(Any?)
-        case fail
-        case expire
-    }
-
-    /// Phase table (intentional, do not fuse): input `Settlement` (`cancelled`→`.expired`) vs private `SettleDirective` here
-    /// vs public `Lease.Terminal` (owner) vs pre-admission `ActivationGate` (never terminalizes).
+    /// Phase table (intentional, do not fuse): decision owned beside
+    /// `Lease.Terminal` (`Lease.settleDecision`); input `Settlement`
+    /// (`cancelled`→`.expired`) vs `Lease.SettleDirective` vs `Lease.Terminal`
+    /// (owner) vs pre-admission `ActivationGate` (never terminalizes).
     /// Retry reuses same Lease identity.
-    private static func settleDecision(for outcome: Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
-        switch outcome {
-        case .completed(let result):
-            if result != nil {
-                return .complete(result)
-            }
-            if canRetry {
-                return .retry
-            }
-            return isActive ? .fail : .expire
-        case .failed:
-            return isActive ? .fail : .expire
-        case .expired, .cancelled:
-            return .expire
-        }
-    }
 
     /// The single row-transition step of the same path: reads the named
     /// decision table, then applies one row transition. Retry re-queue reuses
@@ -224,7 +203,7 @@ extension TaskScheduler {
         var settled = false
         var didRetry = false
         lock.withLock {
-            let directive = Self.settleDecision(for: outcome, canRetry: lease.canRetry, isActive: lease.isActive)
+            let directive = Lease.settleDecision(for: outcome, canRetry: lease.canRetry, isActive: lease.isActive)
             let target: LifecycleStore.Transition
             switch directive {
             case .retry:

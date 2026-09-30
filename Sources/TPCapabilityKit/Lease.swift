@@ -75,8 +75,8 @@ public final class Lease: @unchecked Sendable {
         activatedAt = Date()
     }
 
-    /// Phase table (intentional, do not fuse): public `Terminal` owned here vs input `Settlement` (`cancelled`→`.expired`)
-    /// vs private `SettleDirective` (settle-site output) vs pre-admission `ActivationGate` (never terminalizes).
+    /// Phase table (intentional, do not fuse): public `Terminal` plus `SettleDirective` table owned here vs input `Settlement` (`cancelled`→`.expired`)
+    /// vs pre-admission `ActivationGate` (never terminalizes).
     /// Retry reuses same Lease identity.
     /// Single terminal vocabulary for the Lease lifecycle, owned here.
     /// Tasks reuses it via `TaskScheduler.Terminal` (typealias, no duplicate).
@@ -84,10 +84,41 @@ public final class Lease: @unchecked Sendable {
     /// `cancelled` stays input-only and maps to `.expired` at the single settle
     /// site. `Settlement.failed` carries no `Error`; the single transition
     /// mints the fresh execution error when applying `.failed`.
+    /// `ActivationGate` stays pre-admission-only in the Path and never
+    /// terminalizes; it is not a terminal row.
     internal enum Terminal {
         case completed(Any?)
         case failed(Error)
         case expired
+    }
+
+    /// Single settlement decision table (input → directive → terminal), owned
+    /// here beside `Terminal`. Decision beside owner; effects stay in the Path.
+    /// Rows: `cancelled`→expired plus void-nil plus `isActive` routing plus
+    /// retry-budget (`canRetry` is a read-only view; the retry decision lives
+    /// in this table, not in `canRetry`).
+    internal enum SettleDirective {
+        case retry
+        case complete(Any?)
+        case fail
+        case expire
+    }
+
+    internal static func settleDecision(for outcome: TaskScheduler.Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
+        switch outcome {
+        case .completed(let result):
+            if result != nil {
+                return .complete(result)
+            }
+            if canRetry {
+                return .retry
+            }
+            return isActive ? .fail : .expire
+        case .failed:
+            return isActive ? .fail : .expire
+        case .expired, .cancelled:
+            return .expire
+        }
     }
 
     /// Sole terminal writer; Settlement is the only caller.
