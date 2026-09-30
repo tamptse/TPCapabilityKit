@@ -48,6 +48,8 @@ extension TaskScheduler {
                 orderPrioritiesById.removeValue(forKey: taskId)
                 return true
             }
+
+            var ids: Set<String> { Set(orderPrioritiesById.keys) }
         }
 
         struct Counts: Sendable, Equatable {
@@ -92,12 +94,31 @@ extension TaskScheduler {
             snapshot = Self.nextCounts(snapshot, from: from, to: to)
         }
 
+        private func recalculatedCounts() -> Counts {
+            var queued = 0
+            var parked = 0
+            var active = 0
+            for row in rows.values {
+                switch row.place {
+                case .pending: queued += 1
+                case .parked: parked += 1
+                case .active: active += 1
+                }
+            }
+            return Counts(pending: queued + parked, queued: queued, parked: parked, active: active)
+        }
+
+        private func debugInvariant() {
+            assert(recalculatedCounts() == snapshot)
+            assert(orderIndex.ids == Set(rows.filter { $0.value.place == .pending }.keys))
+        }
+
         // Single locked insert seam: fresh insert plus same-id displace live
         // here so no half-displaced id is observable. Displaced lease
         // terminalizes with its row removal; waiters plus park waiter return
         // for outside-lock delivery and cancel. Slot stale-evict stays after
         // on its own lock, never nested.
-        private mutating func insert(
+        mutating func insert(
             lease: Lease,
             execution: (@Sendable () async -> Any?)?,
             waiters: [(Lease) -> Void]
@@ -125,6 +146,7 @@ extension TaskScheduler {
             )
             orderIndex.enqueue(id: lease.task.id, priority: lease.task.priority)
             move(from: old, to: .pending)
+            debugInvariant()
             return result
         }
 
@@ -138,15 +160,6 @@ extension TaskScheduler {
             let waiters: [(Lease) -> Void]
             let waiter: Task<Void, Never>?
             let evict: EvictObligation?
-        }
-
-        // Enqueue entry kept for its caller; forwards to the single seam.
-        mutating func exchange(
-            lease: Lease,
-            execution: (@Sendable () async -> Any?)?,
-            waiters: [(Lease) -> Void]
-        ) -> ExchangeResult {
-            insert(lease: lease, execution: execution, waiters: waiters)
         }
 
         func lease(for id: String) -> Lease? {
@@ -185,6 +198,7 @@ extension TaskScheduler {
         }
 
         mutating func transition(for lease: Lease, to target: Transition) -> TransitionResult? {
+            defer { debugInvariant() }
             switch target {
             case .dequeueToParked:
                 guard var row = rows[lease.task.id], row.lease === lease else {
@@ -239,6 +253,7 @@ extension TaskScheduler {
             move(from: row.place, to: nil)
             rows.removeValue(forKey: lease.task.id)
             orderIndex.remove(taskId: lease.task.id)
+            debugInvariant()
             return row
         }
 
@@ -294,6 +309,7 @@ extension TaskScheduler {
         }
 
         mutating func dequeueNext() -> Lease? {
+            defer { debugInvariant() }
             while let id = orderIndex.dequeue() {
                 guard let row = rows[id] else { continue }
                 guard transition(for: row.lease, to: .dequeueToParked) != nil else { continue }

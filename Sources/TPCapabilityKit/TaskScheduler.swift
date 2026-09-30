@@ -106,7 +106,7 @@ public final class TaskScheduler: @unchecked Sendable {
         let lease = Lease(task: task)
 
         let exchanged = lock.withLock {
-            lifecycleStore.exchange(
+            lifecycleStore.insert(
                 lease: lease,
                 execution: execution,
                 waiters: completion.map { [$0] } ?? []
