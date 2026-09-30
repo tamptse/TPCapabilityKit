@@ -7,7 +7,7 @@ struct SingleExpiryTests {
     @Test("waiter and execution timeouts agree through schedule-and-wait with virtual clock")
     func waiterAndExecutionShareSingleExpiry() async {
         let waiterStore = DynamicStore()
-        waiterStore.enableDeterministicTime(owner: waiterStore)
+        waiterStore.enableDeterministicTime()
         let missing = Capability.custom("singleExpiryWaiter_\(UUID().uuidString)")
         async let waiterResult: String? = waiterStore.scheduleTaskAndWait(
             TaskDescriptor(requiredCapabilities: [missing], timeout: 5.0)

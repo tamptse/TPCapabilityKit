@@ -7,7 +7,7 @@ struct StoreDeterminismTests {
     @Test("timeout pins expired via lease state with virtual time")
     func timeoutPinsExpiredWithVirtualTime() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let cap = Capability.custom("deterministicTimeout_\(UUID().uuidString)")
 
         let done = AsyncStream<Void>.makeStream()
@@ -181,7 +181,7 @@ struct StoreDeterminismTests {
     @Test("cancel pins expired through Store lease state and counts")
     func cancelPinsExpiredThroughStore() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let cap = Capability.custom("deterministicCancel_\(UUID().uuidString)")
 
         let done = AsyncStream<Void>.makeStream()
@@ -204,7 +204,7 @@ struct StoreDeterminismTests {
     @Test("virtual time preserved across reconfigure generations")
     func virtualTimePreservedAcrossGenerations() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let cap = Capability.custom("deterministicGen_\(UUID().uuidString)")
 
         let done = AsyncGate()

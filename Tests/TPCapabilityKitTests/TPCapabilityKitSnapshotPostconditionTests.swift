@@ -10,7 +10,7 @@ struct TPCapabilityKitSnapshotPostconditionTests {
         let store = DynamicStore(
             configuration: .init(defaultTimeout: 30.0, maxPerCapability: 5, maxGlobal: 1)
         )
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let pluginId = "SnapshotPost_\(UUID().uuidString)"
         store.registerCapability(for: pluginId, capabilities: [cap])
         defer { store.unregisterCapability(for: pluginId) }

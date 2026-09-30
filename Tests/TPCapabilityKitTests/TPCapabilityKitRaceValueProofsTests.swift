@@ -143,7 +143,7 @@ struct RaceValueProofsTests {
     @Test("parked waiter expires once on single expiry")
     func parkedWaiterExpiresOnce() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("R4ParkedOnce_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [missing], timeout: 0.5)
         let done = AsyncGate()
@@ -169,7 +169,7 @@ struct RaceValueProofsTests {
     @Test("waiter wins on mid-wait capability flip with shared resolved timeout")
     func waiterWinsOnMidWaitFlip() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let cap = Capability.custom("R4FlipWin_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [cap], timeout: 4.0)
         async let result = store.scheduleTaskAndWait(task) { "flipped-ok" }

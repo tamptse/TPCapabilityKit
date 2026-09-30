@@ -3,18 +3,14 @@ import Foundation
 extension DynamicStore {
     // MARK: - Task Scheduling (facade over StoreSchedulingGenerations)
 
-    var scheduler: TaskScheduler {
-        scheduling.current(owner: self)
-    }
-
     /// Reconfigures the scheduler without orphaning in-flight work (see StoreSchedulingGenerations).
     public func configureScheduler(_ configuration: TaskScheduler.Configuration) {
-        scheduling.reconfigure(configuration, owner: self)
+        scheduling.reconfigure(configuration)
     }
 
     /// Deterministic-time delegates, spelling-only forwards to the generations module.
-    internal func enableDeterministicTime(owner: DynamicStore) {
-        scheduling.enableDeterministicTime(owner: owner)
+    internal func enableDeterministicTime() {
+        scheduling.enableDeterministicTime()
     }
 
     internal func advanceTime(by delta: TimeInterval) async {
@@ -38,7 +34,7 @@ extension DynamicStore {
         task: @escaping @Sendable () async -> Void,
         completion: ((Lease) -> Void)? = nil
     ) -> Lease {
-        scheduler.schedule(descriptor, taskExecution: task, completion: completion)
+        scheduling.schedule(descriptor, taskExecution: task, completion: completion)
     }
 
     /// Schedules a task and waits for its result.

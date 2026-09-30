@@ -441,7 +441,7 @@ struct TaskSchedulerTests {
 
     @Test func twoMissingCapabilitiesShareOneDeadline() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
 
         let task = TaskDescriptor(
             requiredCapabilities: [

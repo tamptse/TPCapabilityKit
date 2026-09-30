@@ -70,7 +70,7 @@ struct D2SameIdExchangePinTests {
     @Test("cancel during overwrite resolves once with reuse and wait-cancel nil")
     func cancelDuringOverwrite() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("d2-cancel_\(UUID().uuidString)")
         let id = "d2-cancel_\(UUID().uuidString)"
 

@@ -32,12 +32,12 @@ public final class DynamicStore: @unchecked Sendable {
     // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns generations + shared time)
     private let state = StoreState()
     private let registry = CapabilityRegistry()
-    let scheduling: StoreSchedulingGenerations
+    private(set) var scheduling: StoreSchedulingGenerations!
 
     /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
     internal init(configuration: TaskScheduler.Configuration = .init()) {
-        self.scheduling = StoreSchedulingGenerations(configuration: configuration, clock: .live)
+        self.scheduling = StoreSchedulingGenerations(owner: self, configuration: configuration, clock: .live)
     }
 
     // MARK: - Private Helpers

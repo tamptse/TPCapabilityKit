@@ -51,7 +51,7 @@ extension DynamicStore {
         _ descriptor: TaskDescriptor,
         task: @escaping @Sendable () async throws -> T
     ) async -> T? {
-        await scheduler.scheduleAndWait(descriptor, taskExecution: task)
+        await scheduling.scheduleAndWait(descriptor, taskExecution: task)
     }
 
     // MARK: - Fire entries (the two documented spellings + convenience)

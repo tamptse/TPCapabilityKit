@@ -216,7 +216,7 @@ struct TPCapabilityKitD1ReapPurityTests {
         let store = DynamicStore()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
     }

@@ -19,7 +19,7 @@ struct DynamicStoreSchedulerIntegrationTests {
 
     @Test func scheduleTaskWithoutCapability() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
 
         async let result = store.scheduleTaskAndWait(
             TaskDescriptor(

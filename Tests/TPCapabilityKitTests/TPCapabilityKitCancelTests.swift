@@ -7,7 +7,7 @@ struct CancelTests {
     @Test("cancel settles expired exactly once")
     func cancelSendsOneEvent() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
 
         let started = AsyncGate()
         let release = AsyncGate()

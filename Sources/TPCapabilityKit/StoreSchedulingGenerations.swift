@@ -8,14 +8,16 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     /// One time instance shared across live generations, so reconfigure never
     /// forks virtual time. Fixed here at construction, never threaded per call.
     private let clock: Clock
+    private unowned let owner: DynamicStore
 
-    init(configuration: TaskScheduler.Configuration, clock: Clock) {
+    init(owner: DynamicStore, configuration: TaskScheduler.Configuration, clock: Clock) {
+        self.owner = owner
         self.configuration = configuration
         self.clock = clock
         self.slots = ConcurrencyController(maxPerCapability: configuration.maxPerCapability, maxGlobal: configuration.maxGlobal)
     }
 
-    func current(owner: DynamicStore) -> TaskScheduler {
+    private func current() -> TaskScheduler {
         var created: TaskScheduler?
         let result = lock.withLock { () -> TaskScheduler in
             if let current = generations.last { return current }
@@ -28,7 +30,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return result
     }
 
-    func reconfigure(_ newConfiguration: TaskScheduler.Configuration, owner: DynamicStore) {
+    func reconfigure(_ newConfiguration: TaskScheduler.Configuration) {
         var created: TaskScheduler?
         lock.withLock {
             configuration = newConfiguration
@@ -47,7 +49,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     /// Deterministic-time controls live here next to the generations they
     /// gate: precede-first-use is checked against the private emptiness helper
     /// in exactly one place, enable-once and virtual-only inside the time module.
-    func enableDeterministicTime(owner: DynamicStore) {
+    func enableDeterministicTime() {
         precondition(owner !== DynamicStore.shared, "deterministic time only on fresh instances")
         precondition(isEmpty, "enableDeterministicTime must precede first schedule")
         clock.enableDeterministic()
@@ -64,6 +66,22 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
     func cancel(taskId: String) {
         let snapshot = lock.withLock { generations }
         fanOutCancel(taskId: taskId, to: snapshot)
+    }
+
+    @discardableResult
+    func schedule(
+        _ descriptor: TaskDescriptor,
+        taskExecution: @escaping @Sendable () async -> Void,
+        completion: ((Lease) -> Void)? = nil
+    ) -> Lease {
+        current().schedule(descriptor, taskExecution: taskExecution, completion: completion)
+    }
+
+    func scheduleAndWait<T: Sendable>(
+        _ descriptor: TaskDescriptor,
+        taskExecution: @escaping @Sendable () async throws -> T
+    ) async -> T? {
+        await current().scheduleAndWait(descriptor, taskExecution: taskExecution)
     }
 
     private func fanOutCancel(taskId: String, to snapshot: [TaskScheduler]) {

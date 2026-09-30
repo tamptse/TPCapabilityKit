@@ -89,7 +89,7 @@ struct DisplacementEvictPairingTests {
     @Test("displaced parked waiter cancelled once and never runs")
     func displacedParkWaiterCancelledOnce() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("s5-park_\(UUID().uuidString)")
         let id = "s5-park_\(UUID().uuidString)"
         let pluginId = "s5-park_\(UUID().uuidString)"
@@ -203,7 +203,7 @@ struct DisplacementEvictPairingTests {
         #expect(store.activeTaskCount == 0)
 
         let seqStore = DynamicStore()
-        seqStore.enableDeterministicTime(owner: seqStore)
+        seqStore.enableDeterministicTime()
         let missing = Capability.custom("s5-seq_\(UUID().uuidString)")
         let seqId = "s5-seq_\(UUID().uuidString)"
         let firstProbe = Probe()

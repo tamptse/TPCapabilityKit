@@ -158,7 +158,7 @@ struct SameIdExchangePinTests {
     @Test("cancel after overwrite lands on new row only with no absence")
     func cancelAfterOverwriteLandsOnNew() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("r6-cancel_\(UUID().uuidString)")
         let id = "r6-cancel_\(UUID().uuidString)"
 
@@ -227,7 +227,7 @@ struct SameIdExchangePinTests {
     @Test("cancel before overwrite then reschedule works after terminal")
     func cancelBeforeOverwriteThenReschedule() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("r6-cancelbefore_\(UUID().uuidString)")
         let id = "r6-cancelbefore_\(UUID().uuidString)"
 
@@ -305,7 +305,7 @@ struct SameIdExchangePinTests {
     @Test("displaced parked waiter cancelled once and never runs after caps arrive")
     func displacedParkWaiterCancelledOnce() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("r6-park_\(UUID().uuidString)")
         let id = "r6-park_\(UUID().uuidString)"
         let pluginId = "r6-park_\(UUID().uuidString)"

@@ -7,7 +7,7 @@ struct LifecycleTableTests {
     @Test("parked reachable through public seam with counts agreeing and no execution")
     func parkedReachable() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("parkReachable_\(UUID().uuidString)")
         let executions = Probe()
         let deliveries = Probe()
@@ -43,7 +43,7 @@ struct LifecycleTableTests {
     @Test("double schedule same id keeps single row with displaced delivery and no duplicate waiter")
     func doubleScheduleKeepsSingleRow() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("doublePark_\(UUID().uuidString)")
         let id = "double-park_\(UUID().uuidString)"
         let executions = Probe()
@@ -99,7 +99,7 @@ struct LifecycleTableTests {
     @Test("cancel-while-parked lands expired once with waiter cancelled and reschedule works")
     func cancelWhileParkedPin() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let missing = Capability.custom("cancelParked_\(UUID().uuidString)")
         let id = "cancel-parked_\(UUID().uuidString)"
         let executions = Probe()

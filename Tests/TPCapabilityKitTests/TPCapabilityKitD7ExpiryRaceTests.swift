@@ -82,7 +82,7 @@ struct D7ExpiryRaceTests {
     @Test("mid-wait capability flip wins with the executed value")
     func midWaitFlipWinsWithValue() async {
         let store = DynamicStore()
-        store.enableDeterministicTime(owner: store)
+        store.enableDeterministicTime()
         let cap = Capability.custom("D7FlipWin_\(UUID().uuidString)")
         let task = TaskDescriptor(requiredCapabilities: [cap], timeout: 4.0)
         async let result = store.scheduleTaskAndWait(task) { "d7-flipped" }
