@@ -22,6 +22,16 @@ private enum Prim: Sendable, Hashable {
     }
 }
 
+private func acceptedPrims(from state: Lease.State) -> Set<Prim> {
+    switch state {
+    case .pending: return [.activate, .expire, .beginRetry]
+    case .active: return [.complete, .fail, .expire, .beginRetry]
+    case .completed: return [.beginRetry]
+    case .failed: return [.beginRetry]
+    case .expired: return [.beginRetry]
+    }
+}
+
 private func leaseIn(_ state: Lease.State) -> Lease {
     let lease = Lease(task: TaskDescriptor(requiredCapabilities: [.heavyTask], maxRetries: 2))
     switch state {
@@ -52,13 +62,6 @@ struct LeaseMatrixTests {
             .expire: .expired,
             .beginRetry: .pending,
         ]
-        let acceptedFrom: [Int: Set<Prim>] = [
-            Lease.State.pending.rawValue: [.activate, .expire, .beginRetry],
-            Lease.State.active.rawValue: [.complete, .fail, .expire, .beginRetry],
-            Lease.State.completed.rawValue: [.beginRetry],
-            Lease.State.failed(MatrixError()).rawValue: [.beginRetry],
-            Lease.State.expired.rawValue: [.beginRetry],
-        ]
         let starts: [Lease.State] = [.pending, .active, .completed, .failed(MatrixError()), .expired]
         let prims: [Prim] = [.activate, .complete, .fail, .expire, .beginRetry]
 
@@ -68,22 +71,22 @@ struct LeaseMatrixTests {
                 let retriesBefore = lease.retryCount
                 prim.apply(to: lease)
 
-                let accepted = acceptedFrom[start.rawValue, default: []].contains(prim)
+                let accepted = acceptedPrims(from: start).contains(prim)
                 if prim == .beginRetry {
                     #expect(
                         (lease.retryCount == retriesBefore + 1) == accepted,
-                        "start \(start.rawValue), prim \(prim)"
+                        "start \(start), prim \(prim)"
                     )
                 } else {
                     #expect(
                         (lease.state != start) == accepted,
-                        "start \(start.rawValue), prim \(prim)"
+                        "start \(start), prim \(prim)"
                     )
                 }
                 if accepted {
-                    #expect(lease.state == acceptedEnd[prim]!, "start \(start.rawValue), prim \(prim)")
+                    #expect(lease.state == acceptedEnd[prim]!, "start \(start), prim \(prim)")
                 } else {
-                    #expect(lease.state == start, "start \(start.rawValue), prim \(prim)")
+                    #expect(lease.state == start, "start \(start), prim \(prim)")
                 }
             }
         }
