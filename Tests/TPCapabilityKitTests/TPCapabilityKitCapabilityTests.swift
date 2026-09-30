@@ -146,29 +146,51 @@ struct TPCapabilityKitCapabilityTests {
         }
     }
 
-    @Test func observeAllCapabilitiesReactive() async {
+    @Test func waitForAllCapabilitiesReactive() async {
         let store = DynamicStore()
         let pluginId = "ObserveAllCapPlugin_\(UUID().uuidString)"
-        
-        var receivedValues: [[String: Set<Capability>]] = []
+        let cap = Capability.custom("waitReactive_\(UUID().uuidString)")
+
+        // Missing set resolves false when the injected expiry wins.
+        let missing = await store.waitForAllCapabilities([cap]) { _ in false }
+        #expect(missing == false)
+
+        store.registerCapability(for: pluginId, capabilities: [cap])
+        defer { store.unregisterCapability(for: pluginId) }
+
+        // Already-satisfied set resolves true without invoking the race.
+        let ready = await store.waitForAllCapabilities([cap]) { _ in false }
+        #expect(ready == true)
+        #expect(store.queryCapability(cap) == true)
+        #expect(store.queryAllCapabilities()[pluginId] == [cap])
+
+        // Arrival resolves through a pass-through race with query agreement.
+        let arriveCap = Capability.custom("waitArrive_\(UUID().uuidString)")
+        let arrivePlugin = "WaitArrive_\(UUID().uuidString)"
+        defer { store.unregisterCapability(for: arrivePlugin) }
+        let gate = AsyncGate()
+        Task {
+            await gate.wait()
+            store.registerCapability(for: arrivePlugin, capabilities: [arriveCap])
+        }
+        let arrived = await store.waitForAllCapabilities([arriveCap]) { operation in
+            gate.signal()
+            return await operation()
+        }
+        #expect(arrived == true)
+        #expect(store.queryCapability(arriveCap) == true)
+
+        // Unregister clears point-in-time query; the per-capability stream
+        // (UI grain) observes the transition without snapshot mechanics.
+        var received: [Bool] = []
         var cancellables = Set<AnyCancellable>()
-        
-        store.observeAllCapabilities()
-            .sink { caps in
-                receivedValues.append(caps)
-            }
+        store.observeCapability(arriveCap)
+            .sink { received.append($0) }
             .store(in: &cancellables)
-        
-        // Register capability
-        store.registerCapability(for: pluginId, capabilities: [.heavyTask])
-        
-        // Should receive at least 2 values: initial empty + after registration (synchronous)
-        #expect(receivedValues.count >= 2)
-        #expect(receivedValues.last?[pluginId]?.contains(.heavyTask) == true)
-        
-        // Unregister
-        store.unregisterCapability(for: pluginId)
-        
+        store.unregisterCapability(for: arrivePlugin)
+        #expect(received.last == false)
+        #expect(store.queryCapability(arriveCap) == false)
+
         cancellables.removeAll()
     }
 

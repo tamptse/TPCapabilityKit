@@ -26,29 +26,32 @@ struct RegistryEmissionOrderTests {
         }
     }
 
-    @Test("per-capability delivered before snapshot on register")
-    func perCapabilityBeforeSnapshotOnRegister() {
+    @Test("per-capability delivered before waiter resolution on register")
+    func perCapabilityBeforeWaiterOnRegister() async {
         let registry = CapabilityRegistry()
         let cap = Capability.custom("emissionOrderReg_\(UUID().uuidString)")
         let log = EventLog()
         var cancellables = Set<AnyCancellable>()
 
         registry.observe(cap)
-            .sink { _ in log.append("per-capability") }
+            .sink { value in
+                if value { log.append("per-capability") }
+            }
             .store(in: &cancellables)
-        registry.observeAll()
-            .sink { _ in log.append("snapshot") }
-            .store(in: &cancellables)
-        log.reset()
 
         registry.register(for: "EmissionOrderReg", capabilities: [cap])
 
-        #expect(log.snapshot == ["per-capability", "snapshot"])
+        // Per-capability notice delivers synchronously; the snapshot-driven
+        // waiter resolves after.
+        #expect(log.snapshot == ["per-capability"])
+        let ready = await registry.waitForAll([cap]) { _ in false }
+        if ready { log.append("waiter") }
+        #expect(log.snapshot == ["per-capability", "waiter"])
         #expect(registry.query(cap) == true)
     }
 
-    @Test("per-capability delivered before snapshot on unregister")
-    func perCapabilityBeforeSnapshotOnUnregister() {
+    @Test("per-capability delivered before waiter expiry on unregister")
+    func perCapabilityBeforeWaiterOnUnregister() async {
         let registry = CapabilityRegistry()
         let cap = Capability.custom("emissionOrderUnreg_\(UUID().uuidString)")
         let log = EventLog()
@@ -57,16 +60,18 @@ struct RegistryEmissionOrderTests {
         registry.observe(cap)
             .sink { _ in log.append("per-capability") }
             .store(in: &cancellables)
-        registry.observeAll()
-            .sink { _ in log.append("snapshot") }
-            .store(in: &cancellables)
 
         registry.register(for: "EmissionOrderUnreg", capabilities: [cap])
         log.reset()
 
         registry.unregister(for: "EmissionOrderUnreg")
 
-        #expect(log.snapshot == ["per-capability", "snapshot"])
+        // Per-capability false delivers synchronously; the waiter then loses
+        // the expiry race since the set is no longer simultaneously available.
+        #expect(log.snapshot == ["per-capability"])
+        let ready = await registry.waitForAll([cap]) { _ in false }
+        if !ready { log.append("waiter-expired") }
+        #expect(log.snapshot == ["per-capability", "waiter-expired"])
         #expect(registry.query(cap) == false)
     }
 }

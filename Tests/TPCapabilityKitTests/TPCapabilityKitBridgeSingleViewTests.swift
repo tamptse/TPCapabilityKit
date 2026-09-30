@@ -798,32 +798,21 @@ struct BridgeDetachSliceTests {
         _ = capGate.wait(timeout: .now() + 2.0)
         #expect(capLock.withLock { capValues } == [false])
 
-        var snapshots: [[String: Set<Capability>]] = []
-        let snapLock = NSLock()
-        let snapGate = DispatchSemaphore(value: 0)
-        var snapCancellables = Set<AnyCancellable>()
-        store.observeAllCapabilities()
-            .sink { snapshot in
-                snapLock.withLock { snapshots.append(snapshot) }
-                snapGate.signal()
-            }
-            .store(in: &snapCancellables)
-        defer { snapCancellables.removeAll() }
-        _ = snapGate.wait(timeout: .now() + 2.0)
-        let snapshotCountBefore = snapLock.withLock { snapshots.count }
+        // Whole-set shape via point-in-time query instead of snapshot
+        // subscription: the no-op leaves the row count unchanged.
+        let snapshotCountBefore = store.queryAllCapabilities().count
 
         bridge.removeState(pluginId: "")
 
         #expect((bridge.getState(pluginId: pluginId) as? String) == beforeRead)
         #expect(bridge.queryCapability(uniqueCap) == false)
+        #expect(store.queryAllCapabilities().count == snapshotCountBefore)
 
         store.registerCapability(for: "NoopProbe_\(UUID().uuidString)", capabilities: [.custom(uniqueCap)])
         _ = capGate.wait(timeout: .now() + 2.0)
-        _ = snapGate.wait(timeout: .now() + 2.0)
         #expect(capLock.withLock { capValues } == [false, true])
-        snapLock.withLock {
-            #expect(snapshots.count == snapshotCountBefore + 1)
-        }
+        #expect(store.queryAllCapabilities().count == snapshotCountBefore + 1)
+        #expect(store.queryCapability(.custom(uniqueCap)) == true)
     }
 }
 struct BridgeUnregisterSliceTests {
@@ -933,19 +922,9 @@ struct BridgeUnregisterSliceTests {
         _ = capGate.wait(timeout: .now() + 2.0)
         #expect(capLock.withLock { capValues } == [false])
 
-        var snapshots: [[String: Set<Capability>]] = []
-        let snapLock = NSLock()
-        let snapGate = DispatchSemaphore(value: 0)
-        var snapCancellables = Set<AnyCancellable>()
-        store.observeAllCapabilities()
-            .sink { snapshot in
-                snapLock.withLock { snapshots.append(snapshot) }
-                snapGate.signal()
-            }
-            .store(in: &snapCancellables)
-        defer { snapCancellables.removeAll() }
-        _ = snapGate.wait(timeout: .now() + 2.0)
-        let snapshotCountBefore = snapLock.withLock { snapshots.count }
+        // Whole-set shape via point-in-time query instead of snapshot
+        // subscription: the no-op leaves the row count unchanged.
+        let snapshotCountBefore = store.queryAllCapabilities().count
         let beforeQuery = bridge.queryCapability(uniqueCap)
 
         bridge.unregister(pluginId: "")
@@ -953,14 +932,13 @@ struct BridgeUnregisterSliceTests {
         #expect((bridge.getState(pluginId: pluginId) as? String) == beforeRead)
         #expect(bridge.queryCapability(uniqueCap) == beforeQuery)
         #expect(store.queryCapabilities(for: pluginId).isEmpty)
+        #expect(store.queryAllCapabilities().count == snapshotCountBefore)
 
         store.registerCapability(for: "UnregNoopProbe_\(UUID().uuidString)", capabilities: [.custom(uniqueCap)])
         _ = capGate.wait(timeout: .now() + 2.0)
-        _ = snapGate.wait(timeout: .now() + 2.0)
         #expect(capLock.withLock { capValues } == [false, true])
-        snapLock.withLock {
-            #expect(snapshots.count == snapshotCountBefore + 1)
-        }
+        #expect(store.queryAllCapabilities().count == snapshotCountBefore + 1)
+        #expect(store.queryCapability(.custom(uniqueCap)) == true)
     }
 }
 struct ObjcFastPathAgreementTests {

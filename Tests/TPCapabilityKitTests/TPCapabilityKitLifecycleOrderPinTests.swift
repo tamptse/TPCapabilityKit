@@ -92,17 +92,14 @@ struct TPCapabilityKitLifecycleOrderPinTests {
         #expect(store.getState(pluginId: "", type: String.self) == nil)
 
         var capValues: [Bool] = []
-        var snapshots: [[String: Set<Capability>]] = []
         var cancellables = Set<AnyCancellable>()
         store.observeCapability(.heavyTask)
             .sink { capValues.append($0) }
             .store(in: &cancellables)
-        store.observeAllCapabilities()
-            .sink { snapshots.append($0) }
-            .store(in: &cancellables)
         #expect(capValues == [false])
-        #expect(snapshots.count == 1)
-        #expect(snapshots.first?.isEmpty == true)
+        // Whole-set shape via point-in-time query instead of snapshot
+        // subscription: empty before and after the no-op lifecycle.
+        #expect(store.queryAllCapabilities().isEmpty == true)
 
         var emptyStateValues: [String] = []
         var emptyStateCompleted = false
@@ -123,7 +120,7 @@ struct TPCapabilityKitLifecycleOrderPinTests {
         #expect(store.queryCapabilities(for: "").isEmpty)
         #expect(store.getState(pluginId: "", type: String.self) == nil)
         #expect(capValues == [false])
-        #expect(snapshots.count == 1)
+        #expect(store.queryAllCapabilities().isEmpty == true)
 
         store.unregister(plugin: emptyPlugin)
 
@@ -131,7 +128,7 @@ struct TPCapabilityKitLifecycleOrderPinTests {
         #expect(store.queryCapabilities(for: "").isEmpty)
         #expect(store.getState(pluginId: "", type: String.self) == nil)
         #expect(capValues == [false])
-        #expect(snapshots.count == 1)
+        #expect(store.queryAllCapabilities().isEmpty == true)
 
         cancellables.removeAll()
         emptyCancellables.removeAll()

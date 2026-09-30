@@ -33,8 +33,8 @@ struct TPCapabilityKitRegistryLockTests {
         cancellables.removeAll()
     }
 
-    @Test("per-capability notices land before snapshot publish")
-    func perCapBeforeSnapshot() {
+    @Test("per-capability notices land before waiter resolution")
+    func perCapBeforeWaiterResolution() async {
         let store = DynamicStore()
         let cap = Capability.custom("order_\(UUID().uuidString)")
         let pluginId = "Order_\(UUID().uuidString)"
@@ -44,15 +44,13 @@ struct TPCapabilityKitRegistryLockTests {
         store.observeCapability(cap)
             .sink { _ in order.append("notify") }
             .store(in: &cancellables)
-        store.observeAllCapabilities()
-            .sink { snapshot in
-                if !snapshot.isEmpty { order.append("snapshot") }
-            }
-            .store(in: &cancellables)
         order.removeAll()
 
         store.registerCapability(for: pluginId, capabilities: [cap])
-        #expect(order == ["notify", "snapshot"])
+        #expect(order == ["notify"])
+        let ready = await store.waitForAllCapabilities([cap]) { _ in false }
+        if ready { order.append("waiter") }
+        #expect(order == ["notify", "waiter"])
 
         store.unregisterCapability(for: pluginId)
         cancellables.removeAll()

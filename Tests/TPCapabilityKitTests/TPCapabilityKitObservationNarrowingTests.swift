@@ -6,7 +6,7 @@ import Testing
 @Suite("Observation Narrowing (Store seam)")
 struct TPCapabilityKitObservationNarrowingTests {
     @Test("empty plugin id is no-op with identical observable behavior for state and capability paths")
-    func emptyPluginIdNoOp() {
+    func emptyPluginIdNoOp() async {
         let store = DynamicStore()
         var cancellables = Set<AnyCancellable>()
 
@@ -37,23 +37,24 @@ struct TPCapabilityKitObservationNarrowingTests {
             .store(in: &cancellables)
         #expect(capReceived == [false])
 
-        var snapshots: [[String: Set<Capability>]] = []
-        store.observeAllCapabilities()
-            .sink { snapshots.append($0) }
-            .store(in: &cancellables)
-        let snapshotCount = snapshots.count
+        // Whole-set shape via point-in-time query instead of snapshot
+        // subscription; empty required set resolves through the waiter
+        // fast path without subscribing.
+        let emptyReady = await store.waitForAllCapabilities([]) { _ in false }
+        #expect(emptyReady == true)
+        let snapshotCount = store.queryAllCapabilities().count
 
         store.registerCapability(for: "", capabilities: [cap])
         #expect(store.queryCapability(cap) == false)
         #expect(store.queryCapabilities(for: "") == [])
         #expect(store.queryAllCapabilities()[""] == nil)
         #expect(capReceived == [false])
-        #expect(snapshots.count == snapshotCount)
+        #expect(store.queryAllCapabilities().count == snapshotCount)
 
         store.unregisterCapability(for: "")
         #expect(store.queryCapability(cap) == false)
         #expect(capReceived == [false])
-        #expect(snapshots.count == snapshotCount)
+        #expect(store.queryAllCapabilities().count == snapshotCount)
 
         cancellables.removeAll()
     }
@@ -73,8 +74,8 @@ struct TPCapabilityKitObservationNarrowingTests {
         #expect(registry.query(cap) == false)
     }
 
-    @Test("per-capability notice precedes snapshot publish")
-    func noticeBeforeSnapshot() {
+    @Test("per-capability notice precedes waiter resolution")
+    func noticeBeforeWaiterResolution() async {
         let registry = CapabilityRegistry()
         let pluginId = "NarrowOrder_\(UUID().uuidString)"
         let cap = Capability.custom("narrowOrder_\(UUID().uuidString)")
@@ -84,15 +85,13 @@ struct TPCapabilityKitObservationNarrowingTests {
         registry.observe(cap)
             .sink { _ in order.append("notify") }
             .store(in: &cancellables)
-        registry.observeAll()
-            .sink { snapshot in
-                if !snapshot.isEmpty { order.append("snapshot") }
-            }
-            .store(in: &cancellables)
         order.removeAll()
 
         registry.register(for: pluginId, capabilities: [cap])
-        #expect(order == ["notify", "snapshot"])
+        #expect(order == ["notify"])
+        let ready = await registry.waitForAll([cap]) { _ in false }
+        if ready { order.append("waiter") }
+        #expect(order == ["notify", "waiter"])
         #expect(registry.query(cap) == true)
 
         cancellables.removeAll()

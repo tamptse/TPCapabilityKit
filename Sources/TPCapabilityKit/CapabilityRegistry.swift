@@ -112,7 +112,7 @@ final class CapabilityRegistry: @unchecked Sendable {
     /// Do not rebuild the whole-set wait out of this snapshot plus re-query:
     /// that relearns emission ordering and drifts the empty/already-satisfied
     /// fast paths per call site.
-    func observeAll() -> AnyPublisher<[String: Set<Capability>], Never> {
+    private func observeAll() -> AnyPublisher<[String: Set<Capability>], Never> {
         snapshotSubject.eraseToAnyPublisher()
     }
 

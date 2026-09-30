@@ -76,7 +76,7 @@ struct TPCapabilityKitCapabilityRegistryTests {
     }
 
     @Test("snapshot reflects current plugin mapping")
-    func snapshotContents() {
+    func snapshotContents() async {
         let registry = CapabilityRegistry()
         let pluginId1 = "RegSnap1_\(UUID().uuidString)"
         let pluginId2 = "RegSnap2_\(UUID().uuidString)"
@@ -89,16 +89,16 @@ struct TPCapabilityKitCapabilityRegistryTests {
         #expect(snapshot[pluginId2]?.contains(.lightTask) == true)
         #expect(snapshot[pluginId2]?.contains(.networkAccess) == true)
 
-        var observedSnapshots: [[String: Set<Capability>]] = []
-        var cancellables = Set<AnyCancellable>()
-        registry.observeAll()
-            .sink { observedSnapshots.append($0) }
-            .store(in: &cancellables)
         registry.register(for: "RegSnap3_\(UUID().uuidString)", capabilities: [.backgroundExecution])
         #expect(registry.queryAll().count == 3)
-        #expect(observedSnapshots.last?[pluginId1]?.contains(.heavyTask) == true)
-
-        cancellables.removeAll()
+        // Whole-set readiness through the waiter plus query instead of
+        // snapshot subscription: already-satisfied resolves without racing.
+        let ready = await registry.waitForAll(
+            [.heavyTask, .lightTask, .networkAccess, .backgroundExecution]
+        ) { _ in false }
+        #expect(ready == true)
+        #expect(registry.query(.backgroundExecution) == true)
+        #expect(registry.queryAll()[pluginId1]?.contains(.heavyTask) == true)
     }
 
     @Test("per-capability observer receives true then false")
@@ -123,8 +123,8 @@ struct TPCapabilityKitCapabilityRegistryTests {
         cancellables.removeAll()
     }
 
-    @Test("emit helper sends notifications before snapshot")
-    func emitNotificationsBeforeSnapshot() {
+    @Test("per-capability notice lands before waiter resolution")
+    func perCapabilityNoticeBeforeWaiterResolution() async {
         let registry = CapabilityRegistry()
         let pluginId = "RegEmitOrder_\(UUID().uuidString)"
         let cap = Capability.custom("regEmitOrder_\(UUID().uuidString)")
@@ -134,15 +134,16 @@ struct TPCapabilityKitCapabilityRegistryTests {
         registry.observe(cap)
             .sink { _ in order.append("notify") }
             .store(in: &cancellables)
-        registry.observeAll()
-            .sink { snapshot in
-                if !snapshot.isEmpty { order.append("snapshot") }
-            }
-            .store(in: &cancellables)
         order.removeAll()
 
         registry.register(for: pluginId, capabilities: [cap])
-        #expect(order == ["notify", "snapshot"])
+        // Per-capability notice delivers synchronously on the writer thread.
+        #expect(order == ["notify"])
+        // Whole-set readiness resolves through the snapshot-driven waiter
+        // after the per-capability notice.
+        let ready = await registry.waitForAll([cap]) { _ in false }
+        if ready { order.append("waiter") }
+        #expect(order == ["notify", "waiter"])
         #expect(registry.query(cap) == true)
         #expect(registry.queryAll()[pluginId] == [cap])
 

@@ -97,12 +97,12 @@ public final class DynamicStore: @unchecked Sendable {
     //   grain for UI-style subscribers.
     // - Tasks waiter: waitForAllCapabilities, whole-set readiness grain for
     //   the scheduler's multi-capability descriptors. Snapshot observation
-    //   (observeAllCapabilities) is private mechanics — only the waiter
+    //   is private mechanics inside the registry — only the waiter
     //   subscribes, re-querying per emission; set-matching plus the
     //   empty/already-satisfied shortcuts live once in registry.waitForAll.
-    // Do not rebuild the whole-set wait in callers out of snapshot observation
-    // plus re-query: that relearns emission ordering and drifts the empty-set
-    // and already-satisfied fast paths per call site (ADR-0024 rejects).
+    // Do not rebuild the whole-set wait in callers out of per-capability
+    // observation plus re-query: that relearns emission ordering and drifts
+    // the empty-set and already-satisfied fast paths per call site (ADR-0024 rejects).
 
     /// Registers capabilities for a plugin identifier.
     /// - Parameters:
@@ -142,8 +142,8 @@ public final class DynamicStore: @unchecked Sendable {
 
     /// UI pair half: reactively observes whether any plugin provides the specified capability.
     /// Per-Capability grain for UI-style subscribers; pairs with `queryCapability`.
-    /// The Tasks waiter uses whole-snapshot observation to re-evaluate
-    /// multi-capability descriptors instead of this per-Capability grain.
+    /// The Tasks waiter uses the whole-set wait (`waitForAllCapabilities`)
+    /// instead of this per-Capability grain.
     /// - Parameter capability: The capability to observe.
     /// - Returns: A publisher emitting `true` when the capability becomes available, `false` otherwise.
     /// - Note: Values are delivered synchronously on the writer's thread with no
@@ -152,22 +152,12 @@ public final class DynamicStore: @unchecked Sendable {
         registry.observe(capability)
     }
 
-    /// Tasks waiter mechanics: reactively observes capabilities changes across all plugins.
-    /// Private snapshot mechanics for the waiter only — pairs with `waitForAllCapabilities`
-    /// for multi-capability descriptors, which re-queries per emission. UI-style
-    /// subscribers prefer the UI pair's per-Capability observation of a single `Bool`;
-    /// do not rebuild the whole-set wait out of this snapshot plus re-query.
-    /// - Returns: A publisher emitting the full capabilities dictionary on each change.
-    func observeAllCapabilities() -> AnyPublisher<[String: Set<Capability>], Never> {
-        registry.observeAll()
-    }
-
     /// Tasks waiter: whole-set readiness for the Tasks waiter.
     /// Thin delegation to the registry interface, so park/expiry/activate/settle
     /// stay in Tasks while set-matching plus the empty/already-satisfied
     /// shortcuts live once in the registry, re-querying per snapshot emission.
-    /// Pairs with `observeAllCapabilities` (private mechanics); do not rebuild
-    /// this wait in callers out of snapshot observation plus re-query.
+    /// Snapshot mechanics stay private inside the registry; do not rebuild
+    /// this wait in callers out of per-capability observation plus re-query.
     func waitForAllCapabilities(
         _ required: Set<Capability>,
         race: @Sendable @escaping (@escaping CapabilityRegistry.WaitOperation) async -> Bool
