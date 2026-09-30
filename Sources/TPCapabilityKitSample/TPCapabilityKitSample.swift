@@ -134,6 +134,30 @@ final class SampleObjcPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
 
 enum TPCapabilityKitSample {
 
+    private static func teardown(
+        store: DynamicStore,
+        plugins: [any AppPlugin],
+        stateIds: [String],
+        cancellables: inout Set<AnyCancellable>
+    ) {
+        plugins.forEach { store.unregister(plugin: $0) }
+        stateIds.forEach { store.removeState(for: $0) }
+        cancellables.removeAll()
+    }
+
+    private static func teardown(
+        store: DynamicStore,
+        bridge: ObjcStoreBridge,
+        objcPluginId: String,
+        plugins: [any AppPlugin],
+        stateIds: [String]
+    ) {
+        bridge.unregister(pluginId: objcPluginId)
+        bridge.removeState(pluginId: objcPluginId)
+        plugins.forEach { store.unregister(plugin: $0) }
+        stateIds.forEach { store.removeState(for: $0) }
+    }
+
     static func runStateExample(store: DynamicStore) {
         var cancellables = Set<AnyCancellable>()
         let profilePlugin = UserProfilePlugin()
@@ -168,10 +192,12 @@ enum TPCapabilityKitSample {
         store.removeState(for: "TempPlugin")
         print("[removeState] Subject removed, future updates create fresh subject")
 
-        store.unregister(plugin: profilePlugin)
-        store.unregister(plugin: chatPlugin)
-        store.removeState(for: "TempPlugin")
-        cancellables.removeAll()
+        teardown(
+            store: store,
+            plugins: [profilePlugin, chatPlugin],
+            stateIds: [profilePlugin.id, chatPlugin.id, "TempPlugin"],
+            cancellables: &cancellables
+        )
     }
 
     static func runCapabilityExample(store: DynamicStore) {
@@ -199,11 +225,16 @@ enum TPCapabilityKitSample {
         // 9. Unregister a capability plugin
         store.unregister(plugin: backgroundPlugin)
 
-        store.unregister(plugin: networkPlugin)
-        cancellables.removeAll()
+        teardown(
+            store: store,
+            plugins: [networkPlugin],
+            stateIds: [backgroundPlugin.id, networkPlugin.id],
+            cancellables: &cancellables
+        )
     }
 
     static func runSchedulingExample(store: DynamicStore) {
+        var cancellables = Set<AnyCancellable>()
         // 19. Centralized Task Scheduling - Swift API
         print("\n--- Task Scheduling Examples ---")
 
@@ -263,6 +294,13 @@ enum TPCapabilityKitSample {
         print("[Configuration] Applied custom timeout/limits via configureScheduler")
         store.configureScheduler(.default)
         print("[Configuration] Restored defaults")
+
+        teardown(
+            store: store,
+            plugins: [],
+            stateIds: [],
+            cancellables: &cancellables
+        )
     }
 
     static func runObjCBridgeExample(store: DynamicStore, bridge: ObjcStoreBridge) {
@@ -376,11 +414,14 @@ enum TPCapabilityKitSample {
         // Check counts via ObjC bridge
         print("[ObjC] Pending: \(bridge.taskScheduler.pendingCount), Active: \(bridge.taskScheduler.activeCount)")
 
-        bridge.unregister(pluginId: objcPlugin.id)
-        bridge.removeState(pluginId: objcPlugin.id)
+        teardown(
+            store: store,
+            bridge: bridge,
+            objcPluginId: objcPlugin.id,
+            plugins: [networkPlugin],
+            stateIds: [networkPlugin.id]
+        )
         assert(bridge.getState(pluginId: objcPlugin.id) == nil)
-        store.unregister(plugin: networkPlugin)
-        store.removeState(for: networkPlugin.id)
     }
 
     /// Demonstrates registering plugins, publishing state, and decoupled cross-plugin observation.
