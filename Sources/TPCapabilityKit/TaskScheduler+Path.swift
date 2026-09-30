@@ -192,6 +192,9 @@ extension TaskScheduler {
         case expire
     }
 
+    /// Phase table (intentional, do not fuse): input `Settlement` (`cancelled`→`.expired`) vs private `SettleDirective` here
+    /// vs public `Lease.Terminal` (owner) vs pre-admission `ActivationGate` (never terminalizes).
+    /// Retry reuses same Lease identity.
     private static func settleDecision(for outcome: Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
         switch outcome {
         case .completed(let result):

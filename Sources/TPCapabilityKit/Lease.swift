@@ -75,6 +75,9 @@ public final class Lease: @unchecked Sendable {
         activatedAt = Date()
     }
 
+    /// Phase table (intentional, do not fuse): public `Terminal` owned here vs input `Settlement` (`cancelled`→`.expired`)
+    /// vs private `SettleDirective` (settle-site output) vs pre-admission `ActivationGate` (never terminalizes).
+    /// Retry reuses same Lease identity.
     /// Single terminal vocabulary for the Lease lifecycle, owned here.
     /// Tasks reuses it via `TaskScheduler.Terminal` (typealias, no duplicate).
     /// `Settlement` (Tasks input) shares this spelling for its terminal cases;
