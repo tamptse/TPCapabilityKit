@@ -71,11 +71,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         #if DEBUG
         warnIfNonNSObjectGrain(pluginId: pluginId, raw: store.getState(pluginId: pluginId, type: Any.self))
         #endif
-        let sink = ObjcBridgeDoor.subscribeSink(queue: queue, observer: observer)
-        let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
-            .eraseToAnyPublisher()
-        .sink(receiveValue: sink)
-        return ObjcCancellable(cancellable)
+        return ObjcBridgeDoor.subscribeState(store: store, pluginId: pluginId, queue: queue, observer: observer)
     }
 
     // MARK: - Plugin Detach
@@ -122,11 +118,7 @@ public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
         let cap = ObjcMapper.capability(from: capability)
-        let sink = ObjcBridgeDoor.subscribeCapabilitySink(queue: queue, observer: observer)
-        let cancellable = store.observeCapability(cap)
-            .eraseToAnyPublisher()
-            .sink(receiveValue: sink)
-        return ObjcCancellable(cancellable)
+        return ObjcBridgeDoor.subscribeCapability(store: store, capability: cap, queue: queue, observer: observer)
     }
 
     // MARK: - Task Execution APIs

@@ -1,3 +1,4 @@
+@preconcurrency import Combine
 @preconcurrency import Foundation
 import TPCapabilityKit
 
@@ -165,6 +166,34 @@ enum ObjcBridgeDoor {
         observer: @escaping (T) -> Void
     ) -> (T) -> Void {
         DeliveryAdapter(policy: policy).boxedSink(queue: queue, observer: observer)
+    }
+
+    static func subscribeState(
+        store: DynamicStore,
+        pluginId: String,
+        queue: DispatchQueue?,
+        policy: ObjcQueuePolicy = .givenOrMain,
+        observer: @escaping (NSObject?) -> Void
+    ) -> ObjcCancellable {
+        let sink = subscribeSink(queue: queue, policy: policy, observer: observer)
+        let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
+            .eraseToAnyPublisher()
+            .sink(receiveValue: sink)
+        return ObjcCancellable(cancellable)
+    }
+
+    static func subscribeCapability(
+        store: DynamicStore,
+        capability: Capability,
+        queue: DispatchQueue?,
+        policy: ObjcQueuePolicy = .givenOrMain,
+        observer: @escaping (Bool) -> Void
+    ) -> ObjcCancellable {
+        let sink = subscribeCapabilitySink(queue: queue, policy: policy, observer: observer)
+        let cancellable = store.observeCapability(capability)
+            .eraseToAnyPublisher()
+            .sink(receiveValue: sink)
+        return ObjcCancellable(cancellable)
     }
 }
 
