@@ -40,6 +40,10 @@ public final class ObjcLease: NSObject, @unchecked Sendable {
         underlying.result
     }
 
+    /// Spares ObjC consumers defensive casting boilerplate across completion
+    /// handlers, safely yielding nil for non-NSObject Swift types.
+    @objc public var resultAsNSObject: NSObject? { underlying.result as? NSObject }
+
     /// The underlying Swift Lease.
     public let underlying: Lease
 
