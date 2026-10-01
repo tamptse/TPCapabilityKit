@@ -77,6 +77,8 @@ public final class TaskScheduler: @unchecked Sendable {
         self.concurrencyController = concurrencyController
     }
 
+    /// Thin scheduling seam: schedule plus schedule-and-wait plus cancel plus pending-plus-active counts.
+    /// All drain plus park plus activate plus settle crosses the single path.
     /// Schedules a task for execution with a closure.
     /// - Parameters:
     ///   - task: The task descriptor to schedule.
@@ -94,56 +96,6 @@ public final class TaskScheduler: @unchecked Sendable {
             return ()
         }, completion: completion)
         return lease
-    }
-
-    @discardableResult
-    private func enqueue(
-        _ task: TaskDescriptor,
-        execution: @escaping @Sendable () async -> Any?,
-        completion: ((Lease) -> Void)?
-    ) -> Lease {
-        let lease = Lease(task: task)
-
-        let exchanged = lock.withLock {
-            lifecycleStore.insert(
-                lease: lease,
-                execution: execution,
-                waiters: completion.map { [$0] } ?? []
-            )
-        }
-        finishExchange(result: exchanged, fresh: lease)
-
-        return lease
-    }
-
-    /// Lock order: runs outside scheduler `lock` to avoid nesting; controller self-locks, waiters run outside lock.
-    /// Note after delivery in same batch so stale drains before newcomer admission.
-    /// Generations stay evict-free; obligation is still minted in insert.
-    private func finishExchange(result: LifecycleStore.ExchangeResult, fresh: Lease) {
-        deliverDisplaced(
-            displaced: result.displaced,
-            waiters: result.waiters,
-            waiter: result.waiter,
-            evicted: result.evict != nil,
-            fresh: fresh
-        )
-        kickPump()
-    }
-
-    private func deliverDisplaced(
-        displaced: Lease?,
-        waiters: [(Lease) -> Void],
-        waiter: Task<Void, Never>?,
-        evicted: Bool,
-        fresh: Lease
-    ) {
-        if let displaced {
-            waiter?.cancel()
-            for waiter in waiters {
-                waiter(displaced)
-            }
-        }
-        if evicted { concurrencyController.noteDisplaced(fresh: fresh) }
     }
 
     func kickPump() {
