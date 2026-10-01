@@ -2,8 +2,8 @@ import Foundation
 
 /// Lifecycle tracker for scheduled tasks.
 ///
-/// Transition contract (Settlement decides per ADR-0001/0004 — single reviewable
-/// decision in the fused settle step (`TaskScheduler+Path.swift`); guards below are safety no-ops only):
+/// Dumb state only (Settlement decides per ADR-0001/0004 in the fused settle
+/// step (`TaskScheduler+Path.swift`); guards below are safety no-ops only):
 /// - pending → active via `activate()`.
 /// - active → completed/failed/expired via `terminalize(_:)`; terminal
 ///   states reject `activate`/`terminalize` as no-ops.
@@ -75,50 +75,14 @@ public final class Lease: @unchecked Sendable {
         activatedAt = Date()
     }
 
-    /// Phase table (intentional, do not fuse): public `Terminal` plus `SettleDirective` table owned here vs input `Settlement` (`cancelled`→`.expired`)
-    /// vs pre-admission `ActivationGate` (never terminalizes).
-    /// Retry reuses same Lease identity.
     /// Single terminal vocabulary for the Lease lifecycle, owned here.
     /// Tasks reuses it via `TaskScheduler.Terminal` (typealias, no duplicate).
-    /// `Settlement` (Tasks input) shares this spelling for its terminal cases;
-    /// `cancelled` stays input-only and maps to `.expired` at the single settle
-    /// site. `Settlement.failed` carries no `Error`; the single transition
-    /// mints the fresh execution error when applying `.failed`.
-    /// `ActivationGate` stays pre-admission-only in the Path and never
-    /// terminalizes; it is not a terminal row.
+    /// `Settlement.failed` carries no `Error`; the fused settle mints the
+    /// fresh execution error when applying `.failed`.
     internal enum Terminal {
         case completed(Any?)
         case failed(Error)
         case expired
-    }
-
-    /// Single settlement decision table (input → directive → terminal), owned
-    /// here beside `Terminal`. Decision beside owner; effects stay in the Path.
-    /// Rows: `cancelled`→expired plus void-nil plus `isActive` routing plus
-    /// retry-budget (`canRetry` is a read-only view; the retry decision lives
-    /// in this table, not in `canRetry`).
-    internal enum SettleDirective {
-        case retry
-        case complete(Any?)
-        case fail
-        case expire
-    }
-
-    internal static func settleDecision(for outcome: TaskScheduler.Settlement, canRetry: Bool, isActive: Bool) -> SettleDirective {
-        switch outcome {
-        case .completed(let result):
-            if result != nil {
-                return .complete(result)
-            }
-            if canRetry {
-                return .retry
-            }
-            return isActive ? .fail : .expire
-        case .failed:
-            return isActive ? .fail : .expire
-        case .expired, .cancelled:
-            return .expire
-        }
     }
 
     /// Sole terminal writer; Settlement is the only caller.
