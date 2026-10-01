@@ -281,7 +281,6 @@ extension TaskScheduler {
         }
 
         private struct OrderIndex: Sendable {
-            private static let dequeueOrder = TaskPriority.allCases.sorted(by: >)
             private struct Ledger: Sendable {
                 static let compactionHeadBound = 64
                 var storage: [String] = []
@@ -351,7 +350,7 @@ extension TaskScheduler {
             }
 
             mutating func dequeue() -> String? {
-                for priority in Self.dequeueOrder {
+                for priority in TaskPriority.dequeueOrder {
                     guard var ledger = orderQueues[priority], !ledger.isEmpty else { continue }
                     guard let id = ledger.popFirst() else { continue }
                     if ledger.isEmpty {

@@ -1,5 +1,33 @@
 import Foundation
 
+/// Priority levels for scheduled tasks.
+/// Higher priority tasks are dequeued before lower priority tasks.
+/// Within the same priority, tasks are processed FIFO.
+public enum TaskPriority: Int, Comparable, CaseIterable, Sendable, CustomStringConvertible {
+    case background = 0
+    case low = 1
+    case normal = 2
+    case high = 3
+    case critical = 4
+
+    /// Canonical dequeue sequence from highest priority down to lowest priority.
+    public static let dequeueOrder: [TaskPriority] = [.critical, .high, .normal, .low, .background]
+
+    public var description: String {
+        switch self {
+        case .background: return "background"
+        case .low: return "low"
+        case .normal: return "normal"
+        case .high: return "high"
+        case .critical: return "critical"
+        }
+    }
+
+    public static func < (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 /// Describes a task to be scheduled by the TaskScheduler.
 /// Contains all metadata needed for capability matching, prioritization, and lifecycle management.
 public struct TaskDescriptor: Sendable, Identifiable {
