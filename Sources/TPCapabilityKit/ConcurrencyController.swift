@@ -136,8 +136,8 @@ final class ConcurrencyController: @unchecked Sendable {
         resume?(false)
     }
 
-    internal func evictStale(taskId: String, owner: ObjectIdentifier) {
-        removeWaiter(taskId: taskId, owner: owner, match: .stale)
+    internal func evictStale(for lease: Lease) {
+        removeWaiter(taskId: lease.task.id, owner: ObjectIdentifier(lease), match: .stale)
     }
 
     private func cancel(_ lease: Lease) {

@@ -9,7 +9,7 @@ import TPCapabilityKit
 /// call delegates to the store, so reads are always live.
 ///
 /// Single delivery story via `ObjcBridgeDoor` alongside the Bridge subscribes.
-/// Descriptor building and timeout compat stay in `ObjcMapper`; the sync
+/// Descriptor building stays in `ObjcBridgeDoor`, timeout compat in `ObjcMapper`; the sync
 /// fast-path (`runIfAvailable`) consults the same registry state the Tasks
 /// waiter resolves, so sync and wait-then-run agree by construction.
 @objc(TPTaskScheduler)

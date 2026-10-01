@@ -111,6 +111,20 @@ public final class TaskScheduler: @unchecked Sendable {
         hook?()
     }
 
+    func completeDrainHandover() {
+        let handover: DrainOwner.Handover = lock.withLock {
+            drainOwner.finish(queuedCount: lifecycleStore.counts.queued)
+        }
+        switch handover {
+        case .rekick:
+            kickPump()
+        case .exited:
+            notifyDrainSettled()
+        case .idle:
+            break
+        }
+    }
+
     func scheduleAndWait<T: Sendable>(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async throws -> T

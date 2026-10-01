@@ -44,7 +44,7 @@ extension TaskScheduler {
         for waiter in result.waiters {
             waiter(displaced)
         }
-        concurrencyController.evictStale(taskId: fresh.task.id, owner: ObjectIdentifier(fresh))
+        concurrencyController.evictStale(for: fresh)
     }
 
     func guardedDrain() async {
@@ -66,20 +66,6 @@ extension TaskScheduler {
             }
 
             Task { await self.activate(nextLease, race: race) }
-        }
-    }
-
-    private func completeDrainHandover() {
-        let handover: DrainOwner.Handover = lock.withLock {
-            drainOwner.finish(queuedCount: lifecycleStore.counts.queued)
-        }
-        switch handover {
-        case .rekick:
-            kickPump()
-        case .exited:
-            notifyDrainSettled()
-        case .idle:
-            break
         }
     }
 

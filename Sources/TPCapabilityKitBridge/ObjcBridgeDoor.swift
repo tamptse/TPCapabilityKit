@@ -24,7 +24,7 @@ struct ObjcQueuePolicy: Sendable {
     }
 }
 
-/// The single scheduling door behind the Bridge.
+/// Shared delivery core behind the Bridge.
 ///
 /// Owns the capability-spelling descriptor build and the one value-returning wait
 /// core (no queue knowledge). Queue policy +
@@ -138,30 +138,6 @@ enum ObjcBridgeDoor {
         hop(queue: queue, policy: policy, work: work)
     }
 
-    /// Subscribe sink-boxing behind the door: boxes the observer once, hops
-    /// each state value via the injected policy. Kept as a narrow public
-    /// grain over the generic core below (not inlined) because
-    /// DeliveryUnifyTests pins this seam directly; per p4-01, deletion would
-    /// break the test target without a companion migration.
-    static func subscribeSink(
-        queue: DispatchQueue?,
-        policy: ObjcQueuePolicy = .givenOrMain,
-        observer: @escaping (NSObject?) -> Void
-    ) -> (NSObject?) -> Void {
-        boxedSink(queue: queue, policy: policy, observer: observer)
-    }
-
-    /// Capability-subscribe sink-boxing behind the door: same shape as
-    /// `subscribeSink` over the per-capability `Bool` grain. Kept for the
-    /// same pinned-seam reason as above.
-    static func subscribeCapabilitySink(
-        queue: DispatchQueue?,
-        policy: ObjcQueuePolicy = .givenOrMain,
-        observer: @escaping (Bool) -> Void
-    ) -> (Bool) -> Void {
-        boxedSink(queue: queue, policy: policy, observer: observer)
-    }
-
     private static func boxedSink<T: Sendable>(
         queue: DispatchQueue?,
         policy: ObjcQueuePolicy,
@@ -182,7 +158,7 @@ enum ObjcBridgeDoor {
         policy: ObjcQueuePolicy = .givenOrMain,
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
-        let sink = subscribeSink(queue: queue, policy: policy, observer: observer)
+        let sink: (NSObject?) -> Void = boxedSink(queue: queue, policy: policy, observer: observer)
         return subscribeCore(
             publisher: store.observeState(pluginId: pluginId, type: NSObject.self),
             sink: sink
@@ -196,7 +172,7 @@ enum ObjcBridgeDoor {
         policy: ObjcQueuePolicy = .givenOrMain,
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
-        let sink = subscribeCapabilitySink(queue: queue, policy: policy, observer: observer)
+        let sink: (Bool) -> Void = boxedSink(queue: queue, policy: policy, observer: observer)
         return subscribeCore(publisher: store.observeCapability(capability), sink: sink)
     }
 

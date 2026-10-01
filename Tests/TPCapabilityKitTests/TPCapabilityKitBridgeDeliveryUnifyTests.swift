@@ -276,35 +276,47 @@ struct BridgeDeliveryUnifyTests {
         #expect(scheduleOmittedDidRun.value)
         #expect(log.last === DispatchQueue.main)
 
+        let sinkStore = DynamicStore()
+        let sinkStateId = "SinkVerify_\(UUID().uuidString)"
+        let sinkCapId = "SinkCapVerify_\(UUID().uuidString)"
+        defer { sinkStore.unregisterCapability(for: sinkCapId) }
+        var sinkTokens: [ObjcCancellable] = []
+
         let stateGivenDidRun = DidRun()
-        let stateGivenSink = ObjcBridgeDoor.subscribeSink(queue: given, policy: recording) { _ in
-            stateGivenDidRun.set()
-        }
-        stateGivenSink(nil)
+        sinkTokens.append(
+            ObjcBridgeDoor.subscribeState(store: sinkStore, pluginId: sinkStateId, queue: given, policy: recording) { _ in
+                stateGivenDidRun.set()
+            }
+        )
+        sinkStore.updateState(pluginId: sinkStateId, newState: NSString(string: "v"))
         #expect(stateGivenDidRun.value)
         #expect(log.last === given)
 
         let stateOmittedDidRun = DidRun()
-        let stateOmittedSink = ObjcBridgeDoor.subscribeSink(queue: nil, policy: recording) { _ in
-            stateOmittedDidRun.set()
-        }
-        stateOmittedSink(nil)
+        sinkTokens.append(
+            ObjcBridgeDoor.subscribeState(store: sinkStore, pluginId: sinkStateId, queue: nil, policy: recording) { _ in
+                stateOmittedDidRun.set()
+            }
+        )
         #expect(stateOmittedDidRun.value)
         #expect(log.last === DispatchQueue.main)
 
+        sinkStore.registerCapability(for: sinkCapId, capabilities: [.heavyTask])
         let capGivenDidRun = DidRun()
-        let capGivenSink = ObjcBridgeDoor.subscribeCapabilitySink(queue: given, policy: recording) { _ in
-            capGivenDidRun.set()
-        }
-        capGivenSink(true)
+        sinkTokens.append(
+            ObjcBridgeDoor.subscribeCapability(store: sinkStore, capability: .heavyTask, queue: given, policy: recording) { _ in
+                capGivenDidRun.set()
+            }
+        )
         #expect(capGivenDidRun.value)
         #expect(log.last === given)
 
         let capOmittedDidRun = DidRun()
-        let capOmittedSink = ObjcBridgeDoor.subscribeCapabilitySink(queue: nil, policy: recording) { _ in
-            capOmittedDidRun.set()
-        }
-        capOmittedSink(true)
+        sinkTokens.append(
+            ObjcBridgeDoor.subscribeCapability(store: sinkStore, capability: .lightTask, queue: nil, policy: recording) { _ in
+                capOmittedDidRun.set()
+            }
+        )
         #expect(capOmittedDidRun.value)
         #expect(log.last === DispatchQueue.main)
 

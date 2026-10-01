@@ -21,10 +21,11 @@ struct D4DrainOwnerPinTests {
         }
         #expect(scheduler.components(separatedBy: "func kickPump()").count - 1 == 1)
         #expect(scheduler.contains("struct DrainOwner"))
-        #expect(path.components(separatedBy: "counts.queued").count - 1 == 1)
+        #expect(scheduler.components(separatedBy: "counts.queued").count - 1 == 1)
         #expect(scheduler.contains("func setDrainSettledHook"))
         #expect(scheduler.contains("func notifyDrainSettled()"))
-        #expect(path.contains("notifyDrainSettled()"))
+        #expect(scheduler.components(separatedBy: "notifyDrainSettled()").count - 1 == 2)
+        #expect(path.contains("completeDrainHandover()"))
     }
 
     @Test("burst drains to zero with every completion delivered exactly once")

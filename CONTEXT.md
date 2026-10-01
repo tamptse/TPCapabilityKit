@@ -99,8 +99,8 @@ crosses one park-and-wait seam, so double-park and waiter-cancel rules live
 in the table, not in callers.
  `executeLease` is the only prod activator. Serves every wait through one
    result rendezvous keyed by task identity with Lease-identity guard; holders tracked by the controller
-   by task identity with the identity guard derived inside from the Lease —
-    the scoped-hold interface is Lease-keyed, no caller mints tokens. Slot hold is scoped: one
+       by task identity with the identity guard derived inside from the Lease —
+    hold and stale-evict interfaces are Lease-keyed, no caller mints tokens. Slot hold is scoped: one
     scoped-hold seam owns admission, first-fit FIFO wake order with skip,
     cancellable wait, and scope-exit release. Release scans the arrival queue
     from the head on every release and admits every fitting waiter in order,
