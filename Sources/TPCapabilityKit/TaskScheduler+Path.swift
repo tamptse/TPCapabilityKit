@@ -2,9 +2,9 @@ import Foundation
 import Combine
 
 /// Expiry race owner: `Deadline` in the time module (`Time.swift`).
-/// Timeout resolves once from task plus configured default; waiter and
-/// executor draw from the same resolved value through the threaded clock,
-/// so neither computes timeouts nor builds races directly.
+/// Sole resolver of unspecified timeouts (`task.timeout ?? defaultTimeout`);
+/// waiter and executor draw from the same resolved value through the threaded
+/// clock, so neither computes timeouts nor builds races directly.
 
 extension TaskScheduler {
     @discardableResult

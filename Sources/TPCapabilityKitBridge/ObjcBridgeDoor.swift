@@ -32,13 +32,14 @@ struct ObjcQueuePolicy: Sendable {
 /// only (wait core, then hop). Callers build at most the ObjC-shaped
 /// arguments then delegate here, so the given-or-main hop and the sync-vs-wait
 /// agreement each live in exactly one place. Timeout compat stays on the
-/// `ObjcTimeout` fork — callers pass `underlying` through without inspecting
-/// timeout.
+/// `ObjcTimeout` fork (delegating unspecified resolution to `Deadline`) — callers
+/// pass `underlying` through without inspecting timeout.
 enum ObjcBridgeDoor {
     /// Capability-spelling build inside the door: constructs the single-
     /// capability descriptor here (same defaults as the descriptor wrapper —
     /// normal priority, explicit pinned-compat timeout, zero retries, empty
-    /// metadata — with the wire fork applied once via the mapping interface),
+    /// metadata — with the wire fork translated via `ObjcTimeout.resolve`,
+    /// delegating unspecified resolution to `Deadline`),
     /// then funnels to the descriptor core below, so the two wait spellings
     /// cannot diverge. The pin literal never follows a reconfigured Swift
     /// default; core keeps its own inline build and never crosses this seam.

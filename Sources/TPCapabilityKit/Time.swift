@@ -11,9 +11,34 @@ import Foundation
 /// construction (see `StoreSchedulingGenerations`); this module only threads
 /// the shared instance.
 
-// MARK: - Deadline (timeout-once plus single shared race)
+// MARK: - Deadline (single timeout resolver contract plus shared race)
 
-/// Single-expiry owner: timeout resolves once at init; waiter + executor share one race.
+/// Single timeout resolver and single-expiry owner: `Deadline` construction is the
+/// sole resolver of unspecified timeouts; waiter and executor share one race.
+///
+/// ### Timeout Resolver Contract
+/// `Deadline` construction owns timeout resolution once for every scheduled task.
+/// All callers across Swift and Objective-C funnel through this single resolver:
+///
+/// 1. **Swift nil**: Unspecified timeout (`TaskDescriptor.timeout == nil`). Resolves
+///    at construction to the scheduler configuration's `defaultTimeout` (`task.timeout ?? defaultTimeout`).
+/// 2. **ObjC wire-negative (< 0)**: Unspecified timeout translated by `ObjcTimeout.resolve(wire:)`
+///    into `.unspecified` (`TaskDescriptor.timeout == nil`). Resolves at construction
+///    to the scheduler configuration's `defaultTimeout` identically to Swift nil.
+/// 3. **ObjC omitted**: Carried as explicit pinned compat literal (`ObjcTimeout.pinnedDefault == 30.0`,
+///    per ADR-0020) via `ObjcTimeout.resolve` default parameter (`TaskDescriptor.timeout == 30.0`).
+///    Travels unchanged through construction and does *not* follow a reconfigured scheduler default.
+/// 4. **Explicit non-negative**: Non-negative timeouts from either Swift or Objective-C
+///    arrive as `task.timeout != nil` and travel unchanged through construction.
+///
+/// Downstream translators (`ObjcTimeout` in `ObjcMapper.swift`, `ObjcTaskDescriptor`,
+/// and `ObjcBridgeDoor`) are thin translators of wire formats and do not resolve defaults.
+///
+/// ### Single Expiry
+/// Once resolved at init, the same `Deadline` instance is shared across both capability
+/// waiting (`waitForCapabilitiesAndProcess`) and task execution (`runActivatedLease`)
+/// through the shared race seam (`raceValue` / `race`), ensuring wait-vs-execution
+/// has no kind distinction.
 internal struct Deadline: Sendable {
     let timeout: TimeInterval
     private let clock: Clock

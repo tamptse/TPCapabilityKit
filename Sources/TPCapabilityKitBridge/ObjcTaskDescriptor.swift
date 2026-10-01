@@ -29,13 +29,14 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     public let underlying: TaskDescriptor
 
     /// Creates a new task descriptor. Timeout compat follows the single
-    /// timeout-form-owned fork (see `ObjcTimeout.resolve`).
+    /// timeout-form-owned fork (see `ObjcTimeout.resolve`), delegating
+    /// unspecified resolution to `Deadline` (`Time.swift`).
     /// - Parameters:
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
     ///     Out-of-range values coerce to normal (see `ObjcMapper.taskPriority`).
     ///   - timeout: Maximum execution time in seconds. Negative means unspecified,
-    ///     so the scheduler Configuration default applies at execution.
+    ///     so the scheduler Configuration default applies at Deadline construction.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
     @objc public convenience init(
@@ -57,14 +58,15 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
 
     /// Creates a new task descriptor with a client-chosen identifier.
     /// The identifier survives the Bridge round-trip, so cancel-by-id works from ObjC.
-    /// Timeout compat follows the single timeout-form-owned fork (see `ObjcTimeout.resolve`).
+    /// Timeout compat follows the single timeout-form-owned fork (see `ObjcTimeout.resolve`),
+    /// delegating unspecified resolution to `Deadline` (`Time.swift`).
     /// - Parameters:
     ///   - clientId: Client-chosen task identifier, preserved as the descriptor id.
     ///   - capabilities: Array of capability strings required.
     ///   - priority: Priority level (0=background, 4=critical). Default is 2 (normal).
     ///     Out-of-range values coerce to normal (see `ObjcMapper.taskPriority`).
     ///   - timeout: Maximum execution time in seconds. Negative means unspecified,
-    ///     so the scheduler Configuration default applies at execution.
+    ///     so the scheduler Configuration default applies at Deadline construction.
     ///   - maxRetries: Maximum retry attempts. Default is 0.
     ///   - metadata: Optional metadata dictionary.
     @objc public convenience init(
@@ -89,8 +91,10 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     /// both public initializers share this one private build core differing
     /// only in identifier input (absent auto-generates, client-supplied
     /// preserved for cancel-by-identifier). Capability mapping plus priority
-    /// coercion plus timeout resolution delegate to the single mapping
-    /// interface; the wrapper never restates fork or range prose of its own.
+    /// coercion delegate to `ObjcMapper`, and timeout translation delegates
+    /// to `ObjcTimeout.resolve` (with unspecified resolution owned solely by
+    /// `Deadline` in `Time.swift`); the wrapper never restates fork or range
+    /// prose of its own.
     private init(
         id: String?,
         capabilities: [String],
