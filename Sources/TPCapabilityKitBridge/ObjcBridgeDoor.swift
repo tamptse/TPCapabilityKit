@@ -35,10 +35,13 @@ struct ObjcQueuePolicy: Sendable {
 /// `ObjcTimeout` fork — callers pass `underlying` through without inspecting
 /// timeout.
 enum ObjcBridgeDoor {
-    /// Capability-spelling build inside the door: constructs the descriptor
-    /// through the single-capability factory core (same defaults, same wire
-    /// fork), then funnels to the descriptor core below, so the two wait
-    /// spellings cannot diverge.
+    /// Capability-spelling build inside the door: constructs the single-
+    /// capability descriptor here (same defaults as the descriptor wrapper —
+    /// normal priority, explicit pinned-compat timeout, zero retries, empty
+    /// metadata — with the wire fork applied once via the mapping interface),
+    /// then funnels to the descriptor core below, so the two wait spellings
+    /// cannot diverge. The pin literal never follows a reconfigured Swift
+    /// default; core keeps its own inline build and never crosses this seam.
     static func waitThenRun(
         store: DynamicStore,
         capability: String,
@@ -50,7 +53,7 @@ enum ObjcBridgeDoor {
     ) {
         waitThenRun(
             store: store,
-            descriptor: ObjcMapper.makeSingleCapabilityDescriptor(
+            descriptor: buildSingleCapabilityDescriptor(
                 capability: ObjcMapper.capability(from: capability),
                 timeout: ObjcTimeout.resolve(wire: timeout)
             ),
@@ -58,6 +61,22 @@ enum ObjcBridgeDoor {
             task: task,
             completion: completion,
             policy: policy
+        )
+    }
+
+    /// The one door-owned single-capability build: capability callers land
+    /// here, never in the mapper or the wrapper, so omitted-versus-explicit
+    /// priority plus retry plus metadata defaults agree across spellings.
+    private static func buildSingleCapabilityDescriptor(
+        capability: Capability,
+        timeout: ObjcTimeout
+    ) -> TaskDescriptor {
+        TaskDescriptor(
+            requiredCapabilities: [capability],
+            priority: .normal,
+            timeout: timeout.resolved,
+            maxRetries: 0,
+            metadata: [:]
         )
     }
 
@@ -119,7 +138,10 @@ enum ObjcBridgeDoor {
     }
 
     /// Subscribe sink-boxing behind the door: boxes the observer once, hops
-    /// each state value via the injected policy.
+    /// each state value via the injected policy. Kept as a narrow public
+    /// grain over the generic core below (not inlined) because
+    /// DeliveryUnifyTests pins this seam directly; per p4-01, deletion would
+    /// break the test target without a companion migration.
     static func subscribeSink(
         queue: DispatchQueue?,
         policy: ObjcQueuePolicy = .givenOrMain,
@@ -129,7 +151,8 @@ enum ObjcBridgeDoor {
     }
 
     /// Capability-subscribe sink-boxing behind the door: same shape as
-    /// `subscribeSink` over the per-capability `Bool` grain.
+    /// `subscribeSink` over the per-capability `Bool` grain. Kept for the
+    /// same pinned-seam reason as above.
     static func subscribeCapabilitySink(
         queue: DispatchQueue?,
         policy: ObjcQueuePolicy = .givenOrMain,

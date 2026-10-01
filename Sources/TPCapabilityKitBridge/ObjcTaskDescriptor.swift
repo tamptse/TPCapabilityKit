@@ -85,8 +85,12 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         )
     }
 
-    /// Fork boundary: wrapper owns ObjC shape + auto-vs-client id policy, mapper owns capability/priority/timeout forks.
-    /// Pin stays singly owned in the mapper and never follows a reconfigured default.
+    /// Single owner of ObjC shape plus auto-versus-client identifier policy:
+    /// both public initializers share this one private build core differing
+    /// only in identifier input (absent auto-generates, client-supplied
+    /// preserved for cancel-by-identifier). Capability mapping plus priority
+    /// coercion plus timeout resolution delegate to the single mapping
+    /// interface; the wrapper never restates fork or range prose of its own.
     private init(
         id: String?,
         capabilities: [String],
@@ -96,11 +100,11 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
         metadata: [String: String]
     ) {
         let stored = ObjcTimeout.resolve(wire: wire)
-        self.underlying = ObjcMapper.makeDescriptor(
-            id: id,
-            capabilities: capabilities,
-            priority: priority,
-            timeout: stored,
+        self.underlying = TaskDescriptor(
+            id: id ?? UUID().uuidString,
+            requiredCapabilities: Set(capabilities.map { ObjcMapper.capability(from: $0) }),
+            priority: ObjcMapper.taskPriority(from: priority),
+            timeout: stored.resolved,
             maxRetries: maxRetries,
             metadata: metadata
         )

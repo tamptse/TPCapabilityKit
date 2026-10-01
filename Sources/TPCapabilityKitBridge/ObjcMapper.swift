@@ -66,6 +66,13 @@ import TPCapabilityKit
 }
 
 /// Single mapping point between Objective-C primitives and Swift domain types.
+///
+/// Pure mapping only: capability rename, priority range with coercion plus
+/// strict query, and the timeout fork (wire resolve plus stored mapping plus
+/// display plus explicitness with singly-owned pin). No descriptor
+/// construction — the door owns the capability-spelling build and the
+/// descriptor wrapper owns ObjC shape plus auto-versus-client identifier
+/// policy, both passing resolved values through without re-branching.
 @usableFromInline enum ObjcMapper {
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
@@ -97,53 +104,5 @@ import TPCapabilityKit
     /// never coerces, schedules, or stores.
     static func isValidPriority(_ rawValue: Int) -> Bool {
         validPriorityRange.contains(rawValue)
-    }
-
-    /// Fork owner: mapper owns capability/priority/timeout forks; wrapper owns ObjC shape + auto-vs-client id policy.
-    /// Pin stays singly owned here and never follows a reconfigured default.
-    static func makeDescriptor(
-        id: String? = nil,
-        capabilities: [String],
-        priority: Int,
-        timeout: ObjcTimeout,
-        maxRetries: Int,
-        metadata: [String: String]
-    ) -> TaskDescriptor {
-        TaskDescriptor(
-            id: id ?? UUID().uuidString,
-            requiredCapabilities: Set(capabilities.map { capability(from: $0) }),
-            priority: taskPriority(from: priority),
-            timeout: timeout.resolved,
-            maxRetries: maxRetries,
-            metadata: metadata
-        )
-    }
-
-    /// Single-capability factory: the one internal build for capability-string
-    /// callers (Bridge door capability spelling). Takes an already-resolved
-    /// `Capability` plus an already-resolved `ObjcTimeout`, so the wire fork
-    /// (`ObjcTimeout.resolve`) stays visible at the call site and the pin
-    /// literal never follows a reconfigured Swift default.
-    /// Priority, retry, and metadata defaults are stated once here
-    /// (normal/2, 0, [:]); id policy is explicit via `id` (nil auto-generates).
-    /// Core `StoreFire.fire(requiring:capability:)` keeps its inline build:
-    /// core cannot depend on the Bridge, and funneling core through this seam
-    /// would leak the Bridge-compat pin into core defaults.
-    static func makeSingleCapabilityDescriptor(
-        id: String? = nil,
-        capability: Capability,
-        priority: Int = TaskPriority.normal.rawValue,
-        timeout: ObjcTimeout = .explicit(ObjcTimeout.pinnedDefault),
-        maxRetries: Int = 0,
-        metadata: [String: String] = [:]
-    ) -> TaskDescriptor {
-        TaskDescriptor(
-            id: id ?? UUID().uuidString,
-            requiredCapabilities: [capability],
-            priority: taskPriority(from: priority),
-            timeout: timeout.resolved,
-            maxRetries: maxRetries,
-            metadata: metadata
-        )
     }
 }
