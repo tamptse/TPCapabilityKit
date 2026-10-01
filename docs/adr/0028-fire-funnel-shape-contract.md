@@ -1,0 +1,3 @@
+# Fire funnel kept as the one shape-decided contract
+
+Sync check-and-run (point-in-time query plus direct invocation, bypassing Lease, slot admission, and Deadline by construction) and async schedule-and-wait share one `fire` core with two overload shapes, so no policy value travels and the crashing sync-plus-queued combination is unrepresentable — the shape decides. Rejected: deleting the funnel into two independent entries behind one shared descriptor builder — the bypass contract would be restated per entry and a future sync overload accepting an async closure could reintroduce the combination the shape currently forbids.
