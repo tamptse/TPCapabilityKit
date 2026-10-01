@@ -182,10 +182,10 @@ enum ObjcBridgeDoor {
         observer: @escaping (NSObject?) -> Void
     ) -> ObjcCancellable {
         let sink = subscribeSink(queue: queue, policy: policy, observer: observer)
-        let cancellable = store.observeState(pluginId: pluginId, type: NSObject.self)
-            .eraseToAnyPublisher()
-            .sink(receiveValue: sink)
-        return ObjcCancellable(cancellable)
+        return subscribeCore(
+            publisher: store.observeState(pluginId: pluginId, type: NSObject.self),
+            sink: sink
+        )
     }
 
     static func subscribeCapability(
@@ -196,7 +196,14 @@ enum ObjcBridgeDoor {
         observer: @escaping (Bool) -> Void
     ) -> ObjcCancellable {
         let sink = subscribeCapabilitySink(queue: queue, policy: policy, observer: observer)
-        let cancellable = store.observeCapability(capability)
+        return subscribeCore(publisher: store.observeCapability(capability), sink: sink)
+    }
+
+    private static func subscribeCore<P: Publisher>(
+        publisher: P,
+        sink: @escaping (P.Output) -> Void
+    ) -> ObjcCancellable where P.Failure == Never {
+        let cancellable = publisher
             .eraseToAnyPublisher()
             .sink(receiveValue: sink)
         return ObjcCancellable(cancellable)
