@@ -132,8 +132,14 @@ enum TPCapabilityKitSample {
     private static func teardownCore(
         store: DynamicStore,
         plugins: [any AppPlugin],
-        stateIds: [String]
+        stateIds: [String],
+        objcPluginId: String? = nil,
+        bridge: ObjcStoreBridge? = nil
     ) {
+        if let bridge, let objcPluginId {
+            bridge.unregister(pluginId: objcPluginId)
+            bridge.removeState(pluginId: objcPluginId)
+        }
         plugins.forEach { store.unregister(plugin: $0) }
         stateIds.forEach { store.removeState(for: $0) }
     }
@@ -146,18 +152,6 @@ enum TPCapabilityKitSample {
     ) {
         teardownCore(store: store, plugins: plugins, stateIds: stateIds)
         cancellables.removeAll()
-    }
-
-    private static func teardown(
-        store: DynamicStore,
-        bridge: ObjcStoreBridge,
-        objcPluginId: String,
-        plugins: [any AppPlugin],
-        stateIds: [String]
-    ) {
-        bridge.unregister(pluginId: objcPluginId)
-        bridge.removeState(pluginId: objcPluginId)
-        teardownCore(store: store, plugins: plugins, stateIds: stateIds)
     }
 
     static func runStateExample(store: DynamicStore) {
@@ -405,12 +399,12 @@ enum TPCapabilityKitSample {
         // Check counts via ObjC bridge
         print("[ObjC] Pending: \(bridge.taskScheduler.pendingCount), Active: \(bridge.taskScheduler.activeCount)")
 
-        teardown(
+        teardownCore(
             store: store,
-            bridge: bridge,
-            objcPluginId: objcPlugin.id,
             plugins: [networkPlugin],
-            stateIds: [networkPlugin.id]
+            stateIds: [networkPlugin.id],
+            objcPluginId: objcPlugin.id,
+            bridge: bridge
         )
         assert(bridge.getState(pluginId: objcPlugin.id) == nil)
     }
