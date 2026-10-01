@@ -62,6 +62,16 @@ extension TaskScheduler {
             snapshot = Self.nextCounts(snapshot, from: from, to: to)
         }
 
+        /// Single atomic relocate owned by the table: row place plus snapshot
+        /// counts plus row write agree on every transition, so no caller can
+        /// update one without the others.
+        private mutating func relocate(_ row: LifecycleRow, from: Place?, to: Place) {
+            move(from: from, to: to)
+            var updated = row
+            updated.place = to
+            rows[row.lease.task.id] = updated
+        }
+
         private func recalculatedCounts() -> Counts {
             var queued = 0
             var parked = 0
@@ -100,7 +110,7 @@ extension TaskScheduler {
                 )
             }
             let old = rows[lease.task.id]?.place
-            rows[lease.task.id] = LifecycleRow(
+            let fresh = LifecycleRow(
                 lease: lease,
                 place: .pending,
                 execution: execution,
@@ -108,8 +118,8 @@ extension TaskScheduler {
                 waiter: nil,
                 waiting: false
             )
+            relocate(fresh, from: old, to: .pending)
             orderIndex.enqueue(id: lease.task.id, priority: lease.task.priority)
-            move(from: old, to: .pending)
             debugInvariant()
             return result
         }
@@ -159,12 +169,10 @@ extension TaskScheduler {
             defer { debugInvariant() }
             switch target {
             case .dequeueToParked:
-                guard var row = rows[lease.task.id], row.lease === lease else {
+                guard let row = rows[lease.task.id], row.lease === lease else {
                     return nil
                 }
-                move(from: row.place, to: .parked)
-                row.place = .parked
-                rows[lease.task.id] = row
+                relocate(row, from: row.place, to: .parked)
                 return .parked
             case .wake:
                 guard var row = rows[lease.task.id], row.lease === lease else {
@@ -175,25 +183,21 @@ extension TaskScheduler {
                 rows[lease.task.id] = row
                 return .woken
             case .activate:
-                guard var row = liveRow(for: lease) else {
+                guard let row = liveRow(for: lease) else {
                     return nil
                 }
-                move(from: row.place, to: .active)
                 lease.activate()
-                row.place = .active
-                rows[lease.task.id] = row
+                relocate(row, from: row.place, to: .active)
                 return .activated
             case .retry(let execution):
                 guard var row = liveRow(for: lease) else {
                     return nil
                 }
                 lease.beginRetry()
-                move(from: row.place, to: .pending)
-                row.place = .pending
                 if let execution {
                     row.execution = execution
                 }
-                rows[lease.task.id] = row
+                relocate(row, from: row.place, to: .pending)
                 orderIndex.enqueue(id: lease.task.id, priority: lease.task.priority)
                 return .retried
             case .terminal(let terminal):

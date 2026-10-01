@@ -17,31 +17,52 @@ final class StoreState: @unchecked Sendable {
     // copy; drain resolution emits adjacent to value publish after unlock.
     // Removal stays out of band, never touching the waiter table.
     // `Deferred` re-runs lookup so a subscribe-racing-create never parks stale.
-    private enum Rendezvous {
-        case hit(CurrentValueSubject<Any?, Never>)
-        case created(
-            CurrentValueSubject<Any?, Never>,
-            drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]
-        )
-        case parked(PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>)
-    }
 
-    private func rendezvousLocked(
-        pluginId: String,
-        createIfMissing: Bool
-    ) -> Rendezvous {
-        if let existing = subjects[pluginId] {
-            return .hit(existing)
-        }
-        if createIfMissing {
+    // Drain emits after unlock beside the value publish.
+    private func getOrCreateSubject(
+        pluginId: String
+    ) -> (subject: CurrentValueSubject<Any?, Never>, drain: [PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>]) {
+        lock.withLock {
+            if let existing = subjects[pluginId] {
+                return (existing, [])
+            }
             let created = CurrentValueSubject<Any?, Never>(nil)
             subjects[pluginId] = created
             let drain = waiters.removeValue(forKey: pluginId) ?? []
-            return .created(created, drain: drain)
+            return (created, drain)
         }
-        let waiter = PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>()
-        waiters[pluginId, default: []].append(waiter)
-        return .parked(waiter)
+    }
+
+    // Lookup-or-park holds one lock acquisition so a racing writer cannot
+    // strand a waiter.
+    private func awaitCreationPublisher(
+        pluginId: String
+    ) -> AnyPublisher<CurrentValueSubject<Any?, Never>, Never> {
+        enum Decision {
+            case hit(CurrentValueSubject<Any?, Never>)
+            case parked(PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>)
+        }
+        let decision: Decision = lock.withLock {
+            if let existing = subjects[pluginId] {
+                return .hit(existing)
+            }
+            let waiter = PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>()
+            waiters[pluginId, default: []].append(waiter)
+            return .parked(waiter)
+        }
+        switch decision {
+        case .hit(let existing):
+            return Just(existing).eraseToAnyPublisher()
+        case .parked(let waiter):
+            return waiter
+                .handleEvents(receiveCancel: { [weak self, weak waiter] in
+                    guard let self, let waiter else { return }
+                    self.lock.withLock {
+                        self.removeWaiterLocked(pluginId: pluginId, waiter: waiter)
+                    }
+                })
+                .eraseToAnyPublisher()
+        }
     }
 
     private func removeWaiterLocked(
@@ -71,55 +92,11 @@ final class StoreState: @unchecked Sendable {
         value as? T
     }
 
-    private func withRendezvousSubject<Result>(
-        pluginId: String,
-        createIfMissing: Bool,
-        parked: (PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>) -> Result,
-        subject: (CurrentValueSubject<Any?, Never>) -> Result
-    ) -> Result {
-        let outcome: Rendezvous = lock.withLock {
-            rendezvousLocked(pluginId: pluginId, createIfMissing: createIfMissing)
-        }
-        switch outcome {
-        case .hit(let existing):
-            return subject(existing)
-        case .created(let created, let drain):
-            notifyDrain(waiters: drain, subject: created)
-            return subject(created)
-        case .parked(let waiter):
-            return parked(waiter)
-        }
-    }
-
-    private func lookupOrAwaitCreation(
-        pluginId: String,
-        createIfMissing: Bool
-    ) -> AnyPublisher<CurrentValueSubject<Any?, Never>, Never> {
-        withRendezvousSubject(
-            pluginId: pluginId,
-            createIfMissing: createIfMissing,
-            parked: { waiter in
-                waiter
-                    .handleEvents(receiveCancel: { [weak self, weak waiter] in
-                        guard let self, let waiter else { return }
-                        self.lock.withLock {
-                            self.removeWaiterLocked(pluginId: pluginId, waiter: waiter)
-                        }
-                    })
-                    .eraseToAnyPublisher()
-            },
-            subject: { Just($0).eraseToAnyPublisher() }
-        )
-    }
-
     func update<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        withRendezvousSubject(
-            pluginId: pluginId,
-            createIfMissing: true,
-            parked: { _ in preconditionFailure("rendezvous with createIfMissing must never park") },
-            subject: { $0.send(newState) }
-        )
+        let (subject, drain) = getOrCreateSubject(pluginId: pluginId)
+        notifyDrain(waiters: drain, subject: subject)
+        subject.send(newState)
     }
 
     /// Typed edge: wrong-typed reads as absent.
@@ -159,7 +136,7 @@ final class StoreState: @unchecked Sendable {
             guard let self else {
                 return Empty(completeImmediately: true).eraseToAnyPublisher()
             }
-            return self.lookupOrAwaitCreation(pluginId: pluginId, createIfMissing: false)
+            return self.awaitCreationPublisher(pluginId: pluginId)
                 .map { $0.compactMap { Self.coerce($0, to: type) }.eraseToAnyPublisher() }
                 .switchToLatest()
                 .eraseToAnyPublisher()
