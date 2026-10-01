@@ -44,13 +44,10 @@ final class UserProfilePlugin: AppPlugin {
 
     func start(with store: DynamicStore) {
         self.store = store
-        
-        // Push initial user profile state to store
         let initialState = UserProfileState(userId: "u123", userName: "Nguyen Van A", isVIP: true)
         store.updateState(pluginId: id, newState: initialState)
     }
 
-    /// Updates user status (e.g. when user changes name or VIP status)
     func updateUserProfile(name: String, isVIP: Bool) {
         let updatedState = UserProfileState(userId: "u123", userName: name, isVIP: isVIP)
         store?.updateState(pluginId: id, newState: updatedState)
@@ -113,11 +110,9 @@ final class SampleObjcPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
     private var subscriptionToken: ObjcCancellable?
 
     @objc func start(with store: ObjcStoreBridge) {
-        // Push initial legacy ObjC state
         let initialState = ObjcUserProfileState(userId: "objc_101", userName: "ObjC User", isVIP: false)
         store.updateState(pluginId: id, newState: initialState)
 
-        // Subscribe to state updates via ObjcStoreBridge
         subscriptionToken = store.subscribe(pluginId: id) { state in
             if let profile = state as? ObjcUserProfileState {
                 print("[SampleObjcPlugin] Received profile update in ObjC: \(profile.userName)")

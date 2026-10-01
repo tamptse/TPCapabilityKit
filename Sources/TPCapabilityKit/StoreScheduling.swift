@@ -125,7 +125,6 @@ extension DynamicStore {
         await fire(descriptor, task: task)
     }
 
-    /// Cancels a pending task by its identifier.
     public func cancelTask(taskId: String) {
         scheduling.cancel(taskId: taskId)
     }

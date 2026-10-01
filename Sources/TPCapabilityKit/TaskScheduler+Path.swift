@@ -141,7 +141,6 @@ extension TaskScheduler {
     ///
     /// Entry early exit defers to the availability gate below.
     private func activate(_ lease: Lease, race: Deadline) async {
-        // Entry early exit; the availability gate below decides.
         guard isAvailable(for: lease.task) else {
             settle(lease, as: .failed)
             return

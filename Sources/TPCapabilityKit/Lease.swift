@@ -18,7 +18,6 @@ import Foundation
 ///   pairs each mutation with its row write under the scheduler lock. Never call them
 ///   directly from a new path. External code only reads state. Do not add public mutators.
 public final class Lease: @unchecked Sendable {
-    /// State of the lease.
     public enum State: Sendable, Equatable {
         case pending
         case active
@@ -38,28 +37,20 @@ public final class Lease: @unchecked Sendable {
         }
     }
 
-    /// The task descriptor this lease is for.
     public let task: TaskDescriptor
 
-    /// Current state of the lease.
     public private(set) var state: State
 
-    /// When the lease was created.
     let createdAt: Date
 
-    /// When the lease was activated (task started executing).
     private(set) var activatedAt: Date?
 
-    /// When the lease completed (success or failure).
     private(set) var completedAt: Date?
 
-    /// The result of the task execution, if completed successfully.
     public private(set) var result: Any?
 
-    /// Number of times this task has been retried.
     private(set) var retryCount: Int
 
-    /// Creates a new lease for a task.
     init(task: TaskDescriptor) {
         self.task = task
         self.state = .pending
@@ -67,7 +58,6 @@ public final class Lease: @unchecked Sendable {
         self.retryCount = 0
     }
 
-    /// Marks the lease as active (task started executing).
     /// Legal only from pending; all other states are no-ops per the contract above.
     internal func activate() {
         guard isPending else { return }
@@ -110,7 +100,6 @@ public final class Lease: @unchecked Sendable {
         retryCount < task.maxRetries
     }
 
-    /// Resets to pending for another attempt and consumes one retry.
     /// Infallible primitive; callers check `canRetry` before calling.
     /// Clears `result`, `activatedAt`, and `completedAt` per the contract above.
     internal func beginRetry() {
@@ -131,7 +120,6 @@ public final class Lease: @unchecked Sendable {
         }
     }
 
-    /// Whether the lease is currently active.
     /// Internal so Settlement can route failures for pending leases to expiry
     /// (completed/failed are active-only by contract).
     var isActive: Bool {
@@ -139,7 +127,6 @@ public final class Lease: @unchecked Sendable {
         return false
     }
 
-    /// Whether the lease is currently pending.
     private var isPending: Bool {
         if case .pending = state { return true }
         return false

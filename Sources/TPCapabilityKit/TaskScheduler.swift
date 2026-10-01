@@ -79,12 +79,6 @@ public final class TaskScheduler: @unchecked Sendable {
 
     /// Thin scheduling seam: schedule plus schedule-and-wait plus cancel plus pending-plus-active counts.
     /// All drain plus park plus activate plus settle crosses the single path.
-    /// Schedules a task for execution with a closure.
-    /// - Parameters:
-    ///   - task: The task descriptor to schedule.
-    ///   - taskExecution: The async closure to execute when capability is available.
-    ///   - completion: Optional completion handler called when task reaches a terminal state.
-    /// - Returns: The lease for tracking the task.
     @discardableResult
     func schedule(
         _ task: TaskDescriptor,
@@ -117,11 +111,6 @@ public final class TaskScheduler: @unchecked Sendable {
         hook?()
     }
 
-    /// Schedules a task and waits for its result.
-    /// - Parameters:
-    ///   - task: The task descriptor to schedule.
-    ///   - taskExecution: The async closure to execute when capability is available.
-    /// - Returns: The result of the task, or nil if timeout/error.
     func scheduleAndWait<T: Sendable>(
         _ task: TaskDescriptor,
         taskExecution: @escaping @Sendable () async throws -> T
@@ -157,8 +146,6 @@ public final class TaskScheduler: @unchecked Sendable {
         }
     }
 
-    /// Cancels a pending task.
-    /// - Parameter taskId: The ID of the task to cancel.
     func cancel(taskId: String) {
         let target: Lease? = lock.withLock { lifecycleStore.lease(for: taskId) }
         guard let target else { return }
@@ -173,12 +160,11 @@ public final class TaskScheduler: @unchecked Sendable {
         }
     }
 
-    /// Returns the number of pending tasks (queued plus parked; parked-in-pending stays).
+    /// Queued plus parked; parked-in-pending stays.
     var pendingCount: Int {
         countsSnapshot.pending
     }
 
-    /// Returns the number of active tasks.
     var activeCount: Int {
         countsSnapshot.active
     }

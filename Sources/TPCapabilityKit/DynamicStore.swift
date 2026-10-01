@@ -26,7 +26,6 @@ import Foundation
 ///   protected by submodule locks (state, registry, scheduling own theirs). This has been verified through code review and
 ///   concurrency testing. Do not add unsynchronized mutable state.
 public final class DynamicStore: @unchecked Sendable {
-    /// Shared singleton instance.
     public static let shared = DynamicStore()
 
     // MARK: - Mutable State (state owns its lock; registry owns its lock; scheduling owns generations + shared time)
@@ -34,7 +33,6 @@ public final class DynamicStore: @unchecked Sendable {
     private let registry = CapabilityRegistry()
     private(set) var scheduling: StoreSchedulingGenerations!
 
-    /// Creates a new DynamicStore instance. Use `DynamicStore.shared` for the shared singleton.
     /// Internal access allows test isolation via fresh instances.
     internal init(configuration: TaskScheduler.Configuration = .init()) {
         self.scheduling = StoreSchedulingGenerations(owner: self, configuration: configuration, clock: .live)
@@ -57,35 +55,27 @@ public final class DynamicStore: @unchecked Sendable {
         plugin.start(with: self)
     }
 
-    /// Updates the state for a plugin identifier.
     public func updateState<T>(pluginId: String, newState: T) {
         state.update(pluginId: pluginId, newState: newState)
     }
 
-    /// Returns the current state for a plugin identifier.
     public func getState<T>(pluginId: String, type: T.Type) -> T? {
         return state.get(pluginId: pluginId, type: type)
     }
 
-    /// Removes the state for a plugin identifier.
     public func removeState(for pluginId: String) {
         state.remove(pluginId: pluginId)
     }
 
-    /// Unregisters a plugin and cleans up its state and capabilities.
-    /// - Parameter pluginId: The identifier of the plugin to unregister.
     public func unregister(pluginId: String) {
         removeState(for: pluginId)
         unregisterCapability(for: pluginId)
     }
 
-    /// Unregisters a plugin and cleans up its state and capabilities.
-    /// - Parameter plugin: The plugin to unregister.
     public func unregister(plugin: AppPlugin) {
         unregister(pluginId: plugin.id)
     }
 
-    /// Observes state changes for a plugin identifier.
     public func observeState<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
         return state.observe(pluginId: pluginId, type: type)
     }
@@ -104,16 +94,10 @@ public final class DynamicStore: @unchecked Sendable {
     // observation plus re-query: that relearns emission ordering and drifts
     // the empty-set and already-satisfied fast paths per call site (ADR-0024 rejects).
 
-    /// Registers capabilities for a plugin identifier.
-    /// - Parameters:
-    ///   - pluginId: Unique identifier of the target plugin.
-    ///   - capabilities: Set of capabilities the plugin provides.
     func registerCapability(for pluginId: String, capabilities: Set<Capability>) {
         registry.register(for: pluginId, capabilities: capabilities)
     }
 
-    /// Unregisters all capabilities for a plugin identifier.
-    /// - Parameter pluginId: Unique identifier of the target plugin.
     func unregisterCapability(for pluginId: String) {
         registry.unregister(for: pluginId)
     }
@@ -127,15 +111,10 @@ public final class DynamicStore: @unchecked Sendable {
         registry.query(capability)
     }
 
-    /// Returns the capabilities registered by a specific plugin.
-    /// - Parameter pluginId: Unique identifier of the target plugin.
-    /// - Returns: Set of capabilities, or empty if plugin has none registered.
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
         return registry.queryCapabilities(for: pluginId)
     }
 
-    /// Returns all registered capabilities across all plugins.
-    /// - Returns: Dictionary mapping plugin IDs to their capabilities.
     func queryAllCapabilities() -> [String: Set<Capability>] {
         registry.queryAll()
     }

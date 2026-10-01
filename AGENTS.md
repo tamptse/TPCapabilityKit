@@ -22,6 +22,12 @@ A Swift package providing `DynamicStore` — an in-memory state database and cap
 - Capability registry uses `Set<Capability>` per plugin
 - Combine publishers for reactive observation
 
+## Comments
+- Self-documenting code first; comments state why, never what.
+- Public API keeps full `///` docs (purpose + contracts + params/returns where non-obvious).
+- Internal comments only for: design decision, non-obvious invariant, lock/ordering contract, serious-consequence warning, near-term `TODO`.
+- Delete on sight: what-restatement, zombie code, change logs.
+
 ## Monorepo Context
 - Build excludes `Tests/**` and `Sources/TPCapabilityKitSample/**`
 - Modular Swift package with tests enabled

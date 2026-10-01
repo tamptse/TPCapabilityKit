@@ -6,7 +6,6 @@ import TPCapabilityKit
 /// ObjC grain: only NSObject crosses; wrong-typed reads as absent; removals complete; never emits nil.
 @objc(TPStoreBridge)
 public final class ObjcStoreBridge: NSObject, @unchecked Sendable {
-    /// Shared singleton instance.
     @objc public static let shared = ObjcStoreBridge()
 
     private let store: DynamicStore
