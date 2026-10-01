@@ -27,10 +27,8 @@ internal struct Deadline: Sendable {
         self.clock = clock
     }
 
-    func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
-        await raceValue(operation: { await operation() }).map { ($0 as? Bool) ?? false } ?? false
-    }
-
+    /// Race-value core with one Bool adapter: `raceValue` owns the shared task-group race;
+    /// `race` is the narrow Bool grain applying cast-plus-default over it.
     func raceValue(operation: @Sendable @escaping () async -> Any?) async -> Any?? {
         let timeout = self.timeout
         let clock = self.clock
@@ -53,6 +51,10 @@ internal struct Deadline: Sendable {
             }
             return .some(box.value)
         }
+    }
+
+    func race(operation: @Sendable @escaping () async -> Bool) async -> Bool {
+        await raceValue(operation: { await operation() }).map { ($0 as? Bool) ?? false } ?? false
     }
 }
 
