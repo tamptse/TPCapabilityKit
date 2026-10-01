@@ -82,7 +82,7 @@ struct SlotHoldTests {
             await Task.yield()
         }
 
-        controller.noteDisplaced(fresh: new)
+        controller.evictStale(taskId: new.task.id, owner: ObjectIdentifier(new))
         let oldAdmitted = await oldTask.value
         #expect(!oldAdmitted)
 
@@ -97,9 +97,9 @@ struct SlotHoldTests {
         for _ in 0..<1000 {
             await Task.yield()
         }
-        controller.noteDisplaced(fresh: new)
+        controller.evictStale(taskId: new.task.id, owner: ObjectIdentifier(new))
         let stranger = makeHoldLease(id: "h")
-        controller.noteDisplaced(fresh: stranger)
+        controller.evictStale(taskId: stranger.task.id, owner: ObjectIdentifier(stranger))
 
         release.finish()
         let otherAdmitted = await otherTask.value
@@ -150,8 +150,10 @@ struct SlotHoldTests {
         strangerTask.cancel()
         #expect(!(await strangerTask.value))
 
-        controller.noteDisplaced(fresh: makeHoldLease(id: "unrelated"))
-        controller.noteDisplaced(fresh: makeHoldLease(id: "h"))
+        let unrelated = makeHoldLease(id: "unrelated")
+        controller.evictStale(taskId: unrelated.task.id, owner: ObjectIdentifier(unrelated))
+        let holderEvict = makeHoldLease(id: "h")
+        controller.evictStale(taskId: holderEvict.task.id, owner: ObjectIdentifier(holderEvict))
         for _ in 0..<100 {
             await Task.yield()
         }

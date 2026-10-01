@@ -27,34 +27,24 @@ extension TaskScheduler {
         return lease
     }
 
-    /// Lock order: runs outside scheduler `lock` to avoid nesting; controller self-locks, waiters run outside lock.
-    /// Note after delivery in same batch so stale drains before newcomer admission.
-    /// Generations stay evict-free; obligation is still minted in insert.
+    /// Single same-id displace handoff: row-take under the scheduler lock in
+    /// insert, then outside the lock waiter-cancel, then waiter-delivery,
+    /// then slot-evict, then pump kick. Controller self-locks only around its
+    /// own queue with waiter resumes outside; never holds the scheduler lock
+    /// across delivery or controller calls. Stale drains before newcomer
+    /// admission is considered; generations stay evict-free.
     func finishExchange(result: LifecycleStore.ExchangeResult, fresh: Lease) {
-        deliverDisplaced(
-            displaced: result.displaced,
-            waiters: result.waiters,
-            waiter: result.waiter,
-            evicted: result.evict != nil,
-            fresh: fresh
-        )
+        deliverDisplaced(result: result, fresh: fresh)
         kickPump()
     }
 
-    func deliverDisplaced(
-        displaced: Lease?,
-        waiters: [(Lease) -> Void],
-        waiter: Task<Void, Never>?,
-        evicted: Bool,
-        fresh: Lease
-    ) {
-        if let displaced {
-            waiter?.cancel()
-            for waiter in waiters {
-                waiter(displaced)
-            }
+    func deliverDisplaced(result: LifecycleStore.ExchangeResult, fresh: Lease) {
+        guard let displaced = result.displaced else { return }
+        result.waiter?.cancel()
+        for waiter in result.waiters {
+            waiter(displaced)
         }
-        if evicted { concurrencyController.noteDisplaced(fresh: fresh) }
+        concurrencyController.evictStale(taskId: fresh.task.id, owner: ObjectIdentifier(fresh))
     }
 
     func guardedDrain() async {

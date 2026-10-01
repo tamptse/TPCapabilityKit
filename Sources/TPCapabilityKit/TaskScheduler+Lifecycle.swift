@@ -82,16 +82,13 @@ extension TaskScheduler {
         }
 
         // Single locked insert seam: fresh insert plus same-id displace live
-        // here so no half-displaced id is observable. Displaced lease
-        // terminalizes with its row removal; waiters plus park waiter return
-        // for outside-lock delivery and cancel. Slot stale-evict stays after
-        // on its own lock, never nested.
+        // here so no half-displaced id is observable.
         mutating func insert(
             lease: Lease,
             execution: (@Sendable () async -> Any?)?,
             waiters: [(Lease) -> Void]
         ) -> ExchangeResult {
-            var result = ExchangeResult(displaced: nil, waiters: [], waiter: nil, evict: nil)
+            var result = ExchangeResult(displaced: nil, waiters: [], waiter: nil)
             if let row = rows[lease.task.id], row.lease !== lease, !row.lease.isTerminal,
                 let taken = takeRow(for: row.lease)
             {
@@ -99,8 +96,7 @@ extension TaskScheduler {
                 result = ExchangeResult(
                     displaced: taken.lease,
                     waiters: taken.waiters,
-                    waiter: taken.waiter,
-                    evict: EvictObligation(taskId: lease.task.id, owner: ObjectIdentifier(lease))
+                    waiter: taken.waiter
                 )
             }
             let old = rows[lease.task.id]?.place
@@ -118,16 +114,10 @@ extension TaskScheduler {
             return result
         }
 
-        struct EvictObligation: Sendable {
-            let taskId: String
-            let owner: ObjectIdentifier
-        }
-
         struct ExchangeResult {
             let displaced: Lease?
             let waiters: [(Lease) -> Void]
             let waiter: Task<Void, Never>?
-            let evict: EvictObligation?
         }
 
         func lease(for id: String) -> Lease? {
