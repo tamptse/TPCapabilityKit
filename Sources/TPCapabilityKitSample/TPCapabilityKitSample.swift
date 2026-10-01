@@ -134,14 +134,22 @@ final class SampleObjcPlugin: NSObject, ObjcAppPlugin, @unchecked Sendable {
 
 enum TPCapabilityKitSample {
 
+    private static func teardownCore(
+        store: DynamicStore,
+        plugins: [any AppPlugin],
+        stateIds: [String]
+    ) {
+        plugins.forEach { store.unregister(plugin: $0) }
+        stateIds.forEach { store.removeState(for: $0) }
+    }
+
     private static func teardown(
         store: DynamicStore,
         plugins: [any AppPlugin],
         stateIds: [String],
         cancellables: inout Set<AnyCancellable>
     ) {
-        plugins.forEach { store.unregister(plugin: $0) }
-        stateIds.forEach { store.removeState(for: $0) }
+        teardownCore(store: store, plugins: plugins, stateIds: stateIds)
         cancellables.removeAll()
     }
 
@@ -154,8 +162,7 @@ enum TPCapabilityKitSample {
     ) {
         bridge.unregister(pluginId: objcPluginId)
         bridge.removeState(pluginId: objcPluginId)
-        plugins.forEach { store.unregister(plugin: $0) }
-        stateIds.forEach { store.removeState(for: $0) }
+        teardownCore(store: store, plugins: plugins, stateIds: stateIds)
     }
 
     static func runStateExample(store: DynamicStore) {
