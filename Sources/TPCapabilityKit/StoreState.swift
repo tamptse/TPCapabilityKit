@@ -71,45 +71,55 @@ final class StoreState: @unchecked Sendable {
         value as? T
     }
 
-    private func lookupOrAwaitCreation(
+    private func withRendezvousSubject<Result>(
         pluginId: String,
-        createIfMissing: Bool
-    ) -> AnyPublisher<CurrentValueSubject<Any?, Never>, Never> {
+        createIfMissing: Bool,
+        parked: (PassthroughSubject<CurrentValueSubject<Any?, Never>, Never>) -> Result,
+        subject: (CurrentValueSubject<Any?, Never>) -> Result
+    ) -> Result {
         let outcome: Rendezvous = lock.withLock {
             rendezvousLocked(pluginId: pluginId, createIfMissing: createIfMissing)
         }
         switch outcome {
-        case .hit(let subject):
-            return Just(subject).eraseToAnyPublisher()
-        case .created(let subject, let drain):
-            notifyDrain(waiters: drain, subject: subject)
-            return Just(subject).eraseToAnyPublisher()
+        case .hit(let existing):
+            return subject(existing)
+        case .created(let created, let drain):
+            notifyDrain(waiters: drain, subject: created)
+            return subject(created)
         case .parked(let waiter):
-            return waiter
-                .handleEvents(receiveCancel: { [weak self, weak waiter] in
-                    guard let self, let waiter else { return }
-                    self.lock.withLock {
-                        self.removeWaiterLocked(pluginId: pluginId, waiter: waiter)
-                    }
-                })
-                .eraseToAnyPublisher()
+            return parked(waiter)
         }
+    }
+
+    private func lookupOrAwaitCreation(
+        pluginId: String,
+        createIfMissing: Bool
+    ) -> AnyPublisher<CurrentValueSubject<Any?, Never>, Never> {
+        withRendezvousSubject(
+            pluginId: pluginId,
+            createIfMissing: createIfMissing,
+            parked: { waiter in
+                waiter
+                    .handleEvents(receiveCancel: { [weak self, weak waiter] in
+                        guard let self, let waiter else { return }
+                        self.lock.withLock {
+                            self.removeWaiterLocked(pluginId: pluginId, waiter: waiter)
+                        }
+                    })
+                    .eraseToAnyPublisher()
+            },
+            subject: { Just($0).eraseToAnyPublisher() }
+        )
     }
 
     func update<T>(pluginId: String, newState: T) {
         guard validatePluginId(pluginId) else { return }
-        let outcome: Rendezvous = lock.withLock {
-            rendezvousLocked(pluginId: pluginId, createIfMissing: true)
-        }
-        switch outcome {
-        case .hit(let subject):
-            subject.send(newState)
-        case .created(let subject, let drain):
-            notifyDrain(waiters: drain, subject: subject)
-            subject.send(newState)
-        case .parked:
-            preconditionFailure("rendezvous with createIfMissing must never park")
-        }
+        withRendezvousSubject(
+            pluginId: pluginId,
+            createIfMissing: true,
+            parked: { _ in preconditionFailure("rendezvous with createIfMissing must never park") },
+            subject: { $0.send(newState) }
+        )
     }
 
     /// Typed edge: wrong-typed reads as absent.
