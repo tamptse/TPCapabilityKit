@@ -125,7 +125,10 @@ extension TaskScheduler {
     /// ObjC live-view tests may still call `Lease.activate()` directly to
     /// exercise the ObjcLease reflection.
     ///
-    /// Entry early exit defers to the availability gate below.
+    /// Entry early exit stays a review-only fast path avoiding slot admission
+    /// when already unavailable; the post-admission re-check in the fused gate
+    /// below decides so TOCTOU between entry and admission cannot diverge from
+    /// the row write.
     private func activate(_ lease: Lease, race: Deadline) async {
         guard isAvailable(for: lease.task) else {
             settle(lease, as: .failed)
@@ -133,7 +136,19 @@ extension TaskScheduler {
         }
         await concurrencyController.withHold(for: lease) { admitted in
             guard admitted else { return }
-            switch gateAdmitted(lease) {
+            let gate: ActivationGate = lock.withLock {
+                if lease.isTerminal {
+                    return .refused
+                }
+                if !isAvailable(for: lease.task) {
+                    return .failed
+                }
+                if case .activated = lifecycleStore.transition(for: lease, to: .activate) {
+                    return .proceed
+                }
+                return .refused
+            }
+            switch gate {
             case .proceed:
                 await runActivatedLease(lease, race: race)
             case .failed:
@@ -144,31 +159,16 @@ extension TaskScheduler {
         }
     }
 
-    /// Availability gate: terminal refusal, availability re-check, and row
-    /// activation read as one decide-then-apply path with settling kept in
-    /// `activate`, so this never terminalizes.
+    /// Gate rows for the fused admission path beside the fused settle: refusal
+    /// never terminalizes so scope-exit stays the sole release, failure
+    /// delegates to settle landing the terminal row with no terminal change.
     ///
-    /// Hold-suspension window stated once here: entry checks are review-only
-    /// early exits, the post-admission re-check decides, and admission refusal
-    /// returns silently without settling. The hold exits when the activation
-    /// scope ends, regardless of whether settlement retried, completed,
-    /// failed, or expired.
+    /// Decided and applied in one locked body so the table cannot run except
+    /// through the lock that applies it.
     private enum ActivationGate: Sendable, Equatable {
         case proceed
         case failed
         case refused
-    }
-
-    private func gateAdmitted(_ lease: Lease) -> ActivationGate {
-        guard !lease.isTerminal else { return .refused }
-        guard isAvailable(for: lease.task) else { return .failed }
-        let admitted: Bool = lock.withLock {
-            if case .activated = lifecycleStore.transition(for: lease, to: .activate) {
-                return true
-            }
-            return false
-        }
-        return admitted ? .proceed : .refused
     }
 
     private func runActivatedLease(_ lease: Lease, race: Deadline) async {
