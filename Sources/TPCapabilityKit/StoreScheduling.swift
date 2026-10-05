@@ -132,12 +132,12 @@ extension DynamicStore {
 
     /// Best-effort point-in-time count, aggregated across live generations. For agreement use the internal countsSnapshot tuple.
     public var pendingTaskCount: Int {
-        scheduling.pendingCount
+        scheduling.countsSnapshot.pending
     }
 
     /// Best-effort point-in-time count, aggregated across live generations. For agreement use the internal countsSnapshot tuple.
     public var activeTaskCount: Int {
-        scheduling.activeCount
+        scheduling.countsSnapshot.active
     }
 }
 

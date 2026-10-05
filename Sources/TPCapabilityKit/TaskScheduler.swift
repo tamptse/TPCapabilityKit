@@ -183,9 +183,4 @@ public final class TaskScheduler: @unchecked Sendable {
     var activeCount: Int {
         countsSnapshot.active
     }
-
-    /// Best-effort: for agreement use countsSnapshot.
-    var isDrained: Bool {
-        countsSnapshot.isDrained
-    }
 }

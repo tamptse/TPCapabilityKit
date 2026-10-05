@@ -98,7 +98,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return (pending, active)
     }
 
-    /// Single cross-generation agreement seam: one sum, so the three values agree. Separate reads below are best-effort.
+    /// Single cross-generation agreement seam: one sum, so the three values agree.
     var countsSnapshot: (pending: Int, active: Int, isDrained: Bool) {
         let summed = summedCounts
         return (summed.pending, summed.active, summed.pending == 0 && summed.active == 0)
@@ -106,16 +106,6 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
 
     internal var isEmpty: Bool {
         lock.withLock { generations.isEmpty }
-    }
-
-    /// Best-effort: for agreement use countsSnapshot.
-    var pendingCount: Int {
-        summedCounts.pending
-    }
-
-    /// Best-effort: for agreement use countsSnapshot.
-    var activeCount: Int {
-        summedCounts.active
     }
 
     /// Hook-driven reap, reachable only from the settle hook above and
@@ -142,7 +132,7 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         let copiedCurrentID = ObjectIdentifier(copied.last!)
         var drainedIDs = Set<ObjectIdentifier>()
         for generation in copied where ObjectIdentifier(generation) != copiedCurrentID {
-            if generation.isDrained {
+            if generation.countsSnapshot.isDrained {
                 drainedIDs.insert(ObjectIdentifier(generation))
             }
         }

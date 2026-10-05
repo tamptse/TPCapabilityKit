@@ -119,9 +119,9 @@ public final class ObjcTaskScheduler: NSObject, @unchecked Sendable {
         store.cancelTask(taskId: taskId)
     }
 
-    /// Number of pending tasks.
+    /// Best-effort live view: separate crossing, may disagree with activeCount under concurrent settle.
     @objc public var pendingCount: Int { store.pendingTaskCount }
 
-    /// Number of active tasks.
+    /// Best-effort live view: separate crossing, may disagree with pendingCount under concurrent settle.
     @objc public var activeCount: Int { store.activeTaskCount }
 }
