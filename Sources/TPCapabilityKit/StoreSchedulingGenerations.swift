@@ -151,3 +151,17 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         }
     }
 }
+
+extension StoreSchedulingGenerations {
+    func enableDeterministicTime() {
+        clock.enableDeterministic()
+    }
+
+    func advanceTime(by delta: TimeInterval) async {
+        await clock.advance(by: delta)
+    }
+
+    func waitForDeterministicWaiters(count expected: Int) async {
+        await clock.waitForWaiters(count: expected)
+    }
+}

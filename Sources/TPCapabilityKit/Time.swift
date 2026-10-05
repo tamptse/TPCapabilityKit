@@ -210,20 +210,6 @@ extension Clock {
 
 // MARK: - Scheduling / store deterministic test facet
 
-extension StoreSchedulingGenerations {
-    func enableDeterministicTime() {
-        clock.enableDeterministic()
-    }
-
-    func advanceTime(by delta: TimeInterval) async {
-        await clock.advance(by: delta)
-    }
-
-    func waitForDeterministicWaiters(count expected: Int) async {
-        await clock.waitForWaiters(count: expected)
-    }
-}
-
 extension DynamicStore {
     func enableDeterministicTime() {
         precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
