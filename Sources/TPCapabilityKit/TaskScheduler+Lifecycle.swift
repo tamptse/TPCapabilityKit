@@ -281,7 +281,9 @@ extension TaskScheduler {
         }
 
         private struct OrderIndex: Sendable {
+            // Ledger keeps its own head-indexed queue so removal stays local; collapsing to plain arrays would re-spread linear removal across the order index.
             private struct Ledger: Sendable {
+                // Amortized bound: compacts only after enough dead prefix to outweigh the copy, avoiding per-pop churn without holding large dead storage.
                 static let compactionHeadBound = 64
                 var storage: [String] = []
                 var head: Int = 0
