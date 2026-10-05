@@ -93,7 +93,12 @@ final class StoreState: @unchecked Sendable {
     }
 
     func update<T>(pluginId: String, newState: T) {
-        guard validatePluginId(pluginId) else { return }
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return
+        }
         let (subject, drain) = getOrCreateSubject(pluginId: pluginId)
         notifyDrain(waiters: drain, subject: subject)
         subject.send(newState)
@@ -101,7 +106,12 @@ final class StoreState: @unchecked Sendable {
 
     /// Typed edge: wrong-typed reads as absent.
     func get<T>(pluginId: String, type: T.Type) -> T? {
-        guard validatePluginId(pluginId) else { return nil }
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return nil
+        }
         return lock.withLock {
             guard let subject = subjects[pluginId] else {
                 #if DEBUG
@@ -120,7 +130,12 @@ final class StoreState: @unchecked Sendable {
     }
 
     func remove(pluginId: String) {
-        guard validatePluginId(pluginId) else { return }
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return
+        }
         let subject: CurrentValueSubject<Any?, Never>? = lock.withLock {
             subjects.removeValue(forKey: pluginId)
         }
@@ -129,7 +144,10 @@ final class StoreState: @unchecked Sendable {
 
     /// Typed edge: wrong-typed reads as absent; removals complete; never emits nil.
     func observe<T>(pluginId: String, type: T.Type) -> AnyPublisher<T, Never> {
-        guard validatePluginId(pluginId) else {
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
             return Empty(completeImmediately: true).eraseToAnyPublisher()
         }
         return Deferred { [weak self] () -> AnyPublisher<T, Never> in

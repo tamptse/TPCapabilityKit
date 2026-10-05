@@ -49,7 +49,12 @@ final class CapabilityRegistry: @unchecked Sendable {
     /// Empty plugin ids are rejected here, not at the Store facade: each
     /// owner guards its own seam so new methods are safe by construction.
     func register(for pluginId: String, capabilities caps: Set<Capability>) {
-        guard validatePluginId(pluginId) else { return }
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return
+        }
         let (snapshot, notifications): ([String: Set<Capability>], [PendingNotification]) = lock.withLock {
             var pending: [PendingNotification] = []
             removeCapabilities(for: pluginId, pending: &pending)
@@ -68,7 +73,12 @@ final class CapabilityRegistry: @unchecked Sendable {
     }
 
     func unregister(for pluginId: String) {
-        guard validatePluginId(pluginId) else { return }
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return
+        }
         let (snapshot, notifications): ([String: Set<Capability>], [PendingNotification]) = lock.withLock {
             var pending: [PendingNotification] = []
             removeCapabilities(for: pluginId, pending: &pending)
@@ -86,7 +96,12 @@ final class CapabilityRegistry: @unchecked Sendable {
     }
 
     func queryCapabilities(for pluginId: String) -> Set<Capability> {
-        guard validatePluginId(pluginId) else { return [] }
+        guard !pluginId.isEmpty else {
+            #if DEBUG
+            print("[DynamicStore] Error: Plugin ID cannot be empty")
+            #endif
+            return []
+        }
         return lock.withLock {
             capabilities[pluginId] ?? []
         }
