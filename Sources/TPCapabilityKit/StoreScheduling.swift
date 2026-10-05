@@ -32,7 +32,8 @@ extension DynamicStore {
 
     /// Async shape of the one fire core: builds the single-capability
     /// descriptor here, so both queued spellings share it, then funnels to
-    /// the descriptor shape below.
+    /// the descriptor shape below. Swift default only; the Bridge pin differs
+    /// by intent — see the Timeout Resolver Contract on Deadline.
     package func fire<T: Sendable>(
         requiring capability: Capability,
         timeout: TimeInterval = 5.0,
