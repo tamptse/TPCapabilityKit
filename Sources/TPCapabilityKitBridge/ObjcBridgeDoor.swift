@@ -43,6 +43,7 @@ enum ObjcBridgeDoor {
     /// then funnels to the descriptor core below, so the two wait spellings
     /// cannot diverge. The pin literal never follows a reconfigured Swift
     /// default; core keeps its own inline build and never crosses this seam.
+    /// The Swift fire build differs by intent — see the Timeout Resolver Contract on Deadline.
     static func waitThenRun(
         store: DynamicStore,
         capability: String,
