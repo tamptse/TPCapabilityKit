@@ -1,40 +1,34 @@
 import Foundation
 import TPCapabilityKit
 
-/// Thin translator for the @objc wire timeout fork, delegating unspecified resolution to `Deadline`.
+/// Single owner of ObjC timeout compat (fork plus pin plus display plus explicitness).
 ///
-/// The @objc boundary spells timeout as a non-optional TimeInterval (negative
-/// means unspecified). An omitted call arrives as the pin literal, which
-/// collapses to explicit on purpose per ADR-0020: downstream only distinguishes
-/// nil from non-nil, so explicit pin and omitted read identically.
-///
-/// `ObjcTimeout` is strictly a thin translator: it maps wire representations into
-/// domain optional timeout values (`.unspecified` -> `nil`, `.explicit` -> value).
-/// Unspecified timeout resolution is owned solely by `Deadline` construction in
-/// `TPCapabilityKit/Time.swift`, where the scheduler configuration default is applied.
+/// Whole fork stated once here; callers pass through without re-branching.
+/// Wire-negative arrives unspecified with the scheduler default applying at
+/// `Deadline` construction, every non-negative wire (including the pin
+/// literal) travels explicit unchanged, and an omitted call arrives as the
+/// pin carried explicit so reconfigure never silently moves it. Collapsed
+/// display falls back to the pin while explicitness preserves the distinction
+/// for rebuild. `Deadline` construction in `Time.swift` stays the sole
+/// resolver of unspecified (nil) timeouts.
 @usableFromInline enum ObjcTimeout: Sendable {
     case unspecified
     case explicit(TimeInterval)
 
-    /// Pinned compat default carried as explicit for omitted wire. Literal on
-    /// purpose: it must never follow a reconfigured Swift default. `Deadline`
-    /// construction in `Time.swift` stays the sole resolver for unspecified (nil) timeouts.
-    /// Display is lossy: absent displays as this pin, so rebuilding from display
-    /// alone promotes to explicit pin; honor hasExplicitTimeout (absent travels
-    /// as wire-negative) to preserve the distinction.
+    /// Compat pin for omitted wire. Literal on purpose per ADR-0020: it must
+    /// never follow a reconfigured Swift default.
     @usableFromInline static let pinnedDefault: TimeInterval = 30.0
 
-    /// Single statement of ObjC timeout compat: wire-negative translates to unspecified
-    /// (nil in `TaskDescriptor.timeout`, resolved to scheduler default at `Deadline`
-    /// construction in `Time.swift`); every non-negative wire travels as explicit,
-    /// with wire equal to the pin literal collapsing to explicit(pinnedDefault) per ADR-0020.
+    /// Omitted call spelled once: the pin carried explicit.
+    @usableFromInline static var omitted: Self { .explicit(pinnedDefault) }
+
+    /// Wire entry; unspecified stays nil for `Deadline` to resolve.
     static func resolve(wire: TimeInterval) -> ObjcTimeout {
         if wire < 0 { return .unspecified }
         return .explicit(wire)
     }
 
-    /// Domain reading: unspecified stays nil for `Deadline` resolution at construction,
-    /// explicit travels unchanged.
+    /// Domain value for `TaskDescriptor.timeout`.
     var resolved: TimeInterval? {
         switch self {
         case .unspecified: nil
@@ -42,8 +36,7 @@ import TPCapabilityKit
         }
     }
 
-    /// Collapsed display reading: the stored value when explicit, otherwise
-    /// the pinned compat default.
+    /// Collapsed read; pair with `isExplicit` when rebuilding from display.
     var display: TimeInterval {
         switch self {
         case .unspecified: Self.pinnedDefault
@@ -51,8 +44,7 @@ import TPCapabilityKit
         }
     }
 
-    /// Explicitness flag: true exactly when display returns the stored value
-    /// rather than the pin.
+    /// Pair with `display` on rebuild so display-alone never silently promotes.
     var isExplicit: Bool {
         switch self {
         case .unspecified: false
@@ -60,8 +52,7 @@ import TPCapabilityKit
         }
     }
 
-    /// Live-view mapping from an already-resolved domain value. Nil stays
-    /// unspecified; non-nil travels as explicit without touching the wire fork.
+    /// Live-view entry that bypasses the wire fork.
     static func fromStored(_ value: TimeInterval?) -> ObjcTimeout {
         switch value {
         case .none: .unspecified
@@ -73,11 +64,8 @@ import TPCapabilityKit
 /// Single mapping point between Objective-C primitives and Swift domain types.
 ///
 /// Pure mapping only: capability rename, priority range with coercion plus
-/// strict query, and the timeout fork (wire resolve plus stored mapping plus
-/// display plus explicitness with singly-owned pin). No descriptor
-/// construction — the door owns the capability-spelling build and the
-/// descriptor wrapper owns ObjC shape plus auto-versus-client identifier
-/// policy, both passing resolved values through without re-branching.
+/// strict query. Timeout compat lives solely in `ObjcTimeout`; descriptor
+/// construction lives with the door and the descriptor wrapper.
 @usableFromInline enum ObjcMapper {
     static func capability(from string: String) -> Capability {
         Capability(rawValue: string)
