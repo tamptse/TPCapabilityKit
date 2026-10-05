@@ -207,21 +207,3 @@ extension Clock {
         preconditionFailure("Clock: no waiter registered (expected \(expected), got \(registry.waiterCount))")
     }
 }
-
-// MARK: - Scheduling / store deterministic test facet
-
-extension DynamicStore {
-    func enableDeterministicTime() {
-        precondition(self !== DynamicStore.shared, "deterministic time only on fresh instances")
-        precondition(scheduling.isEmpty, "enableDeterministicTime must precede first schedule")
-        scheduling.enableDeterministicTime()
-    }
-
-    func advanceTime(by delta: TimeInterval) async {
-        await scheduling.advanceTime(by: delta)
-    }
-
-    func waitForDeterministicWaiters(count expected: Int) async {
-        await scheduling.waitForDeterministicWaiters(count: expected)
-    }
-}
