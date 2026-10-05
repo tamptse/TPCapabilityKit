@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import TPCapabilityKit
+@testable import TPCapabilityKitBridge
 
 /// Pins the two-entry fire contract (see the entry table on
 /// `DynamicStore.runIfAvailable`): check-and-run and schedule-and-wait agree
@@ -99,5 +100,75 @@ struct FireAgreementTests {
         #expect(await executions.count == 1)
         #expect(store.pendingTaskCount == 0)
         #expect(store.activeTaskCount == 0)
+    }
+
+    @Test func singleCapabilityFireAndObjCWaitShareDescriptorShape() {
+        let cap = Capability.custom("y2Shape_\(UUID().uuidString)")
+
+        let swift = TaskDescriptor(requiredCapabilities: [cap], timeout: 5.0)
+        #expect(swift.requiredCapabilities == [cap])
+        #expect(swift.priority == .normal)
+        #expect(swift.maxRetries == 0)
+        #expect(swift.metadata == [:])
+        #expect(swift.timeout == 5.0)
+
+        let omitted = ObjcTaskDescriptor(capabilities: [cap.rawValue])
+        #expect(omitted.underlying.requiredCapabilities == [cap])
+        #expect(omitted.underlying.priority == .normal)
+        #expect(omitted.underlying.maxRetries == 0)
+        #expect(omitted.underlying.metadata == [:])
+        #expect(omitted.underlying.timeout == 30.0)
+        #expect(omitted.hasExplicitTimeout)
+
+        let explicit = ObjcTaskDescriptor(capabilities: [cap.rawValue], timeout: 30.0)
+        #expect(explicit.underlying.requiredCapabilities == [cap])
+        #expect(explicit.underlying.priority == .normal)
+        #expect(explicit.underlying.maxRetries == 0)
+        #expect(explicit.underlying.metadata == [:])
+        #expect(explicit.underlying.timeout == 30.0)
+        #expect(explicit.hasExplicitTimeout)
+
+        let client = ObjcTaskDescriptor(clientId: "y2-shape-\(UUID().uuidString)", capabilities: [cap.rawValue])
+        #expect(client.underlying.requiredCapabilities == [cap])
+        #expect(client.underlying.priority == .normal)
+        #expect(client.underlying.maxRetries == 0)
+        #expect(client.underlying.metadata == [:])
+        #expect(client.underlying.timeout == 30.0)
+
+        #expect(omitted.underlying.requiredCapabilities == swift.requiredCapabilities)
+        #expect(omitted.underlying.priority == swift.priority)
+        #expect(omitted.underlying.maxRetries == swift.maxRetries)
+        #expect(omitted.underlying.metadata == swift.metadata)
+        #expect(explicit.underlying.requiredCapabilities == swift.requiredCapabilities)
+        #expect(explicit.underlying.priority == swift.priority)
+        #expect(explicit.underlying.maxRetries == swift.maxRetries)
+        #expect(explicit.underlying.metadata == swift.metadata)
+    }
+
+    @Test func swiftFireAndObjCWaitAgreeThroughPublicSeams() async {
+        let cap = Capability.custom("y2Agree_\(UUID().uuidString)")
+        let (store, pluginId) = makeStoreWithCap([cap], deterministic: true, prefix: "Y2Agree")
+        defer { store.unregisterCapability(for: pluginId) }
+        let bridge = ObjcStoreBridge(store: store)
+
+        let swiftResult: String? = await store.runTaskWhenAvailable(capability: cap, timeout: 5.0) { "ok" }
+        #expect(swiftResult == "ok")
+
+        let viaDescriptor: String? = await store.scheduleTaskAndWait(
+            TaskDescriptor(requiredCapabilities: [cap], timeout: 5.0)
+        ) { "ok" }
+        #expect(viaDescriptor == swiftResult)
+
+        let queue = DispatchQueue(label: "y2.agree.\(UUID().uuidString)")
+        let objcResult: String? = await withCheckedContinuation { continuation in
+            bridge.taskScheduler.runWhenAvailable(
+                capability: cap.rawValue, timeout: 5.0, queue: queue,
+                task: { NSString(string: "ok") },
+                completion: { result in
+                    continuation.resume(returning: (result as? String))
+                }
+            )
+        }
+        #expect(objcResult == swiftResult)
     }
 }
