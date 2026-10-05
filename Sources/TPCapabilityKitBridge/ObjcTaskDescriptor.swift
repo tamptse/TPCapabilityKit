@@ -90,7 +90,9 @@ public final class ObjcTaskDescriptor: NSObject, @unchecked Sendable {
     /// Single owner of ObjC shape plus auto-versus-client identifier policy:
     /// both public initializers share this one private build core differing
     /// only in identifier input (absent auto-generates, client-supplied
-    /// preserved for cancel-by-identifier). Capability mapping plus priority
+    /// preserved for cancel-by-identifier). Keeps own path for multi-capability
+    /// plus id policy; single-capability shape lives in
+    /// `TaskDescriptor.singleCapability`. Capability mapping plus priority
     /// coercion delegate to `ObjcMapper`, and timeout translation delegates
     /// to `ObjcTimeout.resolve` (with unspecified resolution owned solely by
     /// `Deadline` in `Time.swift`); the wrapper never restates fork or range

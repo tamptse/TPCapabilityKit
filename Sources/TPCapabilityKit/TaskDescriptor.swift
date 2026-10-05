@@ -67,3 +67,19 @@ public struct TaskDescriptor: Sendable, Identifiable {
         self.metadata = metadata
     }
 }
+
+extension TaskDescriptor {
+    // One single-capability build owning shared shape so Swift fire plus Bridge door cannot diverge; timeout intent stays distinguished by input with nil owned solely by Deadline (see Timeout Resolver Contract on Deadline) — never merged or resolved here.
+    package static func singleCapability(
+        requiring capability: Capability,
+        timeout: TimeInterval?
+    ) -> TaskDescriptor {
+        TaskDescriptor(
+            requiredCapabilities: [capability],
+            priority: .normal,
+            timeout: timeout,
+            maxRetries: 0,
+            metadata: [:]
+        )
+    }
+}

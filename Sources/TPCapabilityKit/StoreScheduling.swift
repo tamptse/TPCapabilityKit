@@ -30,17 +30,15 @@ extension DynamicStore {
         return task()
     }
 
-    /// Async shape of the one fire core: builds the single-capability
-    /// descriptor here, so both queued spellings share it, then funnels to
-    /// the descriptor shape below. Swift default only; the Bridge pin differs
-    /// by intent — see the Timeout Resolver Contract on Deadline.
+    /// Async shape of the one fire core: crosses `TaskDescriptor.singleCapability`
+    /// (see it for fork-once contract), then funnels to the descriptor shape below.
     package func fire<T: Sendable>(
         requiring capability: Capability,
         timeout: TimeInterval = 5.0,
         task: @escaping @Sendable () async throws -> T
     ) async -> T? {
         await fire(
-            TaskDescriptor(requiredCapabilities: [capability], timeout: timeout),
+            TaskDescriptor.singleCapability(requiring: capability, timeout: timeout),
             task: task
         )
     }

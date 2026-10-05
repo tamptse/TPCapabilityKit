@@ -26,24 +26,15 @@ struct ObjcQueuePolicy: Sendable {
 
 /// Shared delivery core behind the Bridge.
 ///
-/// Owns the capability-spelling descriptor build and the one value-returning wait
-/// core (no queue knowledge). Queue policy +
+/// Delivery only (wait core plus hop, no queue knowledge). Queue policy +
 /// Sendable boxing live in the private helpers below; the door orchestrates
-/// only (wait core, then hop). Callers build at most the ObjC-shaped
-/// arguments then delegate here, so the given-or-main hop and the sync-vs-wait
-/// agreement each live in exactly one place. Timeout compat stays on the
-/// `ObjcTimeout` fork (delegating unspecified resolution to `Deadline`) — callers
-/// pass `underlying` through without inspecting timeout.
+/// only (wait core, then hop). Single-capability build crosses
+/// `TaskDescriptor.singleCapability` (see it for fork-once contract), so the
+/// given-or-main hop and the sync-vs-wait agreement each live in exactly one place.
 enum ObjcBridgeDoor {
-    /// Capability-spelling build inside the door: constructs the single-
-    /// capability descriptor here (same defaults as the descriptor wrapper —
-    /// normal priority, explicit pinned-compat timeout, zero retries, empty
-    /// metadata — with the wire fork translated via `ObjcTimeout.resolve`,
-    /// delegating unspecified resolution to `Deadline`),
-    /// then funnels to the descriptor core below, so the two wait spellings
-    /// cannot diverge. The pin literal never follows a reconfigured Swift
-    /// default; core keeps its own inline build and never crosses this seam.
-    /// The Swift fire build differs by intent — see the Timeout Resolver Contract on Deadline.
+    /// Capability spelling funnels via the one build to the descriptor core
+    /// below, so the two wait spellings cannot diverge (see
+    /// `TaskDescriptor.singleCapability` for fork-once contract).
     static func waitThenRun(
         store: DynamicStore,
         capability: String,
@@ -66,20 +57,13 @@ enum ObjcBridgeDoor {
         )
     }
 
-    /// The one door-owned single-capability build: capability callers land
-    /// here, never in the mapper or the wrapper, so omitted-versus-explicit
-    /// priority plus retry plus metadata defaults agree across spellings.
+    /// Delegates to the one build (wire fork translated via `ObjcTimeout.resolve`
+    /// upstream; see `TaskDescriptor.singleCapability` for fork-once contract).
     private static func buildSingleCapabilityDescriptor(
         capability: Capability,
         timeout: ObjcTimeout
     ) -> TaskDescriptor {
-        TaskDescriptor(
-            requiredCapabilities: [capability],
-            priority: .normal,
-            timeout: timeout.resolved,
-            maxRetries: 0,
-            metadata: [:]
-        )
+        TaskDescriptor.singleCapability(requiring: capability, timeout: timeout.resolved)
     }
 
     /// The one value-returning wait entry behind the Bridge. Thin composition
