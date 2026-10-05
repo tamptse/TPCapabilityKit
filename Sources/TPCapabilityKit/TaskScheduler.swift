@@ -166,7 +166,7 @@ public final class TaskScheduler: @unchecked Sendable {
         settle(target, as: .cancelled)
     }
 
-    /// One acquisition so adjacent pending/active/drain reads never disagree.
+    /// Single agreement seam: one acquisition, so the three values agree.
     var countsSnapshot: (pending: Int, active: Int, isDrained: Bool) {
         lock.withLock {
             let counts = lifecycleStore.counts
@@ -174,15 +174,17 @@ public final class TaskScheduler: @unchecked Sendable {
         }
     }
 
-    /// Queued plus parked; parked-in-pending stays.
+    /// Queued plus parked; parked-in-pending stays. Best-effort: for agreement use countsSnapshot.
     var pendingCount: Int {
         countsSnapshot.pending
     }
 
+    /// Best-effort: for agreement use countsSnapshot.
     var activeCount: Int {
         countsSnapshot.active
     }
 
+    /// Best-effort: for agreement use countsSnapshot.
     var isDrained: Bool {
         countsSnapshot.isDrained
     }

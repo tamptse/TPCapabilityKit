@@ -98,14 +98,22 @@ final class StoreSchedulingGenerations: @unchecked Sendable {
         return (pending, active)
     }
 
+    /// Single cross-generation agreement seam: one sum, so the three values agree. Separate reads below are best-effort.
+    var countsSnapshot: (pending: Int, active: Int, isDrained: Bool) {
+        let summed = summedCounts
+        return (summed.pending, summed.active, summed.pending == 0 && summed.active == 0)
+    }
+
     internal var isEmpty: Bool {
         lock.withLock { generations.isEmpty }
     }
 
+    /// Best-effort: for agreement use countsSnapshot.
     var pendingCount: Int {
         summedCounts.pending
     }
 
+    /// Best-effort: for agreement use countsSnapshot.
     var activeCount: Int {
         summedCounts.active
     }
